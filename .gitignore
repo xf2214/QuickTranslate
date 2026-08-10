@@ -223,3 +223,10 @@ BenchmarkDotNet.Artifacts/
 
 # Local test data sandbox
 .data/
+
+# OCR model assets (large binary files, not tracked)
+assets/models/*.onnx
+assets/models/*.txt
+assets/models/*.pt
+assets/models/*.pdiparams
+!assets/models/version.json

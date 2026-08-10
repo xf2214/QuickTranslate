@@ -2,9 +2,11 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Infrastructure.AppData;
 using QuickTranslate.Infrastructure.Logging;
+using QuickTranslate.Infrastructure.Ocr;
 using QuickTranslate.Infrastructure.Persistence;
 using QuickTranslate.Infrastructure.SingleInstance;
 
@@ -56,6 +58,31 @@ public static class ServiceCollectionExtensions
         });
 
         services.AddSingleton<ILoggerProvider, SerilogAppLoggingProvider>();
+
+        AddOcrEngines(services);
+
+        return services;
+    }
+
+    public static IServiceCollection AddOcrEngines(this IServiceCollection services)
+    {
+        services.AddSingleton<PaddleOcrV6Engine>();
+        services.AddSingleton<MockOcrEngine>();
+
+        services.AddSingleton<IOcrEngine>(sp =>
+        {
+            var paddleEngine = sp.GetRequiredService<PaddleOcrV6Engine>();
+            var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+            var logger = loggerFactory.CreateLogger("QuickTranslate.Infrastructure.ServiceCollectionExtensions");
+
+            if (paddleEngine.IsAvailable)
+            {
+                return paddleEngine;
+            }
+
+            logger.LogWarning("PP-OCRv6 models not found, MockOcrEngine fallback.");
+            return sp.GetRequiredService<MockOcrEngine>();
+        });
 
         return services;
     }
