@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using QuickTranslate.App.Services;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Infrastructure;
 using QuickTranslate.Platform;
@@ -20,6 +21,7 @@ public static class AppHost
                 services.AddSingleton<ITrayIconService, WinFormsTrayIconService>();
                 services.AddSingleton<IHotkeyBroker, DefaultHotkeyBroker>();
                 services.AddSingleton<IInteractionCoordinator, LoggingInteractionCoordinator>();
+                services.AddSingleton<ISelectionOverlayService, WpfSelectionOverlayService>();
             })
             .ConfigureLogging((context, logging) =>
             {
