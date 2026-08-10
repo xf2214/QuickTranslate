@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Infrastructure;
 using QuickTranslate.Platform;
 
@@ -15,6 +16,7 @@ public static class AppHost
             {
                 services.AddInfrastructure(context.Configuration);
                 services.AddPlatform();
+                services.AddSingleton<ITrayIconService, WinFormsTrayIconService>();
             })
             .ConfigureLogging((context, logging) =>
             {

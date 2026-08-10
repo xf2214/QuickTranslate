@@ -2,6 +2,7 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>QuickTranslate.App</RootNamespace>
     <AssemblyName>QuickTranslate.App</AssemblyName>
   </PropertyGroup>

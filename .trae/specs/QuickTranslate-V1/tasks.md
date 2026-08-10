@@ -4,7 +4,7 @@
 
 ## 里程碑 M0 - Skeleton（工程骨架与基础设施）
 
-### [ ] Task M0.1: 创建 Solution 与项目结构、Git 初始化、.editorconfig/Directory.Build.props
+### [x] Task M0.1: 创建 Solution 与项目结构、Git 初始化、.editorconfig/Directory.Build.props
 - **Priority**: high
 - **Depends On**: None
 - **Description**:
@@ -24,7 +24,7 @@
   - `human-judgement` TR-M0.1.3: 目录结构与 namespace 命名清晰，模块依赖方向单向（App→Infrastructure/Platform→Core）。
 - **Notes**: 暂不引入 OCR/ONNX/WPF 以外重型 NuGet；后续里程碑按需添加。优先 `UseWPF=true` 的 SDK 风格项目。
 
-### [ ] Task M0.2: 单实例 SingleInstanceGuard、App 生命周期、DI 容器、Settings/Logging 基础
+### [x] Task M0.2: 单实例 SingleInstanceGuard、App 生命周期、DI 容器、Settings/Logging 基础
 - **Priority**: high
 - **Depends On**: M0.1
 - **Description**:
@@ -42,7 +42,7 @@
   - `programmatic` TR-M0.2.3: 日志目录生成 `QuickTranslate-.log`，至少一条 Info 启动日志。
 - **Notes**: Settings JSON 中不得包含任何名为 ApiKey 的明文字段；ApiKey 字段留在 M6 引入 Security 模块。
 
-### [ ] Task M0.3: xUnit 测试工程可运行 + 基础桩
+### [x] Task M0.3: xUnit 测试工程可运行 + 基础桩
 - **Priority**: medium
 - **Depends On**: M0.1, M0.2
 - **Description**:
@@ -59,7 +59,7 @@
 
 ## 里程碑 M1 - Windows Shell（托盘/快捷键/鼠标/DPI/无焦点 Overlay 原型）
 
-### [ ] Task M1.1: Win32 封装层：全局热键、鼠标坐标、显示器枚举、DPI、窗口样式
+### [x] Task M1.1: Win32 封装层：全局热键、鼠标坐标、显示器枚举、DPI、窗口样式
 - **Priority**: high
 - **Depends On**: M0.2
 - **Description**:
@@ -77,7 +77,7 @@
   - `human-judgement` TR-M1.1.3: 在双屏不同 DPI 机器上实际跑 Demo，MonitorEnum 正确显示两屏 DPI 与 Rect。
 - **Notes**: 本任务优先于实际 UI，确保 Platform 层可独立单测。
 
-### [ ] Task M1.2: TrayIcon + TrayMenu（设置/暂停/启用/退出）、无主窗口启动
+### [/] Task M1.2: TrayIcon + TrayMenu（设置/暂停/启用/退出）、无主窗口启动
 - **Priority**: high
 - **Depends On**: M1.1
 - **Description**:

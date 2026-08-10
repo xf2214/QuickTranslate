@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using QuickTranslate.Core.Abstractions;
+using QuickTranslate.Platform.Tray;
 using QuickTranslate.Platform.Win32;
 
 namespace QuickTranslate.Platform;
@@ -12,6 +13,8 @@ public static class PlatformServiceCollectionExtensions
         services.AddSingleton<ICursorService, CursorService>();
         services.AddSingleton<IMonitorService, MonitorService>();
         services.AddSingleton<IDpiMapper, DpiMapper>();
+
+        services.AddSingleton<IAppLifecycle, DefaultAppLifecycle>();
 
         return services;
     }

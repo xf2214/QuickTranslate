@@ -1,0 +1,216 @@
+using System.Drawing;
+using System.Windows.Forms;
+using Microsoft.Extensions.Logging;
+using QuickTranslate.Core.Abstractions;
+using CoreToolTipIcon = QuickTranslate.Core.Abstractions.ToolTipIcon;
+using WFSToolTipIcon = System.Windows.Forms.ToolTipIcon;
+
+namespace QuickTranslate.App.Bootstrap;
+
+public class WinFormsTrayIconService : ITrayIconService, IDisposable
+{
+    private readonly IAppLifecycle _appLifecycle;
+    private readonly ILogger<WinFormsTrayIconService> _logger;
+    private NotifyIcon? _notifyIcon;
+    private ContextMenuStrip? _contextMenu;
+    private ToolStripMenuItem? _pauseMenuItem;
+    private bool _disposed;
+
+    public WinFormsTrayIconService(IAppLifecycle appLifecycle, ILogger<WinFormsTrayIconService> logger)
+    {
+        _appLifecycle = appLifecycle;
+        _logger = logger;
+    }
+
+    public void Show()
+    {
+        EnsureInitialized();
+        if (_notifyIcon != null)
+        {
+            _notifyIcon.Visible = true;
+        }
+    }
+
+    public void Hide()
+    {
+        if (_notifyIcon != null)
+        {
+            _notifyIcon.Visible = false;
+        }
+    }
+
+    public void ShowNotification(string title, string message, CoreToolTipIcon icon = CoreToolTipIcon.Info)
+    {
+        EnsureInitialized();
+        if (_notifyIcon == null) return;
+
+        var wfIcon = icon switch
+        {
+            CoreToolTipIcon.None => WFSToolTipIcon.None,
+            CoreToolTipIcon.Info => WFSToolTipIcon.Info,
+            CoreToolTipIcon.Warning => WFSToolTipIcon.Warning,
+            CoreToolTipIcon.Error => WFSToolTipIcon.Error,
+            _ => WFSToolTipIcon.Info
+        };
+
+        _notifyIcon.ShowBalloonTip(3000, title, message, wfIcon);
+    }
+
+    private void EnsureInitialized()
+    {
+        if (_notifyIcon != null) return;
+
+        _contextMenu = new ContextMenuStrip();
+
+        var openSettingsItem = new ToolStripMenuItem("打开设置");
+        openSettingsItem.Click += (s, e) =>
+        {
+            _logger.LogInformation("OpenSettings menu clicked");
+        };
+        _contextMenu.Items.Add(openSettingsItem);
+
+        _pauseMenuItem = new ToolStripMenuItem("暂停");
+        _pauseMenuItem.CheckOnClick = true;
+        _pauseMenuItem.Checked = _appLifecycle.IsPaused;
+        UpdatePauseMenuItemText();
+        _pauseMenuItem.Click += OnPauseMenuItemClick;
+        _contextMenu.Items.Add(_pauseMenuItem);
+
+        var aboutItem = new ToolStripMenuItem("关于");
+        aboutItem.Click += (s, e) =>
+        {
+            _logger.LogInformation("QuickTranslate v0.2.0");
+            ShowNotification("关于", "QuickTranslate v0.2.0", CoreToolTipIcon.Info);
+        };
+        _contextMenu.Items.Add(aboutItem);
+
+        var quitItem = new ToolStripMenuItem("退出");
+        quitItem.Click += (s, e) =>
+        {
+            _appLifecycle.Shutdown(0);
+        };
+        _contextMenu.Items.Add(quitItem);
+
+        _notifyIcon = new NotifyIcon
+        {
+            Icon = GeneratePlaceholderIcon(),
+            Text = "QuickTranslate",
+            ContextMenuStrip = _contextMenu,
+            Visible = false
+        };
+
+        _appLifecycle.Paused += OnAppLifecyclePaused;
+        _appLifecycle.Resumed += OnAppLifecycleResumed;
+    }
+
+    private void OnPauseMenuItemClick(object? sender, EventArgs e)
+    {
+        if (_pauseMenuItem == null) return;
+
+        if (_pauseMenuItem.Checked)
+        {
+            _appLifecycle.Pause();
+        }
+        else
+        {
+            _appLifecycle.Resume();
+        }
+        UpdatePauseMenuItemText();
+    }
+
+    private void OnAppLifecyclePaused(object? sender, EventArgs e)
+    {
+        if (_pauseMenuItem != null)
+        {
+            _pauseMenuItem.Checked = true;
+            UpdatePauseMenuItemText();
+        }
+    }
+
+    private void OnAppLifecycleResumed(object? sender, EventArgs e)
+    {
+        if (_pauseMenuItem != null)
+        {
+            _pauseMenuItem.Checked = false;
+            UpdatePauseMenuItemText();
+        }
+    }
+
+    private void UpdatePauseMenuItemText()
+    {
+        if (_pauseMenuItem == null) return;
+        _pauseMenuItem.Text = _pauseMenuItem.Checked ? "启用" : "暂停";
+    }
+
+    private static Icon GeneratePlaceholderIcon()
+    {
+        const int size = 16;
+        using var bitmap = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+        graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+        graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighSpeed;
+        graphics.Clear(Color.Transparent);
+
+        using var brush = new SolidBrush(Color.Red);
+        graphics.FillRectangle(brush, 1, 1, size - 2, size - 2);
+
+        using var borderPen = new Pen(Color.Maroon, 1);
+        graphics.DrawRectangle(borderPen, 1, 1, size - 2, size - 2);
+
+        var hicon = bitmap.GetHicon();
+        var result = (Icon)Icon.FromHandle(hicon).Clone();
+        try
+        {
+            UnsafeNativeMethods.DestroyIcon(hicon);
+        }
+        catch { }
+        return result;
+    }
+
+    private static class UnsafeNativeMethods
+    {
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        internal static extern bool DestroyIcon(IntPtr hIcon);
+    }
+
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (_disposed) return;
+        if (disposing)
+        {
+            if (_appLifecycle != null)
+            {
+                _appLifecycle.Paused -= OnAppLifecyclePaused;
+                _appLifecycle.Resumed -= OnAppLifecycleResumed;
+            }
+
+            if (_pauseMenuItem != null)
+            {
+                _pauseMenuItem.Click -= OnPauseMenuItemClick;
+                _pauseMenuItem.Dispose();
+                _pauseMenuItem = null;
+            }
+
+            if (_notifyIcon != null)
+            {
+                _notifyIcon.Visible = false;
+                _notifyIcon.Dispose();
+                _notifyIcon = null;
+            }
+
+            if (_contextMenu != null)
+            {
+                _contextMenu.Dispose();
+                _contextMenu = null;
+            }
+        }
+        _disposed = true;
+    }
+}

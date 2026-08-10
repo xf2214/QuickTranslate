@@ -7,27 +7,27 @@
 ## 里程碑 M0 - Skeleton
 
 ### 代码与工程结构
-- [ ] Checkpoint M0.1.1: `QuickTranslate.sln` 能够 `dotnet build -c Debug` 成功，零错误零警告。
-- [ ] Checkpoint M0.1.2: 仓库中存在 `.gitignore` 且忽略了 bin/obj/packages 等；`git status` 干净（未提交二进制产物）。
-- [ ] Checkpoint M0.1.3: 模块依赖方向单向（App → Infrastructure/Platform → Core），Core 不依赖 WPF。
+- [x] Checkpoint M0.1.1: `QuickTranslate.sln` 能够 `dotnet build -c Debug` 成功，零错误零警告。
+- [x] Checkpoint M0.1.2: 仓库中存在 `.gitignore` 且忽略了 bin/obj/packages 等；`git status` 干净（未提交二进制产物）。
+- [x] Checkpoint M0.1.3: 模块依赖方向单向（App → Infrastructure/Platform → Core），Core 不依赖 WPF。
 
 ### 单实例与基础设施
-- [ ] Checkpoint M0.2.1: 同时启动两个进程，第二个进程 3 秒内退出（ExitCode!=0），系统中仅 1 个 QuickTranslate.exe。
-- [ ] Checkpoint M0.2.2: 首次启动后在 `%APPDATA%\QuickTranslate\settings.json` 生成默认配置，字段与文档一致（WordHotkey=Alt+1 / BlockHotkey=Alt+2 / TargetLanguage=zh-CN / TranslationQuality=Fast 等）。
-- [ ] Checkpoint M0.2.3: `%LOCALAPPDATA%\QuickTranslate\Logs\` 存在至少一条启动 Info 日志，字段包含版本/进程。
-- [ ] Checkpoint M0.2.4: `settings.json` 中**不包含**任何名为 `ApiKey`/`apiKey`/`api_key`/`Bearer` 的明文字段（grep 验证）。
+- [x] Checkpoint M0.2.1: 同时启动两个进程，第二个进程 3 秒内退出（ExitCode!=0），系统中仅 1 个 QuickTranslate.exe。
+- [x] Checkpoint M0.2.2: 首次启动后在 `%APPDATA%\QuickTranslate\settings.json` 生成默认配置，字段与文档一致（WordHotkey=Alt+D1 / BlockHotkey=Alt+D2 / TargetLanguage=zh-CN / TranslationQuality=Fast 等）。
+- [x] Checkpoint M0.2.3: `%LOCALAPPDATA%\QuickTranslate\Logs\` 存在至少一条启动 Info 日志，字段包含版本/进程。
+- [x] Checkpoint M0.2.4: `settings.json` 中**不包含**任何名为 `ApiKey`/`apiKey`/`api_key`/`Bearer` 的明文字段（grep 验证）。
 
 ### 测试工程基础
-- [ ] Checkpoint M0.3.1: `dotnet test tests/QuickTranslate.Tests/` 全部通过（至少 1 个 smoke test）。
-- [ ] Checkpoint M0.3.2: 测试工程按 Core/Platform/Selection/Translation 分子目录，组织清晰。
+- [x] Checkpoint M0.3.1: `dotnet test tests/QuickTranslate.Tests/` 全部通过（至少 1 个 smoke test）。
+- [x] Checkpoint M0.3.2: 测试工程按 Core/Platform/Selection/Translation 分子目录，组织清晰。
 
 ---
 
 ## 里程碑 M1 - Windows Shell
 
 ### Win32 封装层
-- [ ] Checkpoint M1.1.1: `DpiMapper` 单元测试：100%/125%/150%/200% 四档 DPI 下 Physical↔DIP 转换 roundtrip 误差为 0。
-- [ ] Checkpoint M1.1.2: `PhysicalPoint/PhysicalRect` 强类型能正确进行相等比较、ToString、Deconstruct。
+- [x] Checkpoint M1.1.1: `DpiMapper` 单元测试：100%/125%/150%/200% 四档 DPI 下 Physical↔DIP 转换 roundtrip 误差为 0。
+- [x] Checkpoint M1.1.2: `PhysicalPoint/PhysicalRect` 强类型能正确进行相等比较、ToString、Deconstruct。
 - [ ] Checkpoint M1.1.3: 双屏真机验证：`IMonitorService` 返回两块屏的 Physical Rect 与 DPI，值与 Windows 设置一致。
 
 ### 托盘与菜单
