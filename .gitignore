@@ -201,3 +201,25 @@ healthchecksdb
 [Ss]etup/
 [Ee]xe/
 [Mm]si/
+
+# Local .NET SDK installed in the workspace
+.tools/dotnet/
+
+# Local NuGet packages cache (restore produces)
+.nuget/packages/
+.nuget-cache/
+
+# dotnet CLI local home
+.tools/dotnet-home/
+
+# Local user configuration & runtime caches (app-local copies only)
+**/quicktranslate.db
+**/*.db-shm
+**/*.db-wal
+**/settings.local.json
+
+# BenchmarkDotNet artifacts
+BenchmarkDotNet.Artifacts/
+
+# Local test data sandbox
+.data/

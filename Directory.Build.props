@@ -9,12 +9,13 @@
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest</AnalysisLevel>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-    <Version>0.1.0</Version>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
-    <FileVersion>0.1.0.0</FileVersion>
+    <Version>0.2.0</Version>
+    <AssemblyVersion>0.2.0.0</AssemblyVersion>
+    <FileVersion>0.2.0.0</FileVersion>
     <Company>QuickTranslate</Company>
     <Product>QuickTranslate</Product>
     <Copyright>Copyright © 2026</Copyright>
     <NeutralLanguage>zh-CN</NeutralLanguage>
+    <NoWarn>$(NoWarn);CA1001;CA1031;CA1062;CA1305;CA2007</NoWarn>
   </PropertyGroup>
 </Project>

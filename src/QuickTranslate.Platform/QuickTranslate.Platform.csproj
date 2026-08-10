@@ -4,9 +4,9 @@
     <AssemblyName>QuickTranslate.Platform</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0-preview.3.25207.13" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0-preview.3.25207.13" />
-    <PackageReference Include="System.Drawing.Common" Version="10.0.0-preview.3.25207.13" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.*" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.*" />
+    <PackageReference Include="System.Drawing.Common" Version="10.0.*" />
     <ProjectReference Include="..\QuickTranslate.Core\QuickTranslate.Core.csproj" />
   </ItemGroup>
 </Project>
