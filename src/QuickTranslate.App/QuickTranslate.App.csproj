@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>QuickTranslate.App</RootNamespace>
+    <AssemblyName>QuickTranslate.App</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\QuickTranslate.Infrastructure\QuickTranslate.Infrastructure.csproj" />
+    <ProjectReference Include="..\QuickTranslate.Platform\QuickTranslate.Platform.csproj" />
+    <ProjectReference Include="..\QuickTranslate.Core\QuickTranslate.Core.csproj" />
+  </ItemGroup>
+</Project>
