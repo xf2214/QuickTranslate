@@ -9,6 +9,7 @@ using QuickTranslate.Infrastructure.AppData;
 using QuickTranslate.Infrastructure.Logging;
 using QuickTranslate.Infrastructure.Ocr;
 using QuickTranslate.Infrastructure.Persistence;
+using QuickTranslate.Infrastructure.Services;
 using QuickTranslate.Infrastructure.SingleInstance;
 
 namespace QuickTranslate.Infrastructure;
@@ -62,7 +63,15 @@ public static class ServiceCollectionExtensions
 
         AddOcrEngines(services);
         AddSelectionCore(services);
+        AddStubServices(services);
 
+        return services;
+    }
+
+    public static IServiceCollection AddStubServices(this IServiceCollection services)
+    {
+        services.AddSingleton<ITranslationProvider, StubTranslationProvider>();
+        services.AddSingleton<IWordPopupService, StubWordPopupService>();
         return services;
     }
 
