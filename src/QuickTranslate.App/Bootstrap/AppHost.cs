@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using QuickTranslate.Infrastructure;
+using QuickTranslate.Platform;
 
 namespace QuickTranslate.App.Bootstrap;
 
@@ -13,6 +14,7 @@ public static class AppHost
             .ConfigureServices((context, services) =>
             {
                 services.AddInfrastructure(context.Configuration);
+                services.AddPlatform();
             })
             .ConfigureLogging((context, logging) =>
             {
