@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Options;
+using QuickTranslate.Core.Selection;
 using QuickTranslate.Infrastructure.AppData;
 using QuickTranslate.Infrastructure.Logging;
 using QuickTranslate.Infrastructure.Ocr;
@@ -60,7 +61,15 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILoggerProvider, SerilogAppLoggingProvider>();
 
         AddOcrEngines(services);
+        AddSelectionCore(services);
 
+        return services;
+    }
+
+    public static IServiceCollection AddSelectionCore(this IServiceCollection services)
+    {
+        services.AddSingleton<IWordBoxResolver, DefaultWordBoxResolver>();
+        services.AddSingleton<IWordSelector, WordSelector>();
         return services;
     }
 

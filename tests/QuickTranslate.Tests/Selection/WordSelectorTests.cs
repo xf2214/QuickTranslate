@@ -1,0 +1,247 @@
+using QuickTranslate.Core.Geometry;
+using QuickTranslate.Core.Ocr;
+using QuickTranslate.Core.Selection;
+using Xunit;
+
+namespace QuickTranslate.Tests.Selection;
+
+public class WordSelectorTests
+{
+    private readonly IWordBoxResolver _resolver = new DefaultWordBoxResolver();
+    private readonly IWordSelector _selector;
+
+    public WordSelectorTests()
+    {
+        _selector = new WordSelector(_resolver);
+    }
+
+    private static OcrLayoutResult CreateOcr(params OcrLine[] lines)
+    {
+        var timings = new OcrTimings(
+            TimeSpan.FromMilliseconds(1),
+            TimeSpan.FromMilliseconds(2),
+            TimeSpan.FromMilliseconds(3),
+            TimeSpan.FromMilliseconds(4),
+            TimeSpan.FromMilliseconds(5));
+        return new OcrLayoutResult(
+            new PhysicalRect(0, 0, 1000, 800),
+            lines,
+            timings,
+            DateTimeOffset.Now);
+    }
+
+    [Fact]
+    public void Case1_AnchorInsideWord_ReturnsThatWord()
+    {
+        var line = new OcrLine(
+            new PhysicalRect(0, 0, 300, 40),
+            new[]
+            {
+                new OcrWord(new PhysicalRect(0, 0, 100, 40), "First", 0.9f, 0),
+                new OcrWord(new PhysicalRect(110, 0, 80, 40), "Second", 0.9f, 0),
+                new OcrWord(new PhysicalRect(200, 0, 100, 40), "Third", 0.9f, 0)
+            });
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(150, 20));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("Second", result.Text);
+        Assert.Equal("First Second Third", result.ContextLine);
+    }
+
+    [Fact]
+    public void Case2_TwoWordsContainAnchor_PicksSmallerArea()
+    {
+        var words = new[]
+        {
+            new OcrWord(new PhysicalRect(0, 0, 200, 40), "BigWord", 0.9f, 0),
+            new OcrWord(new PhysicalRect(50, 10, 50, 20), "Tiny", 0.9f, 0)
+        };
+        var line = new OcrLine(new PhysicalRect(0, 0, 200, 40), words);
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(70, 20));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("Tiny", result.Text);
+    }
+
+    [Fact]
+    public void Case3_NoContains_TwoNearbyCandidates_PicksCloser()
+    {
+        var line = new OcrLine(
+            new PhysicalRect(0, 0, 300, 40),
+            new[]
+            {
+                new OcrWord(new PhysicalRect(0, 0, 100, 40), "Left", 0.9f, 0),
+                new OcrWord(new PhysicalRect(130, 0, 100, 40), "Right", 0.9f, 0)
+            });
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(120, 20));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("Right", result.Text);
+    }
+
+    [Fact]
+    public void Case4_AnchorLeftOfFirstWord_10px_SelectsFirstWord()
+    {
+        var line = new OcrLine(
+            new PhysicalRect(50, 0, 200, 40),
+            new[]
+            {
+                new OcrWord(new PhysicalRect(50, 0, 80, 40), "Hello", 0.9f, 0),
+                new OcrWord(new PhysicalRect(140, 0, 80, 40), "World", 0.9f, 0)
+            });
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(40, 20));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("Hello", result.Text);
+    }
+
+    [Fact]
+    public void Case5_AnchorRightOfLastWord_20px_SelectsLastWord()
+    {
+        var line = new OcrLine(
+            new PhysicalRect(0, 0, 300, 40),
+            new[]
+            {
+                new OcrWord(new PhysicalRect(0, 0, 100, 40), "First", 0.9f, 0),
+                new OcrWord(new PhysicalRect(200, 0, 100, 40), "Last", 0.9f, 0)
+            });
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(320, 20));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("Last", result.Text);
+    }
+
+    [Fact]
+    public void Case6_AnchorFarFromAll_NoTextFound()
+    {
+        var line = new OcrLine(
+            new PhysicalRect(0, 0, 300, 40),
+            new[]
+            {
+                new OcrWord(new PhysicalRect(0, 0, 100, 40), "A", 0.9f, 0)
+            });
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(1000, 1000));
+
+        Assert.True(result.NoTextFound);
+        Assert.Null(result.Text);
+    }
+
+    [Fact]
+    public void Case7_TwoLines_AnchorBetween_PicksCloserLineWord()
+    {
+        var line1 = new OcrLine(
+            new PhysicalRect(50, 0, 200, 40),
+            new[] { new OcrWord(new PhysicalRect(50, 0, 200, 40), "Line1Word", 0.9f, 0) });
+        var line2 = new OcrLine(
+            new PhysicalRect(50, 60, 200, 40),
+            new[] { new OcrWord(new PhysicalRect(50, 60, 200, 40), "Line2Word", 0.9f, 1) });
+        var ocr = CreateOcr(line1, line2);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(100, 50));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("Line2Word", result.Text);
+    }
+
+    [Fact]
+    public void Case8_DynamicMax_LargeLineHeight_Hits()
+    {
+        var opts = new SelectionOptions();
+        var line = new OcrLine(
+            new PhysicalRect(0, 0, 200, 80),
+            new[] { new OcrWord(new PhysicalRect(0, 0, 200, 80), "BigLine", 0.9f, 0) });
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(280, 40), opts);
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("BigLine", result.Text);
+    }
+
+    [Fact]
+    public void Case8_DynamicMax_SmallLineHeight_Misses()
+    {
+        var opts = new SelectionOptions();
+        var line = new OcrLine(
+            new PhysicalRect(0, 0, 200, 16),
+            new[] { new OcrWord(new PhysicalRect(0, 0, 200, 16), "SmallLine", 0.9f, 0) });
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(280, 8), opts);
+
+        Assert.True(result.NoTextFound);
+    }
+
+    [Fact]
+    public void Case9_ConfidenceTooLow_Filtered_NoTextFound()
+    {
+        var line = new OcrLine(
+            new PhysicalRect(0, 0, 200, 40),
+            new[] { new OcrWord(new PhysicalRect(0, 0, 200, 40), "LowConf", 0.2f, 0) });
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(50, 20));
+
+        Assert.True(result.NoTextFound);
+    }
+
+    [Fact]
+    public void Case10_WidthTooSmall_Filtered_NoTextFound()
+    {
+        var line = new OcrLine(
+            new PhysicalRect(0, 0, 200, 40),
+            new[] { new OcrWord(new PhysicalRect(0, 0, 2, 40), "Tiny", 0.9f, 0) });
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(0, 20));
+
+        Assert.True(result.NoTextFound);
+    }
+
+    [Fact]
+    public void Case11_ResultProperties_AreCorrect()
+    {
+        var line = new OcrLine(
+            new PhysicalRect(0, 0, 200, 40),
+            new[] { new OcrWord(new PhysicalRect(10, 5, 80, 30), "Target", 0.75f, 0) },
+            text: "Context Line Text");
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(50, 20));
+
+        Assert.Equal(SelectionKind.Word, result.Kind);
+        Assert.Equal("Context Line Text", result.ContextLine);
+        Assert.NotEqual(Guid.Empty, result.OperationId);
+        Assert.Equal(0.75f, result.Confidence);
+        Assert.Equal(new PhysicalRect(10, 5, 80, 30), result.Box);
+    }
+
+    [Fact]
+    public void Case12_MultipleH1_SameArea_TieBreakByCenterDistance()
+    {
+        var words = new[]
+        {
+            new OcrWord(new PhysicalRect(0, 0, 100, 40), "Left", 0.9f, 0),
+            new OcrWord(new PhysicalRect(60, 0, 100, 40), "Right", 0.9f, 0)
+        };
+        var line = new OcrLine(new PhysicalRect(0, 0, 200, 40), words);
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(90, 20));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("Right", result.Text);
+    }
+}
