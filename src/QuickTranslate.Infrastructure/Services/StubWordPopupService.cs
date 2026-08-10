@@ -10,10 +10,16 @@ public class StubWordPopupService : IWordPopupService
     public int ShowCount { get; private set; }
     public int HideCount { get; private set; }
     public int HideAllCount { get; private set; }
+    public int ShowErrorCount { get; private set; }
 
     public void Show(SelectionResult selection, TranslationResult translation, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX = 96, uint dpiY = 96)
     {
         ShowCount++;
+    }
+
+    public void ShowError(MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY, string shortMessage, Guid operationId)
+    {
+        ShowErrorCount++;
     }
 
     public void Hide()

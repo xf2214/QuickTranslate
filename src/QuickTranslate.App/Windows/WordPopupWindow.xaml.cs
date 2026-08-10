@@ -43,6 +43,8 @@ public partial class WordPopupWindow : Window
         _lastSelection = sel;
         _lastTranslation = trans;
 
+        ResetStyle();
+
         WordHeader.Text = sel.Text ?? string.Empty;
 
         if (trans.NeedsOnline)
@@ -56,6 +58,24 @@ public partial class WordPopupWindow : Window
 
         DictionaryBadge.Visibility = trans.FromDictionary ? Visibility.Visible : Visibility.Hidden;
         CacheBadge.Visibility = trans.FromCache ? Visibility.Visible : Visibility.Hidden;
+    }
+
+    public void ShowError(string shortMessage)
+    {
+        TranslationText.Text = "";
+        TranslationText.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xDC, 0x26, 0x26));
+        TranslationText.Text = shortMessage;
+        WordHeader.Visibility = Visibility.Collapsed;
+        DictionaryBadge.Visibility = Visibility.Collapsed;
+        CacheBadge.Visibility = Visibility.Collapsed;
+    }
+
+    public void ResetStyle()
+    {
+        TranslationText.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x11, 0x18, 0x27));
+        WordHeader.Visibility = Visibility.Visible;
+        DictionaryBadge.Visibility = Visibility.Hidden;
+        CacheBadge.Visibility = Visibility.Hidden;
     }
 
     private void OnButtonPreviewMouseDown(object sender, MouseButtonEventArgs e)

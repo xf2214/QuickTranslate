@@ -4,6 +4,7 @@ using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Geometry;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Core.Selection;
+using QuickTranslate.Core.Translation;
 
 namespace QuickTranslate.App.Coordination;
 
@@ -110,6 +111,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         var dpiX = monitorInfo.DpiX;
         var dpiY = monitorInfo.DpiY;
         var mid = monitorInfo.Id;
+        PhysicalRect? selectionBox = null;
 
         var newSlot = new OperationSlot(Guid.NewGuid(), new CancellationTokenSource(), AppState.Capturing);
         var oldSlot = Interlocked.Exchange(ref _current, newSlot);
@@ -126,17 +128,18 @@ public class WordInteractionCoordinator : IInteractionCoordinator
             using var frame = await _captureService.CaptureAroundAsync(
                 cursor, new PhysicalSize(720, 320), newSlot.Cts.Token);
 
-            if (newSlot != _current || newSlot.Cts.IsCancellationRequested) return;
+            if (IsStaleOrCanceled(newSlot)) return;
 
             SetState(newSlot, AppState.Ocr);
             var ocr = await _ocrEngine.RecognizeAsync(frame, newSlot.Cts.Token);
 
-            if (newSlot != _current || newSlot.Cts.IsCancellationRequested) return;
+            if (IsStaleOrCanceled(newSlot)) return;
 
             SetState(newSlot, AppState.Selecting);
             var sel = _wordSelector.SelectWord(ocr, cursor, null);
+            selectionBox = sel.Box;
 
-            if (newSlot != _current || newSlot.Cts.IsCancellationRequested) return;
+            if (IsStaleOrCanceled(newSlot)) return;
 
             SetState(newSlot, AppState.OverlayVisible);
             if (sel.NoTextFound)
@@ -148,19 +151,34 @@ public class WordInteractionCoordinator : IInteractionCoordinator
 
             _overlayService.Show(sel.Box, mid, monitorInfo.DpiX, monitorInfo.DpiY);
 
-            if (newSlot != _current || newSlot.Cts.IsCancellationRequested) return;
+            if (IsStaleOrCanceled(newSlot)) return;
 
             SetState(newSlot, AppState.Translating);
             var trans = await _translationRouter.TranslateWordAsync(
                 sel.Text ?? "", _settings.Value.TargetLanguage, newSlot.Cts.Token);
 
-            if (newSlot != _current || newSlot.Cts.IsCancellationRequested) return;
+            if (IsStaleOrCanceled(newSlot)) return;
 
             SetState(newSlot, AppState.Displaying);
             _popupService.Show(sel, trans, mid, sel.Box, dpiX, dpiY);
         }
+        catch (TranslationException te)
+        {
+            _logger.LogWarning("Word pipeline translation error: Code={Code}, Message={Message}", te.ErrorCode, te.Message);
+            _overlayService.HideAll();
+            if (selectionBox.HasValue && !IsStaleOrCanceled(newSlot))
+            {
+                _popupService.ShowError(mid, selectionBox.Value, dpiX, dpiY, TranslationErrorMessage.ForCode(te.ErrorCode), newSlot.Id);
+            }
+            else
+            {
+                _popupService.HideAll();
+            }
+            SetState(null, AppState.Idle);
+        }
         catch (OperationCanceledException)
         {
+            _logger.LogDebug("Operation {Id} cancelled", newSlot.Id);
             _overlayService.HideAll();
             _popupService.HideAll();
             SetState(null, AppState.Idle);
@@ -169,9 +187,21 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         {
             _logger.LogError(ex, "Word pipeline error");
             _overlayService.HideAll();
-            _popupService.HideAll();
+            if (selectionBox.HasValue && !IsStaleOrCanceled(newSlot))
+            {
+                _popupService.ShowError(mid, selectionBox.Value, dpiX, dpiY, "翻译失败，请稍后再试", newSlot.Id);
+            }
+            else
+            {
+                _popupService.HideAll();
+            }
             SetState(null, AppState.Idle);
         }
+    }
+
+    private bool IsStaleOrCanceled(OperationSlot slot)
+    {
+        return slot != Volatile.Read(ref _current) || slot.Cts.IsCancellationRequested;
     }
 
     public void CancelAll(bool returnIdle)

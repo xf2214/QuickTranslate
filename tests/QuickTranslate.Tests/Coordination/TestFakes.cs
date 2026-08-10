@@ -216,12 +216,20 @@ public class FakePopupService : IWordPopupService
     public int ShowCount { get; private set; }
     public int HideCount { get; private set; }
     public int HideAllCount { get; private set; }
+    public int ShowErrorCount { get; private set; }
     public List<(SelectionResult Sel, TranslationResult Trans, MonitorId Monitor, PhysicalRect Box)> ShowCalls { get; } = new();
+    public List<(MonitorId Monitor, PhysicalRect Box, uint DpiX, uint DpiY, string Msg, Guid OpId)> ShowErrorCalls { get; } = new();
 
     public void Show(SelectionResult selection, TranslationResult translation, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX = 96, uint dpiY = 96)
     {
         ShowCount++;
         ShowCalls.Add((selection, translation, monitorId, anchorBox));
+    }
+
+    public void ShowError(MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY, string shortMessage, Guid operationId)
+    {
+        ShowErrorCount++;
+        ShowErrorCalls.Add((monitorId, anchorBox, dpiX, dpiY, shortMessage, operationId));
     }
 
     public void Hide() => HideCount++;
@@ -232,12 +240,20 @@ public class FakeBlockPopupService : IBlockPopupService
 {
     public int ShowCount { get; private set; }
     public int HideAllCount { get; private set; }
+    public int ShowErrorCount { get; private set; }
     public List<(BlockSelectionResult Block, TranslationResult Trans, MonitorId Monitor, PhysicalRect Box, uint DpiX, uint DpiY)> ShowCalls { get; } = new();
+    public List<(MonitorId Monitor, PhysicalRect Box, uint DpiX, uint DpiY, string Msg, Guid OpId)> ShowErrorCalls { get; } = new();
 
     public void Show(BlockSelectionResult blockSelection, TranslationResult translation, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY)
     {
         ShowCount++;
         ShowCalls.Add((blockSelection, translation, monitorId, anchorBox, dpiX, dpiY));
+    }
+
+    public void ShowError(MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY, string shortMessage, Guid operationId)
+    {
+        ShowErrorCount++;
+        ShowErrorCalls.Add((monitorId, anchorBox, dpiX, dpiY, shortMessage, operationId));
     }
 
     public void HideAll() => HideAllCount++;

@@ -199,33 +199,37 @@ public class QwenMtTranslationProvider : ITranslationProvider
         [EnumeratorCancellation] CancellationToken ct)
     {
         var opts = _opts.Value;
-        using var timeoutCts = new CancellationTokenSource(opts.Timeout);
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-        var linkedToken = linkedCts.Token;
 
         HttpResponseMessage? response;
         try
         {
-            response = await SendTranslateRequestAsync(req, opts, linkedToken).ConfigureAwait(false);
+            var modelName = opts.ModelMap.TryGetValue(req.Quality, out var m) ? m : opts.ModelMap[TranslationQuality.Fast];
+            var uri = BuildTranslateUrl(opts);
+
+            var body = new DashscopeTranslateBody
+            {
+                Model = modelName,
+                Input = new DashscopeTranslateInput
+                {
+                    Text = req.Text,
+                    SourceLang = req.SourceLanguage,
+                    TargetLang = req.TargetLanguage,
+                },
+                Parameters = new Dictionary<string, object>(),
+            };
+
+            var json = JsonSerializer.Serialize(body);
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, uri);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", opts.ApiKey);
+            request.Content = content;
+
+            response = await SendTranslateRequestAsync(request, ct).ConfigureAwait(false);
         }
         catch (TranslationException)
         {
             throw;
-        }
-        catch (HttpRequestException hre)
-        {
-            if (hre.InnerException is SocketException
-                || (hre.InnerException != null &&
-                    hre.InnerException.GetType().Name.Contains("WinHttp", StringComparison.Ordinal)))
-            {
-                throw TranslationException.NetworkUnavailable(inner: hre);
-            }
-
-            throw TranslationException.InvalidResponse(hre.Message, hre);
-        }
-        catch (OperationCanceledException oce) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
-        {
-            throw TranslationException.Timeout(inner: oce);
         }
         catch (OperationCanceledException)
         {
@@ -240,58 +244,53 @@ public class QwenMtTranslationProvider : ITranslationProvider
             throw new TranslationException(TranslationErrorCode.Unknown, ex.Message, ex);
         }
 
-        await foreach (var c in ConsumeResponseStreamAsync(response, opts, linkedToken))
+        await foreach (var c in ConsumeResponseStreamAsync(response, opts, ct))
         {
             yield return c;
         }
     }
 
     private async Task<HttpResponseMessage> SendTranslateRequestAsync(
-        TranslationRequest req,
-        QwenMtOptions opts,
-        CancellationToken linkedToken)
+        HttpRequestMessage req,
+        CancellationToken ct)
     {
-        var modelName = opts.ModelMap.TryGetValue(req.Quality, out var m) ? m : opts.ModelMap[TranslationQuality.Fast];
-        var uri = BuildTranslateUrl(opts);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(_opts.Value.Timeout);
 
-        var body = new DashscopeTranslateBody
+        try
         {
-            Model = modelName,
-            Input = new DashscopeTranslateInput
+            var response = await _httpClient.SendAsync(
+                req,
+                HttpCompletionOption.ResponseHeadersRead,
+                cts.Token).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
             {
-                Text = req.Text,
-                SourceLang = req.SourceLanguage,
-                TargetLang = req.TargetLanguage,
-            },
-            Parameters = new Dictionary<string, object>(),
-        };
+                string errorBody = "";
+                try
+                {
+                    errorBody = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+                }
+                catch { }
 
-        var json = JsonSerializer.Serialize(body);
-        var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, uri);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", opts.ApiKey);
-        request.Content = content;
-
-        var response = await _httpClient.SendAsync(
-            request,
-            HttpCompletionOption.ResponseHeadersRead,
-            linkedToken).ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            string errorBody = "";
-            try
-            {
-                errorBody = await response.Content.ReadAsStringAsync(linkedToken).ConfigureAwait(false);
+                response.Dispose();
+                throw TranslationException.FromHttpStatus((int)response.StatusCode, errorBody);
             }
-            catch { }
 
-            response.Dispose();
-            throw TranslationException.FromHttpStatus((int)response.StatusCode, errorBody);
+            return response;
         }
-
-        return response;
+        catch (OperationCanceledException oce) when (!ct.IsCancellationRequested)
+        {
+            throw TranslationException.Timeout(inner: oce);
+        }
+        catch (HttpRequestException hre) when (hre.InnerException is SocketException se)
+        {
+            throw TranslationException.NetworkUnavailable(inner: hre);
+        }
+        catch (HttpRequestException hre)
+        {
+            throw new TranslationException(TranslationErrorCode.Unknown, hre.Message, hre);
+        }
     }
 
     private static async IAsyncEnumerable<TranslationChunk> ConsumeResponseStreamAsync(

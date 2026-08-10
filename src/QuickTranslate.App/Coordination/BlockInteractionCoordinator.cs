@@ -4,6 +4,7 @@ using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Geometry;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Core.Selection;
+using QuickTranslate.Core.Translation;
 using QuickTranslate.Infrastructure.Coordination;
 
 namespace QuickTranslate.App.Coordination;
@@ -156,6 +157,7 @@ public class BlockInteractionCoordinator : IDisposable
         var dpiX = monitorInfo.DpiX;
         var dpiY = monitorInfo.DpiY;
         var mid = monitorInfo.Id;
+        PhysicalRect? unionBox = null;
 
         var newSlot = new OperationSlot(Guid.NewGuid(), new CancellationTokenSource(), AppState.Capturing);
         var oldSlot = Interlocked.Exchange(ref _current, newSlot);
@@ -184,6 +186,7 @@ public class BlockInteractionCoordinator : IDisposable
                 return;
             }
 
+            unionBox = block.UnionBox;
             _overlayService.Show(block.UnionBox, mid, dpiX, dpiY);
 
             if (IsStaleOrCanceled(newSlot)) return;
@@ -197,8 +200,23 @@ public class BlockInteractionCoordinator : IDisposable
             SetState(newSlot, AppState.Displaying);
             _popupService.Show(block, translation, mid, block.UnionBox, dpiX, dpiY);
         }
+        catch (TranslationException te)
+        {
+            _logger.LogWarning("Block pipeline translation error: Code={Code}, Message={Message}", te.ErrorCode, te.Message);
+            _overlayService.HideAll();
+            if (unionBox.HasValue && !IsStaleOrCanceled(newSlot))
+            {
+                _popupService.ShowError(mid, unionBox.Value, dpiX, dpiY, TranslationErrorMessage.ForCode(te.ErrorCode), newSlot.Id);
+            }
+            else
+            {
+                _popupService.HideAll();
+            }
+            SetState(null, AppState.Idle);
+        }
         catch (OperationCanceledException)
         {
+            _logger.LogDebug("Operation {Id} cancelled", newSlot.Id);
             _overlayService.HideAll();
             _popupService.HideAll();
             SetState(null, AppState.Idle);
@@ -207,7 +225,14 @@ public class BlockInteractionCoordinator : IDisposable
         {
             _logger.LogError(ex, "Block pipeline error");
             _overlayService.HideAll();
-            _popupService.HideAll();
+            if (unionBox.HasValue && !IsStaleOrCanceled(newSlot))
+            {
+                _popupService.ShowError(mid, unionBox.Value, dpiX, dpiY, "翻译失败，请稍后再试", newSlot.Id);
+            }
+            else
+            {
+                _popupService.HideAll();
+            }
             SetState(null, AppState.Idle);
         }
     }
