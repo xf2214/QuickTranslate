@@ -83,4 +83,8 @@ public static unsafe partial class User32
     [LibraryImport(DllName)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+
+    [LibraryImport(DllName)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SetForegroundWindow(IntPtr hWnd);
 }

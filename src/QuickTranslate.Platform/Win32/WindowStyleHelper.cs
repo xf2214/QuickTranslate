@@ -31,4 +31,17 @@ public static class WindowStyleHelper
     {
         User32.ShowWindow(hwnd, User32.SW_SHOWNA);
     }
+
+    public static void ApplyNoActivate(IntPtr hwnd)
+    {
+        IntPtr currentStyle = User32.GetWindowLongPtrW(hwnd, User32.GWL_EXSTYLE);
+        UIntPtr style = unchecked((UIntPtr)(ulong)currentStyle.ToInt64());
+        ulong newStyle = style.ToUInt64() | User32.WS_EX_NOACTIVATE;
+        User32.SetWindowLongPtrW(hwnd, User32.GWL_EXSTYLE, unchecked((IntPtr)(long)newStyle));
+    }
+
+    public static bool SetForegroundWindow(IntPtr hwnd)
+    {
+        return User32.SetForegroundWindow(hwnd);
+    }
 }

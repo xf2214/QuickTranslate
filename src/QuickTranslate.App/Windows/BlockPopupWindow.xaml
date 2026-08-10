@@ -1,0 +1,69 @@
+<Window x:Class="QuickTranslate.App.Windows.BlockPopupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        SizeToContent="Manual"
+        WindowStartupLocation="Manual"
+        Title="QuickTranslate Block Popup"
+        Width="440"
+        MinHeight="120"
+        MaxHeight="600"
+        Left="0"
+        Top="0">
+    <Border x:Name="RootBorder"
+            Background="#FFFDFDFD"
+            CornerRadius="10"
+            Padding="12"
+            SnapsToDevicePixels="True">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="18"
+                              ShadowDepth="0"
+                              Opacity="0.15"
+                              Color="Black"/>
+        </Border.Effect>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0 0 0 8">
+                <TextBlock x:Name="BlockHeader"
+                           FontSize="12"
+                           Foreground="#6B7280"
+                           Text="块模式"/>
+            </StackPanel>
+
+            <ScrollViewer Grid.Row="1"
+                          x:Name="ScrollViewer1"
+                          MaxHeight="460"
+                          VerticalScrollBarVisibility="Auto">
+                <TextBlock x:Name="TranslationText"
+                           FontSize="14"
+                           Foreground="#111827"
+                           TextWrapping="Wrap"
+                           Text=""/>
+            </ScrollViewer>
+
+            <StackPanel Grid.Row="2"
+                        Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Margin="0 8 0 0">
+                <Button x:Name="CopyButton"
+                        Content="复制"
+                        Padding="10 4"
+                        Margin="6 0 0 0"/>
+                <Button x:Name="DismissButton"
+                        Content="关闭"
+                        Padding="10 4"
+                        Margin="6 0 0 0"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

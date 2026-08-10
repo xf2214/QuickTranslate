@@ -7,6 +7,7 @@ using QuickTranslate.Core.Options;
 using QuickTranslate.Core.Selection;
 using QuickTranslate.Infrastructure.AppData;
 using QuickTranslate.Infrastructure.Cache;
+using QuickTranslate.Infrastructure.Coordination;
 using QuickTranslate.Infrastructure.Logging;
 using QuickTranslate.Infrastructure.Ocr;
 using QuickTranslate.Infrastructure.Persistence;
@@ -66,7 +67,14 @@ public static class ServiceCollectionExtensions
         AddSelectionCore(services);
         AddCacheAndRouter(services);
         AddStubServices(services);
+        AddCoordinationServices(services);
 
+        return services;
+    }
+
+    public static IServiceCollection AddCoordinationServices(this IServiceCollection services)
+    {
+        services.AddSingleton<BlockRetryCoordinator>();
         return services;
     }
 

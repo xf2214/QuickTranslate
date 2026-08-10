@@ -14,6 +14,7 @@ public class DefaultHotkeyBroker : IHotkeyBroker
     private readonly IGlobalHotkeyService _globalHotkeyService;
     private readonly IAppLifecycle _appLifecycle;
     private readonly ILogger<DefaultHotkeyBroker> _logger;
+    private readonly IEscHook? _escHook;
 
     private HotkeyCombo? _wordCombo;
     private HotkeyCombo? _blockCombo;
@@ -24,11 +25,13 @@ public class DefaultHotkeyBroker : IHotkeyBroker
     public DefaultHotkeyBroker(
         IGlobalHotkeyService globalHotkeyService,
         IAppLifecycle appLifecycle,
-        ILogger<DefaultHotkeyBroker> logger)
+        ILogger<DefaultHotkeyBroker> logger,
+        IEscHook? escHook = null)
     {
         _globalHotkeyService = globalHotkeyService;
         _appLifecycle = appLifecycle;
         _logger = logger;
+        _escHook = escHook;
 
         _globalHotkeyService.HotkeyPressed += OnGlobalHotkeyPressed;
     }
@@ -140,5 +143,10 @@ public class DefaultHotkeyBroker : IHotkeyBroker
 
         var hotkeyEvent = new HotkeyEvent(eventType.Value, DateTimeOffset.Now);
         HotkeyFired?.Invoke(this, hotkeyEvent);
+
+        if (eventType.Value == HotkeyEventType.Escape)
+        {
+            _escHook?.RaiseEscPressed();
+        }
     }
 }

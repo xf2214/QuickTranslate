@@ -16,6 +16,7 @@ public static class PlatformServiceCollectionExtensions
         services.AddSingleton<IScreenCapture, GdiScreenCapture>();
 
         services.AddSingleton<IAppLifecycle, DefaultAppLifecycle>();
+        services.AddSingleton<IEscHook, DefaultEscHook>();
 
         return services;
     }

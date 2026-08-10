@@ -9,4 +9,7 @@ public record TranslationResult(
     bool FromDictionary = false,
     bool NeedsOnline = false,
     TimeSpan? Latency = null,
-    string? ErrorCode = null);
+    string? ErrorCode = null)
+{
+    public string FullTranslation => TargetText;
+}

@@ -228,6 +228,33 @@ public class FakePopupService : IWordPopupService
     public void HideAll() => HideAllCount++;
 }
 
+public class FakeBlockPopupService : IBlockPopupService
+{
+    public int ShowCount { get; private set; }
+    public int HideAllCount { get; private set; }
+    public List<(BlockSelectionResult Block, TranslationResult Trans, MonitorId Monitor, PhysicalRect Box, uint DpiX, uint DpiY)> ShowCalls { get; } = new();
+
+    public void Show(BlockSelectionResult blockSelection, TranslationResult translation, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY)
+    {
+        ShowCount++;
+        ShowCalls.Add((blockSelection, translation, monitorId, anchorBox, dpiX, dpiY));
+    }
+
+    public void HideAll() => HideAllCount++;
+}
+
+public class FakeEscHook : IEscHook
+{
+    public event EventHandler? EscPressed;
+    public int RaiseCount { get; private set; }
+
+    public void RaiseEscPressed()
+    {
+        RaiseCount++;
+        EscPressed?.Invoke(this, EventArgs.Empty);
+    }
+}
+
 public static class CoordinatorTestHelpers
 {
     public static WordInteractionCoordinator CreateCoordinator(
