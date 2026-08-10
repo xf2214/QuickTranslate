@@ -88,6 +88,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<IWordBoxResolver, DefaultWordBoxResolver>();
         services.AddSingleton<IWordSelector, WordSelector>();
+        services.AddSingleton<IBlockSelector, DefaultBlockSelector>();
         return services;
     }
 
