@@ -13,6 +13,7 @@ public static class PlatformServiceCollectionExtensions
         services.AddSingleton<ICursorService, CursorService>();
         services.AddSingleton<IMonitorService, MonitorService>();
         services.AddSingleton<IDpiMapper, DpiMapper>();
+        services.AddSingleton<IScreenCapture, GdiScreenCapture>();
 
         services.AddSingleton<IAppLifecycle, DefaultAppLifecycle>();
 

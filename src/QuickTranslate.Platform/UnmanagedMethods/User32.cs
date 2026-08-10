@@ -76,4 +76,11 @@ public static unsafe partial class User32
     [LibraryImport(DllName, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    [LibraryImport(DllName)]
+    public static partial IntPtr GetDesktopWindow();
+
+    [LibraryImport(DllName)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
 }
