@@ -1,15 +1,13 @@
-using System.Windows.Input;
-
 namespace QuickTranslate.Core.Options;
 
 public class HotkeyCombo
 {
-    public ModifierKeys Modifiers { get; set; } = ModifierKeys.None;
-    public Key Key { get; set; } = Key.None;
+    public HotkeyModifiers Modifiers { get; set; } = HotkeyModifiers.None;
+    public KeyboardKey Key { get; set; } = KeyboardKey.None;
 
     public HotkeyCombo() { }
 
-    public HotkeyCombo(ModifierKeys modifiers, Key key)
+    public HotkeyCombo(HotkeyModifiers modifiers, KeyboardKey key)
     {
         Modifiers = modifiers;
         Key = key;
@@ -24,10 +22,10 @@ public enum TranslationQuality
 
 public class AppSettings
 {
-    public HotkeyCombo WordHotkey { get; set; } = new(ModifierKeys.Control | ModifierKeys.Alt, Key.W);
-    public HotkeyCombo BlockHotkey { get; set; } = new(ModifierKeys.Control | ModifierKeys.Alt, Key.B);
+    public HotkeyCombo WordHotkey { get; set; } = new(HotkeyModifiers.Alt, KeyboardKey.D1);
+    public HotkeyCombo BlockHotkey { get; set; } = new(HotkeyModifiers.Alt, KeyboardKey.D2);
     public string TargetLanguage { get; set; } = "zh-CN";
-    public TranslationQuality TranslationQuality { get; set; } = TranslationQuality.Balanced;
+    public TranslationQuality TranslationQuality { get; set; } = TranslationQuality.Fast;
     public bool StartWithWindows { get; set; } = false;
     public bool CloseOnOutsideClick { get; set; } = true;
     public bool DebugLogging { get; set; } = false;

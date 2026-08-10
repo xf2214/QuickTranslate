@@ -77,6 +77,8 @@ public class SettingsManager
 [JsonSerializable(typeof(AppSettings))]
 [JsonSerializable(typeof(HotkeyCombo))]
 [JsonSerializable(typeof(TranslationQuality))]
+[JsonSerializable(typeof(HotkeyModifiers))]
+[JsonSerializable(typeof(KeyboardKey))]
 [JsonSerializable(typeof(Dictionary<string, JsonElement>))]
 internal partial class JsonContext : JsonSerializerContext
 {
