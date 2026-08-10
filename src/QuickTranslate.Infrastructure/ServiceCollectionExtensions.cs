@@ -13,6 +13,7 @@ using QuickTranslate.Infrastructure.Ocr;
 using QuickTranslate.Infrastructure.Persistence;
 using QuickTranslate.Infrastructure.Services;
 using QuickTranslate.Infrastructure.SingleInstance;
+using QuickTranslate.Infrastructure.Translation;
 
 namespace QuickTranslate.Infrastructure;
 
@@ -66,7 +67,7 @@ public static class ServiceCollectionExtensions
         AddOcrEngines(services);
         AddSelectionCore(services);
         AddCacheAndRouter(services);
-        AddStubServices(services);
+        AddTranslationProvider(services, configuration);
         AddCoordinationServices(services);
 
         return services;
@@ -78,9 +79,22 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    public static IServiceCollection AddStubServices(this IServiceCollection services)
+    public static IServiceCollection AddTranslationProvider(this IServiceCollection services, IConfiguration configuration)
     {
-        services.AddSingleton<ITranslationProvider, StubTranslationProvider>();
+        services.AddOptions<QwenMtOptions>()
+            .Bind(configuration.GetSection("Qwen"))
+            .ValidateDataAnnotations();
+
+        services.AddHttpClient<ITranslationProvider, QwenMtTranslationProvider>((sp, client) =>
+        {
+            var opts = sp.GetRequiredService<IOptions<QwenMtOptions>>().Value;
+            if (!string.IsNullOrWhiteSpace(opts.BaseAddress))
+            {
+                client.BaseAddress = new Uri(opts.BaseAddress.EndsWith('/') ? opts.BaseAddress : opts.BaseAddress + "/");
+            }
+            client.Timeout = opts.Timeout;
+        });
+
         return services;
     }
 

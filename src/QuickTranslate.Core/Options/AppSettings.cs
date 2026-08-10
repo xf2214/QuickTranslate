@@ -16,8 +16,9 @@ public class HotkeyCombo
 
 public enum TranslationQuality
 {
-    Fast,
-    Balanced
+    Fast = 0,
+    Balanced = 1,
+    Best = 2
 }
 
 public class AppSettings

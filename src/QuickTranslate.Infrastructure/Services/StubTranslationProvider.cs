@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Translation;
 
@@ -5,31 +6,24 @@ namespace QuickTranslate.Infrastructure.Services;
 
 public class StubTranslationProvider : ITranslationProvider
 {
-    public async Task<TranslationResult> TranslateWordAsync(string word, string targetLang, CancellationToken ct = default)
-    {
-        await Task.Delay(50, ct);
-        return new TranslationResult(
-            NormalizedKey: word?.ToLowerInvariant() ?? string.Empty,
-            SourceText: word ?? string.Empty,
-            TargetText: "在线翻译接入 M5",
-            TargetLanguage: targetLang,
-            FromCache: false,
-            FromDictionary: false,
-            NeedsOnline: true,
-            ErrorCode: null);
-    }
+    public string Name => "Stub";
 
-    public async Task<TranslationResult> TranslateBlockAsync(string blockText, string targetLang, CancellationToken ct = default)
+    public async IAsyncEnumerable<TranslationChunk> TranslateAsync(TranslationRequest request, [EnumeratorCancellation] CancellationToken ct)
     {
-        await Task.Delay(50, ct);
-        return new TranslationResult(
-            NormalizedKey: blockText?.ToLowerInvariant() ?? string.Empty,
-            SourceText: blockText ?? string.Empty,
-            TargetText: "在线翻译接入 M5",
-            TargetLanguage: targetLang,
-            FromCache: false,
-            FromDictionary: false,
-            NeedsOnline: true,
-            ErrorCode: null);
+        var targetText = "在线翻译接入 M5";
+        var chunkSize = Math.Max(1, targetText.Length / 3);
+        int produced = 0;
+
+        while (produced < targetText.Length)
+        {
+            ct.ThrowIfCancellationRequested();
+            int take = Math.Min(chunkSize, targetText.Length - produced);
+            var delta = targetText.Substring(produced, take);
+            produced += take;
+            await Task.Delay(50, ct);
+            yield return new TranslationChunk(TextDelta: delta, IsFinal: false);
+        }
+
+        yield return new TranslationChunk(TextDelta: "", IsFinal: true, FullTranslation: targetText);
     }
 }

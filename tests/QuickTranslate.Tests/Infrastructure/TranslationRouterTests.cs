@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using QuickTranslate.Core.Abstractions;
+using QuickTranslate.Core.Options;
 using QuickTranslate.Core.Translation;
 using QuickTranslate.Infrastructure.Cache;
 using Xunit;
@@ -9,16 +11,28 @@ namespace QuickTranslate.Tests.Infrastructure;
 
 public class TranslationRouterTests
 {
-    private static TranslationResult MakeOnlineResult(string src, string targetLang) => new(
-        NormalizedKey: src.ToLowerInvariant(),
-        SourceText: src,
-        TargetText: $"online-{src}",
-        TargetLanguage: targetLang,
-        FromCache: false,
-        FromDictionary: false,
-        NeedsOnline: false);
-
     private static string NKey(string word, string lang) => $"{word.Trim().ToLowerInvariant()}||{lang.Trim().ToLowerInvariant()}";
+
+    private static IAsyncEnumerable<TranslationChunk> SingleChunkStream(string targetText)
+    {
+        return SingleChunkStreamImpl(targetText);
+    }
+
+    private static async IAsyncEnumerable<TranslationChunk> SingleChunkStreamImpl(string targetText)
+    {
+        await Task.Yield();
+        yield return new TranslationChunk(TextDelta: "", IsFinal: true, FullTranslation: targetText);
+    }
+
+    private static DefaultTranslationRouter BuildRouter(
+        ITranslationCache cache,
+        ILocalDictionary dict,
+        ITranslationProvider provider)
+    {
+        var settings = Options.Create(new AppSettings { TranslationQuality = TranslationQuality.Fast });
+        var logger = NullLogger<DefaultTranslationRouter>.Instance;
+        return new DefaultTranslationRouter(cache, dict, provider, settings, logger);
+    }
 
     [Fact]
     public async Task Case1_CacheHit_DoesNotCallDictOrProvider()
@@ -26,7 +40,6 @@ public class TranslationRouterTests
         var cache = Substitute.For<ITranslationCache>();
         var dict = Substitute.For<ILocalDictionary>();
         var provider = Substitute.For<ITranslationProvider>();
-        var logger = NullLogger<DefaultTranslationRouter>.Instance;
 
         var cached = new TranslationResult(
             NormalizedKey: NKey("hello", "zh-CN"),
@@ -43,13 +56,13 @@ public class TranslationRouterTests
                 return true;
             });
 
-        var router = new DefaultTranslationRouter(cache, dict, provider, logger);
+        var router = BuildRouter(cache, dict, provider);
         var result = await router.TranslateWordAsync("Hello", "zh-CN");
 
         Assert.True(result.FromCache);
         Assert.Equal("你好", result.TargetText);
         _ = dict.DidNotReceiveWithAnyArgs().TryLookup(default!, default!, out _);
-        _ = await provider.DidNotReceiveWithAnyArgs().TranslateWordAsync(default!, default!, default);
+        _ = provider.DidNotReceiveWithAnyArgs().TranslateAsync(default!, default);
     }
 
     [Fact]
@@ -58,7 +71,6 @@ public class TranslationRouterTests
         var cache = Substitute.For<ITranslationCache>();
         var dict = Substitute.For<ILocalDictionary>();
         var provider = Substitute.For<ITranslationProvider>();
-        var logger = NullLogger<DefaultTranslationRouter>.Instance;
 
         cache.TryGet(Arg.Any<string>(), out Arg.Any<TranslationResult>()!)
             .Returns(x =>
@@ -82,14 +94,14 @@ public class TranslationRouterTests
                 return true;
             });
 
-        var router = new DefaultTranslationRouter(cache, dict, provider, logger);
+        var router = BuildRouter(cache, dict, provider);
         var result = await router.TranslateWordAsync("Hello", "zh-CN");
 
         Assert.True(result.FromDictionary);
         Assert.False(result.FromCache);
         Assert.Equal("字典你好", result.TargetText);
 
-        _ = await provider.DidNotReceiveWithAnyArgs().TranslateWordAsync(default!, default!, default);
+        _ = provider.DidNotReceiveWithAnyArgs().TranslateAsync(default!, default);
         cache.Received(1).Add(NKey("hello", "zh-CN"), Arg.Any<TranslationResult>());
     }
 
@@ -99,7 +111,6 @@ public class TranslationRouterTests
         var cache = Substitute.For<ITranslationCache>();
         var dict = Substitute.For<ILocalDictionary>();
         var provider = Substitute.For<ITranslationProvider>();
-        var logger = NullLogger<DefaultTranslationRouter>.Instance;
 
         cache.TryGet(Arg.Any<string>(), out Arg.Any<TranslationResult>()!)
             .Returns(x =>
@@ -115,18 +126,17 @@ public class TranslationRouterTests
                 return false;
             });
 
-        var online = MakeOnlineResult("hello", "zh-CN");
-        provider.TranslateWordAsync("Hello", "zh-CN", Arg.Any<CancellationToken>())
-            .Returns(online);
+        provider.TranslateAsync(Arg.Is<TranslationRequest>(r => r.Text == "Hello" && r.TargetLanguage == "zh-CN"), Arg.Any<CancellationToken>())
+            .Returns(SingleChunkStream("online-hello"));
 
-        var router = new DefaultTranslationRouter(cache, dict, provider, logger);
+        var router = BuildRouter(cache, dict, provider);
         var result = await router.TranslateWordAsync("Hello", "zh-CN");
 
         Assert.False(result.FromCache);
         Assert.False(result.FromDictionary);
         Assert.Equal("online-hello", result.TargetText);
 
-        _ = await provider.Received(1).TranslateWordAsync("Hello", "zh-CN", Arg.Any<CancellationToken>());
+        _ = provider.Received(1).TranslateAsync(Arg.Any<TranslationRequest>(), Arg.Any<CancellationToken>());
         cache.Received(1).Add(NKey("hello", "zh-CN"), Arg.Any<TranslationResult>());
     }
 
@@ -136,7 +146,6 @@ public class TranslationRouterTests
         var cache = Substitute.For<ITranslationCache>();
         var dict = Substitute.For<ILocalDictionary>();
         var provider = Substitute.For<ITranslationProvider>();
-        var logger = NullLogger<DefaultTranslationRouter>.Instance;
 
         cache.TryGet(Arg.Any<string>(), out Arg.Any<TranslationResult>()!)
             .Returns(x =>
@@ -145,20 +154,15 @@ public class TranslationRouterTests
                 return false;
             });
 
-        var blockOnline = new TranslationResult(
-            NormalizedKey: NKey("block text here", "zh-CN"),
-            SourceText: "block text here",
-            TargetText: "在线-block",
-            TargetLanguage: "zh-CN");
-        provider.TranslateBlockAsync("block text here", "zh-CN", Arg.Any<CancellationToken>())
-            .Returns(blockOnline);
+        provider.TranslateAsync(Arg.Is<TranslationRequest>(r => r.Text == "block text here"), Arg.Any<CancellationToken>())
+            .Returns(SingleChunkStream("在线-block"));
 
-        var router = new DefaultTranslationRouter(cache, dict, provider, logger);
+        var router = BuildRouter(cache, dict, provider);
         var result = await router.TranslateBlockAsync("block text here", "zh-CN");
 
         Assert.Equal("在线-block", result.TargetText);
         _ = dict.DidNotReceiveWithAnyArgs().TryLookup(default!, default!, out _);
-        _ = await provider.Received(1).TranslateBlockAsync("block text here", "zh-CN", Arg.Any<CancellationToken>());
+        _ = provider.Received(1).TranslateAsync(Arg.Any<TranslationRequest>(), Arg.Any<CancellationToken>());
         cache.Received(1).Add(NKey("block text here", "zh-CN"), Arg.Any<TranslationResult>());
     }
 

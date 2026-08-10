@@ -4,7 +4,7 @@ namespace QuickTranslate.Core.Abstractions;
 
 public interface ITranslationProvider
 {
-    Task<TranslationResult> TranslateWordAsync(string word, string targetLang, CancellationToken ct = default);
+    string Name { get; }
 
-    Task<TranslationResult> TranslateBlockAsync(string blockText, string targetLang, CancellationToken ct = default);
+    IAsyncEnumerable<TranslationChunk> TranslateAsync(TranslationRequest request, CancellationToken ct);
 }
