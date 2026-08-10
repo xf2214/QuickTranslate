@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using QuickTranslate.Core.Abstractions;
+using QuickTranslate.Core.Cache;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Core.Translation;
 
@@ -10,6 +11,7 @@ namespace QuickTranslate.Infrastructure.Cache;
 public class DefaultTranslationRouter : ITranslationRouter
 {
     private readonly ITranslationCache _cache;
+    private readonly ITranslationL2Cache? _l2Cache;
     private readonly ILocalDictionary _dictionary;
     private readonly ITranslationProvider _provider;
     private readonly IOptions<AppSettings> _settings;
@@ -20,13 +22,15 @@ public class DefaultTranslationRouter : ITranslationRouter
         ILocalDictionary dictionary,
         ITranslationProvider provider,
         IOptions<AppSettings> settings,
-        ILogger<DefaultTranslationRouter> logger)
+        ILogger<DefaultTranslationRouter> logger,
+        ITranslationL2Cache? l2Cache = null)
     {
         _cache = cache;
         _dictionary = dictionary;
         _provider = provider;
         _settings = settings;
         _logger = logger;
+        _l2Cache = l2Cache;
     }
 
     public async Task<TranslationResult> TranslateWordAsync(string word, string targetLang, CancellationToken ct = default)
@@ -35,14 +39,29 @@ public class DefaultTranslationRouter : ITranslationRouter
 
         if (_cache.TryGet(normalizedKey, out var cached))
         {
-            _logger.LogDebug("Cache hit for {Key}", normalizedKey);
+            _logger.LogDebug("L1 cache hit for {Key}", normalizedKey);
             return cached with { FromCache = true };
+        }
+
+        if (_l2Cache != null)
+        {
+            var l2Result = await _l2Cache.TryGetAsync(normalizedKey, ct);
+            if (l2Result != null)
+            {
+                _logger.LogDebug("L2 cache hit for {Key}", normalizedKey);
+                _cache.Add(normalizedKey, l2Result);
+                return l2Result with { FromCache = true };
+            }
         }
 
         if (_dictionary.TryLookup(word, targetLang, out var dictResult))
         {
             _logger.LogDebug("Dictionary hit for {Word}", word);
             _cache.Add(normalizedKey, dictResult);
+            if (_l2Cache != null)
+            {
+                await _l2Cache.AddAsync(normalizedKey, dictResult, ct);
+            }
             return dictResult with { NormalizedKey = normalizedKey };
         }
 
@@ -68,6 +87,10 @@ public class DefaultTranslationRouter : ITranslationRouter
             NeedsOnline: true);
 
         _cache.Add(normalizedKey, result);
+        if (_l2Cache != null)
+        {
+            await _l2Cache.AddAsync(normalizedKey, result, ct);
+        }
         return result;
     }
 
@@ -77,8 +100,19 @@ public class DefaultTranslationRouter : ITranslationRouter
 
         if (_cache.TryGet(normalizedKey, out var cached))
         {
-            _logger.LogDebug("Cache hit for block {Key}", normalizedKey);
+            _logger.LogDebug("L1 cache hit for block {Key}", normalizedKey);
             return cached with { FromCache = true };
+        }
+
+        if (_l2Cache != null)
+        {
+            var l2Result = await _l2Cache.TryGetAsync(normalizedKey, ct);
+            if (l2Result != null)
+            {
+                _logger.LogDebug("L2 cache hit for block {Key}", normalizedKey);
+                _cache.Add(normalizedKey, l2Result);
+                return l2Result with { FromCache = true };
+            }
         }
 
         _logger.LogDebug("Calling online provider for block");
@@ -103,6 +137,10 @@ public class DefaultTranslationRouter : ITranslationRouter
             NeedsOnline: true);
 
         _cache.Add(normalizedKey, result);
+        if (_l2Cache != null)
+        {
+            await _l2Cache.AddAsync(normalizedKey, result, ct);
+        }
         return result;
     }
 

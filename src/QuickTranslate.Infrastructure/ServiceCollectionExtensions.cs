@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using QuickTranslate.Core.Abstractions;
+using QuickTranslate.Core.Cache;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Core.Selection;
 using QuickTranslate.Infrastructure.AppData;
@@ -10,6 +11,7 @@ using QuickTranslate.Infrastructure.Cache;
 using QuickTranslate.Infrastructure.Coordination;
 using QuickTranslate.Infrastructure.Logging;
 using QuickTranslate.Infrastructure.Ocr;
+using QuickTranslate.Infrastructure.Options;
 using QuickTranslate.Infrastructure.Persistence;
 using QuickTranslate.Infrastructure.Services;
 using QuickTranslate.Infrastructure.SingleInstance;
@@ -102,7 +104,33 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<ITranslationCache>(_ => new MemoryLruTranslationCache(capacity: 1000));
         services.AddSingleton<ILocalDictionary, StubMiniDictionary>();
-        services.AddSingleton<ITranslationRouter, DefaultTranslationRouter>();
+        services.AddSingleton<ITranslationRouter, DefaultTranslationRouter>(sp =>
+        {
+            var cache = sp.GetRequiredService<ITranslationCache>();
+            var dict = sp.GetRequiredService<ILocalDictionary>();
+            var provider = sp.GetRequiredService<ITranslationProvider>();
+            var settings = sp.GetRequiredService<IOptions<AppSettings>>();
+            var logger = sp.GetRequiredService<ILogger<DefaultTranslationRouter>>();
+            var l2 = sp.GetService<ITranslationL2Cache>();
+            return new DefaultTranslationRouter(cache, dict, provider, settings, logger, l2);
+        });
+        return services;
+    }
+
+    public static IServiceCollection AddSqliteCache(this IServiceCollection services, IConfiguration? config = null)
+    {
+        services.AddOptions<SqliteCacheOptions>();
+        if (config != null) services.Configure<SqliteCacheOptions>(config.GetSection("SqliteCache"));
+        services.AddSingleton<ITranslationL2Cache, SqliteTranslationCache>(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptions<SqliteCacheOptions>>().Value;
+            var dir = Path.IsPathRooted(opts.DataDirectory) ? opts.DataDirectory
+                        : Path.Combine(AppContext.BaseDirectory, opts.DataDirectory);
+            Directory.CreateDirectory(dir);
+            var dbPath = Path.Combine(dir, opts.FileName);
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<SqliteTranslationCache>();
+            return ActivatorUtilities.CreateInstance<SqliteTranslationCache>(sp, dbPath, opts.MaxKeepRows, logger);
+        });
         return services;
     }
 
