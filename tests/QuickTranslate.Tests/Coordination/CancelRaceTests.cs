@@ -61,7 +61,7 @@ public class CancelRaceTests
         Assert.Equal(AppState.Translating, coord.State);
         Assert.Equal(1, overlay.ShowTotalCount);
 
-        secondTransTcs.SetResult(FakeTranslationProvider.CreateResult("hello", "zh-CN"));
+        secondTransTcs.SetResult(FakeTranslationRouter.CreateResult("hello", "zh-CN"));
         await Task.Delay(50);
 
         Assert.Equal(AppState.Displaying, coord.State);
@@ -112,7 +112,7 @@ public class CancelRaceTests
             new PhysicalRect(0, 0, 720, 320), new MonitorId(new IntPtr(1), @"\\.\DISPLAY1")));
         await Task.Delay(30);
 
-        firstTransTcs.SetResult(FakeTranslationProvider.CreateResult("hello", "zh-CN"));
+        firstTransTcs.SetResult(FakeTranslationRouter.CreateResult("hello", "zh-CN"));
         await Task.Delay(50);
 
         Assert.Equal(0, popup.ShowCount);
@@ -123,7 +123,7 @@ public class CancelRaceTests
         Assert.Equal(AppState.Translating, coord.State);
         Assert.Equal(2, overlay.ShowTotalCount);
 
-        secondTransDone.SetResult(FakeTranslationProvider.CreateResult("hello2", "zh-CN"));
+        secondTransDone.SetResult(FakeTranslationRouter.CreateResult("hello2", "zh-CN"));
         await Task.Delay(50);
 
         Assert.Equal(AppState.Displaying, coord.State);

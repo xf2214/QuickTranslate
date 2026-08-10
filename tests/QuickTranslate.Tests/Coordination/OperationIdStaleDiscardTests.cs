@@ -92,7 +92,7 @@ public class OperationIdStaleDiscardTests
 
         var transTcs = new TaskCompletionSource<TranslationResult>();
         translator.TranslateWordTcs = transTcs;
-        transTcs.SetResult(FakeTranslationProvider.CreateResult("hello", "zh-CN"));
+        transTcs.SetResult(FakeTranslationRouter.CreateResult("hello", "zh-CN"));
         await Task.Delay(80);
 
         Assert.Equal(0, popup.ShowCount);

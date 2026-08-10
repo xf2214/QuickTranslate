@@ -179,7 +179,7 @@ public class FakeOverlayService : ISelectionOverlayService
         => new Dictionary<MonitorId, (IntPtr, DipRect)>();
 }
 
-public class FakeTranslationProvider : ITranslationProvider
+public class FakeTranslationRouter : ITranslationRouter
 {
     public TaskCompletionSource<TranslationResult> TranslateWordTcs { get; set; } = new();
     public TaskCompletionSource<TranslationResult> TranslateBlockTcs { get; set; } = new();
@@ -239,7 +239,7 @@ public static class CoordinatorTestHelpers
         out FakeOcrEngine ocr,
         out FakeWordSelector selector,
         out FakeOverlayService overlay,
-        out FakeTranslationProvider translator,
+        out FakeTranslationRouter translator,
         out FakePopupService popup)
     {
         appLifecycle = new FakeAppLifecycle();
@@ -250,7 +250,7 @@ public static class CoordinatorTestHelpers
         ocr = new FakeOcrEngine();
         selector = new FakeWordSelector();
         overlay = new FakeOverlayService();
-        translator = new FakeTranslationProvider();
+        translator = new FakeTranslationRouter();
         popup = new FakePopupService();
 
         var settings = Options.Create(new AppSettings { TargetLanguage = "zh-CN" });
@@ -265,7 +265,7 @@ public static class CoordinatorTestHelpers
         FakeHotkeyBroker broker,
         FakeScreenCapture capture,
         FakeOcrEngine? ocr,
-        FakeTranslationProvider? translator,
+        FakeTranslationRouter? translator,
         AppState targetState)
     {
         broker.RaiseHotkeyFired(HotkeyEventType.Word);
@@ -287,7 +287,7 @@ public static class CoordinatorTestHelpers
 
         if (translator != null && targetState >= AppState.Translating)
         {
-            translator.TranslateWordTcs.SetResult(FakeTranslationProvider.CreateResult("hello", "zh-CN"));
+            translator.TranslateWordTcs.SetResult(FakeTranslationRouter.CreateResult("hello", "zh-CN"));
             await Task.Delay(10);
         }
     }
@@ -295,7 +295,7 @@ public static class CoordinatorTestHelpers
     public static async Task CompleteAll(
         FakeScreenCapture capture,
         FakeOcrEngine ocr,
-        FakeTranslationProvider translator,
+        FakeTranslationRouter translator,
         AppSettings settings)
     {
         if (!capture.CaptureAroundTcs.Task.IsCompleted)
@@ -309,7 +309,7 @@ public static class CoordinatorTestHelpers
         await Task.Delay(5);
 
         if (!translator.TranslateWordTcs.Task.IsCompleted)
-            translator.TranslateWordTcs.SetResult(FakeTranslationProvider.CreateResult("hello", settings.TargetLanguage));
+            translator.TranslateWordTcs.SetResult(FakeTranslationRouter.CreateResult("hello", settings.TargetLanguage));
         await Task.Delay(5);
     }
 

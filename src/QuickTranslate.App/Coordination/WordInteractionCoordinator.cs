@@ -31,7 +31,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
     private readonly IOcrEngine _ocrEngine;
     private readonly IWordSelector _wordSelector;
     private readonly ISelectionOverlayService _overlayService;
-    private readonly ITranslationProvider _translationProvider;
+    private readonly ITranslationRouter _translationRouter;
     private readonly IWordPopupService _popupService;
     private readonly IOptions<AppSettings> _settings;
     private readonly ILogger<WordInteractionCoordinator> _logger;
@@ -52,7 +52,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         IOcrEngine ocrEngine,
         IWordSelector wordSelector,
         ISelectionOverlayService overlayService,
-        ITranslationProvider translationProvider,
+        ITranslationRouter translationRouter,
         IWordPopupService popupService,
         IOptions<AppSettings> settings,
         ILogger<WordInteractionCoordinator> logger)
@@ -65,7 +65,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         _ocrEngine = ocrEngine;
         _wordSelector = wordSelector;
         _overlayService = overlayService;
-        _translationProvider = translationProvider;
+        _translationRouter = translationRouter;
         _popupService = popupService;
         _settings = settings;
         _logger = logger;
@@ -151,7 +151,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
             if (newSlot != _current || newSlot.Cts.IsCancellationRequested) return;
 
             SetState(newSlot, AppState.Translating);
-            var trans = await _translationProvider.TranslateWordAsync(
+            var trans = await _translationRouter.TranslateWordAsync(
                 sel.Text ?? "", _settings.Value.TargetLanguage, newSlot.Cts.Token);
 
             if (newSlot != _current || newSlot.Cts.IsCancellationRequested) return;

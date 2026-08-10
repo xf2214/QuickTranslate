@@ -6,6 +6,7 @@ using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Core.Selection;
 using QuickTranslate.Infrastructure.AppData;
+using QuickTranslate.Infrastructure.Cache;
 using QuickTranslate.Infrastructure.Logging;
 using QuickTranslate.Infrastructure.Ocr;
 using QuickTranslate.Infrastructure.Persistence;
@@ -63,6 +64,7 @@ public static class ServiceCollectionExtensions
 
         AddOcrEngines(services);
         AddSelectionCore(services);
+        AddCacheAndRouter(services);
         AddStubServices(services);
 
         return services;
@@ -71,7 +73,14 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddStubServices(this IServiceCollection services)
     {
         services.AddSingleton<ITranslationProvider, StubTranslationProvider>();
-        services.AddSingleton<IWordPopupService, StubWordPopupService>();
+        return services;
+    }
+
+    public static IServiceCollection AddCacheAndRouter(this IServiceCollection services)
+    {
+        services.AddSingleton<ITranslationCache>(_ => new MemoryLruTranslationCache(capacity: 1000));
+        services.AddSingleton<ILocalDictionary, StubMiniDictionary>();
+        services.AddSingleton<ITranslationRouter, DefaultTranslationRouter>();
         return services;
     }
 

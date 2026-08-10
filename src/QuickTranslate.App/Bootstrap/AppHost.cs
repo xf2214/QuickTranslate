@@ -24,6 +24,7 @@ public static class AppHost
                 services.AddSingleton<WordInteractionCoordinator>();
                 services.AddSingleton<IInteractionCoordinator>(sp => sp.GetRequiredService<WordInteractionCoordinator>());
                 services.AddSingleton<ISelectionOverlayService, WpfSelectionOverlayService>();
+                services.AddSingleton<IWordPopupService, WpfWordPopupService>();
             })
             .ConfigureLogging((context, logging) =>
             {
