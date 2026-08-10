@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Infrastructure;
 using QuickTranslate.Platform;
+using QuickTranslate.Platform.Hotkeys;
 
 namespace QuickTranslate.App.Bootstrap;
 
@@ -17,6 +18,8 @@ public static class AppHost
                 services.AddInfrastructure(context.Configuration);
                 services.AddPlatform();
                 services.AddSingleton<ITrayIconService, WinFormsTrayIconService>();
+                services.AddSingleton<IHotkeyBroker, DefaultHotkeyBroker>();
+                services.AddSingleton<IInteractionCoordinator, LoggingInteractionCoordinator>();
             })
             .ConfigureLogging((context, logging) =>
             {

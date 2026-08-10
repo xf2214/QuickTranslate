@@ -2,8 +2,10 @@ using System.IO;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using QuickTranslate.App.Bootstrap;
 using QuickTranslate.Core.Abstractions;
+using QuickTranslate.Core.Options;
 using QuickTranslate.Infrastructure.SingleInstance;
 using StartupEventArgs = System.Windows.StartupEventArgs;
 using ExitEventArgs = System.Windows.ExitEventArgs;
@@ -19,6 +21,7 @@ public partial class App : WpfApplication
     private ILogger<App>? _logger;
     private IAppLifecycle? _appLifecycle;
     private ITrayIconService? _trayIconService;
+    private IHotkeyBroker? _hotkeyBroker;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -60,6 +63,11 @@ public partial class App : WpfApplication
             _trayIconService = sp.GetRequiredService<ITrayIconService>();
             _trayIconService.Show();
             _logger.LogInformation("Tray icon shown");
+
+            var settings = sp.GetRequiredService<IOptions<AppSettings>>().Value;
+            _hotkeyBroker = sp.GetRequiredService<IHotkeyBroker>();
+            _hotkeyBroker.RegisterDefaultsFromSettings(settings);
+            _logger.LogInformation("Hotkeys registered: Alt+D1 (Word), Alt+D2 (Block), Esc (Cancel)");
         }
         catch (Exception ex)
         {
@@ -91,6 +99,12 @@ public partial class App : WpfApplication
         try
         {
             _logger?.LogInformation("App lifecycle shutting down with code {ExitCode}", exitCode);
+        }
+        catch { }
+
+        try
+        {
+            _hotkeyBroker?.UnregisterAll();
         }
         catch { }
 
