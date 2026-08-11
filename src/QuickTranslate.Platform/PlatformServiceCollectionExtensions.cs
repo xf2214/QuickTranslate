@@ -18,6 +18,8 @@ public static class PlatformServiceCollectionExtensions
         services.AddSingleton<IAppLifecycle, DefaultAppLifecycle>();
         services.AddSingleton<IEscHook, DefaultEscHook>();
 
+        services.AddSingleton<IStartupRegistrar, RegistryStartupRegistrar>();
+
         return services;
     }
 }

@@ -106,6 +106,24 @@ public class DefaultHotkeyBroker : IHotkeyBroker
         try { _globalHotkeyService.Unregister(EscId); } catch { }
     }
 
+    public bool Probe(HotkeyModifiers mods, KeyboardKey key)
+    {
+        const int probeId = 0xBFFF;
+        try
+        {
+            bool ok = _globalHotkeyService.Register(probeId, mods, key);
+            if (ok)
+            {
+                _globalHotkeyService.Unregister(probeId);
+            }
+            return ok;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private bool Register(int id, HotkeyCombo c)
     {
         return _globalHotkeyService.Register(id, c.Modifiers, c.Key);

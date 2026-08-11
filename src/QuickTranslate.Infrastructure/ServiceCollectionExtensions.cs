@@ -73,10 +73,22 @@ public static class ServiceCollectionExtensions
         services.AddLogging(builder =>
         {
             builder.ClearProviders();
-            builder.SetMinimumLevel(global::Microsoft.Extensions.Logging.LogLevel.Information);
+            builder.SetMinimumLevel(global::Microsoft.Extensions.Logging.LogLevel.Trace);
         });
 
-        services.AddSingleton<ILoggerProvider, SerilogAppLoggingProvider>();
+        services.AddSingleton<ILoggerProvider>(sp =>
+        {
+            var appSettings = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<AppSettings>>().Value;
+            LoggingSwitch.IsDebugEnabled = appSettings.DebugLogging;
+            var innerFactory = sp.GetRequiredService<ILoggerFactory>();
+            var inner = new SerilogAppLoggingProvider(innerFactory);
+            return new FilteringLoggerProvider(inner, level =>
+            {
+                if (LoggingSwitch.IsDebugEnabled)
+                    return true;
+                return level >= global::Microsoft.Extensions.Logging.LogLevel.Information;
+            });
+        });
 
         AddOcrEngines(services);
         AddSelectionCore(services);

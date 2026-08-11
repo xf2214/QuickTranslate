@@ -21,6 +21,7 @@ public class FakeHotkeyBroker : IHotkeyBroker
     public List<AppSettings> RegisterDefaultsCalls { get; } = new();
     public List<(HotkeyCombo Word, HotkeyCombo Block)> UpdateCalls { get; } = new();
     public int UnregisterAllCount { get; private set; }
+    public Func<HotkeyModifiers, KeyboardKey, bool>? ProbeFunc { get; set; }
 
     public void RegisterDefaultsFromSettings(AppSettings settings)
         => RegisterDefaultsCalls.Add(settings);
@@ -29,6 +30,11 @@ public class FakeHotkeyBroker : IHotkeyBroker
     {
         UpdateCalls.Add((newWord, newBlock));
         return Result.Ok();
+    }
+
+    public bool Probe(HotkeyModifiers mods, KeyboardKey key)
+    {
+        return ProbeFunc != null ? ProbeFunc(mods, key) : true;
     }
 
     public void UnregisterAll() => UnregisterAllCount++;
