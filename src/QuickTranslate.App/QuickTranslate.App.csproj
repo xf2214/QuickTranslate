@@ -13,4 +13,12 @@
     <ProjectReference Include="..\QuickTranslate.Platform\QuickTranslate.Platform.csproj" />
     <ProjectReference Include="..\QuickTranslate.Core\QuickTranslate.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\assets\models\version.json" Link="models\version.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\LICENSES.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

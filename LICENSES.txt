@@ -1,0 +1,50 @@
+====================================================================
+QuickTranslate - Third-Party Licenses
+生成时间: <2026-08-11>
+====================================================================
+
+1) .NET Runtime (Microsoft.NETCore.App)
+   - 版本: 10.0.x
+   - 许可证: MIT
+   - https://github.com/dotnet/runtime/blob/main/LICENSE.TXT
+
+2) System.Security.Cryptography.ProtectedData
+   - 版本: 10.0.x
+   - 许可证: MIT
+   - https://www.nuget.org/packages/System.Security.Cryptography.ProtectedData/
+
+3) Microsoft.Data.Sqlite
+   - 版本: 10.0.x
+   - 许可证: MIT
+   - https://www.nuget.org/packages/Microsoft.Data.Sqlite/
+   - 包含 SQLite 原生代码 (Public Domain): https://www.sqlite.org/copyright.html
+
+4) Microsoft.Extensions.* (Options/DependencyInjection/Logging/Configuration)
+   - 版本: 10.0.x
+   - 许可证: MIT
+   - https://github.com/dotnet/runtime/blob/main/LICENSE.TXT
+
+5) PP-OCRv6 Models (Optional, ONNX format)
+   - 版本: v6.x (百度 PaddleOCR)
+   - 许可证: Apache-2.0
+   - https://github.com/PaddlePaddle/PaddleOCR/blob/release/3.0/LICENSE
+   - 注意：当前版本默认使用 Mock OCR；下载模型后请将 assets/models/*.onnx 放入发布目录 models/ 子目录，重启应用自动启用。
+
+6) ONNX Runtime (Microsoft.ML.OnnxRuntime) - 预留
+   - 版本: 1.20.x
+   - 许可证: MIT
+   - https://github.com/microsoft/onnxruntime/blob/main/LICENSE
+   - 注：如果后续启用真实 OCR，请在 NuGet 中引用并遵守许可证。
+
+7) System.Drawing.Common
+   - 版本: 10.0.x
+   - 许可证: MIT
+   - https://www.nuget.org/packages/System.Drawing.Common/
+
+8) xUnit.net (Test)
+   - 仅测试使用：MIT
+   - https://github.com/xunit/xunit/blob/main/LICENSE
+
+9) NSubstitute (Test)
+   - 仅测试使用：BSD 3-Clause
+   - https://github.com/nsubstitute/NSubstitute/blob/main/LICENSE.txt

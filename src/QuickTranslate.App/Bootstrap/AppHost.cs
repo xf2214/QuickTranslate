@@ -7,6 +7,7 @@ using QuickTranslate.App.Services;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Infrastructure;
+using QuickTranslate.Infrastructure.Services;
 using QuickTranslate.Platform;
 using QuickTranslate.Platform.Hotkeys;
 
@@ -21,7 +22,10 @@ public static class AppHost
             {
                 services.AddInfrastructure(context.Configuration);
                 services.AddPlatform();
-                services.AddSingleton<ITrayIconService, WinFormsTrayIconService>();
+                services.AddSingleton<ITrayIconService>(sp => new WinFormsTrayIconService(
+                    sp.GetRequiredService<IAppLifecycle>(),
+                    sp.GetRequiredService<ILogger<WinFormsTrayIconService>>(),
+                    sp));
                 services.AddSingleton<IHotkeyBroker, DefaultHotkeyBroker>();
                 services.AddSingleton<WordInteractionCoordinator>();
                 services.AddSingleton<IInteractionCoordinator>(sp => sp.GetRequiredService<WordInteractionCoordinator>());
@@ -35,9 +39,25 @@ public static class AppHost
             })
             .Build();
 
+        RunModelVersionVerification(host.Services);
         WireBlockHotkey(host.Services);
 
         return host;
+    }
+
+    private static void RunModelVersionVerification(IServiceProvider services)
+    {
+        try
+        {
+            var verifier = services.GetRequiredService<ModelVersionVerifier>();
+            verifier.Verify();
+        }
+        catch (Exception ex)
+        {
+            using var tempLoggerFactory = LoggerFactory.Create(b => { });
+            var tempLogger = tempLoggerFactory.CreateLogger(nameof(AppHost));
+            tempLogger.LogWarning(ex, "ModelVersionVerifier.Verify failed on startup (non-fatal)");
+        }
     }
 
     private static void WireBlockHotkey(IServiceProvider services)

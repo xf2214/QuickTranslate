@@ -1,9 +1,7 @@
 {
-  "ppocr_version": "v6.0",
-  "det_onnx_md5": "",
-  "cls_onnx_md5": "",
-  "rec_onnx_md5": "",
-  "char_dict_name": "ppocr_keys.txt",
-  "det_url_hint": "https://github.com/PaddlePaddle/PaddleOCR/blob/release/3.1/ppocr/model_list.md",
-  "note": "请手动放置 det.onnx、cls.onnx、rec.onnx、ppocr_keys.txt（或下载解压）。检测/分类/识别 ONNX 对应 PP-OCRv6 中英文通用模型。"
+  "schemaVersion": 1,
+  "det": { "name": "PP-OCRv6_det", "format": "onnx", "version": "0.1.0-mock", "sha256": "", "optional": true },
+  "rec": { "name": "PP-OCRv6_rec", "format": "onnx", "version": "0.1.0-mock", "sha256": "", "optional": true },
+  "cls": { "name": "PP-OCRv6_cls", "format": "onnx", "version": "0.1.0-mock", "sha256": "", "optional": true },
+  "note": "Optional 模型缺失时，QuickTranslate 自动降级为 Mock OCR（可翻译，位置/内容仅供演示）。"
 }

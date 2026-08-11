@@ -1,4 +1,5 @@
 using System.Reflection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using QuickTranslate.App.Bootstrap;
 using QuickTranslate.Core.Abstractions;
@@ -64,7 +65,8 @@ public class TrayServiceContractTests
         WinFormsTrayIconService service;
         try
         {
-            service = new WinFormsTrayIconService(appLifecycle, logger);
+            var sp = new ServiceCollection().BuildServiceProvider();
+            service = new WinFormsTrayIconService(appLifecycle, logger, sp);
         }
         catch (Exception ex)
         {

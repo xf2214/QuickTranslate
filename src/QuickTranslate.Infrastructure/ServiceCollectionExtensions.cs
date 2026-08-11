@@ -62,6 +62,8 @@ public static class ServiceCollectionExtensions
             });
         });
 
+        services.AddSingleton<ModelVersionVerifier>();
+
         services.AddSingleton<ILoggerFactory>(sp =>
         {
             var appSettings = sp.GetRequiredService<IOptions<AppSettings>>().Value;

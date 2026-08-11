@@ -1,7 +1,10 @@
 using System.Drawing;
 using System.Windows.Forms;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using QuickTranslate.App.Windows;
 using QuickTranslate.Core.Abstractions;
+using QuickTranslate.Infrastructure.Services;
 using CoreToolTipIcon = QuickTranslate.Core.Abstractions.ToolTipIcon;
 using WFSToolTipIcon = System.Windows.Forms.ToolTipIcon;
 
@@ -11,15 +14,22 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
 {
     private readonly IAppLifecycle _appLifecycle;
     private readonly ILogger<WinFormsTrayIconService> _logger;
+    private readonly IServiceProvider _serviceProvider;
     private NotifyIcon? _notifyIcon;
     private ContextMenuStrip? _contextMenu;
     private ToolStripMenuItem? _pauseMenuItem;
+    private SettingsWindow? _settingsWindow;
+    private AboutWindow? _aboutWindow;
     private bool _disposed;
 
-    public WinFormsTrayIconService(IAppLifecycle appLifecycle, ILogger<WinFormsTrayIconService> logger)
+    public WinFormsTrayIconService(
+        IAppLifecycle appLifecycle,
+        ILogger<WinFormsTrayIconService> logger,
+        IServiceProvider serviceProvider)
     {
         _appLifecycle = appLifecycle;
         _logger = logger;
+        _serviceProvider = serviceProvider;
     }
 
     public void Show()
@@ -62,11 +72,8 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
 
         _contextMenu = new ContextMenuStrip();
 
-        var openSettingsItem = new ToolStripMenuItem("打开设置");
-        openSettingsItem.Click += (s, e) =>
-        {
-            _logger.LogInformation("OpenSettings menu clicked");
-        };
+        var openSettingsItem = new ToolStripMenuItem("设置...");
+        openSettingsItem.Click += OnOpenSettingsClick;
         _contextMenu.Items.Add(openSettingsItem);
 
         _pauseMenuItem = new ToolStripMenuItem("暂停");
@@ -76,12 +83,10 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
         _pauseMenuItem.Click += OnPauseMenuItemClick;
         _contextMenu.Items.Add(_pauseMenuItem);
 
-        var aboutItem = new ToolStripMenuItem("关于");
-        aboutItem.Click += (s, e) =>
-        {
-            _logger.LogInformation("QuickTranslate v0.2.0");
-            ShowNotification("关于", "QuickTranslate v0.2.0", CoreToolTipIcon.Info);
-        };
+        _contextMenu.Items.Add(new ToolStripSeparator());
+
+        var aboutItem = new ToolStripMenuItem("关于...");
+        aboutItem.Click += OnAboutClick;
         _contextMenu.Items.Add(aboutItem);
 
         var quitItem = new ToolStripMenuItem("退出");
@@ -101,6 +106,55 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
 
         _appLifecycle.Paused += OnAppLifecyclePaused;
         _appLifecycle.Resumed += OnAppLifecycleResumed;
+    }
+
+    private void OnOpenSettingsClick(object? sender, EventArgs e)
+    {
+        _logger.LogInformation("OpenSettings menu clicked");
+        try
+        {
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            {
+                if (_settingsWindow == null || !_settingsWindow.IsLoaded)
+                {
+                    _settingsWindow = SettingsWindow.Create(_serviceProvider);
+                    _settingsWindow.Closed += (s, e2) => _settingsWindow = null;
+                    _settingsWindow.Show();
+                }
+                _settingsWindow.Activate();
+                _settingsWindow.Focus();
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to open SettingsWindow");
+            ShowNotification("错误", "打开设置失败: " + ex.Message, CoreToolTipIcon.Error);
+        }
+    }
+
+    private void OnAboutClick(object? sender, EventArgs e)
+    {
+        _logger.LogInformation("About menu clicked");
+        try
+        {
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            {
+                if (_aboutWindow == null || !_aboutWindow.IsLoaded)
+                {
+                    var verifier = _serviceProvider.GetService<ModelVersionVerifier>();
+                    _aboutWindow = new AboutWindow(verifier);
+                    _aboutWindow.Closed += (s, e2) => _aboutWindow = null;
+                    _aboutWindow.Show();
+                }
+                _aboutWindow.Activate();
+                _aboutWindow.Focus();
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to open AboutWindow");
+            ShowNotification("错误", "打开关于窗口失败: " + ex.Message, CoreToolTipIcon.Error);
+        }
     }
 
     private void OnPauseMenuItemClick(object? sender, EventArgs e)
@@ -210,6 +264,16 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
                 _contextMenu.Dispose();
                 _contextMenu = null;
             }
+
+            try
+            {
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                {
+                    _settingsWindow?.Close();
+                    _aboutWindow?.Close();
+                });
+            }
+            catch { }
         }
         _disposed = true;
     }
