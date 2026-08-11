@@ -13,6 +13,7 @@ using QuickTranslate.Infrastructure.Logging;
 using QuickTranslate.Infrastructure.Ocr;
 using QuickTranslate.Infrastructure.Options;
 using QuickTranslate.Infrastructure.Persistence;
+using QuickTranslate.Infrastructure.Security;
 using QuickTranslate.Infrastructure.Services;
 using QuickTranslate.Infrastructure.SingleInstance;
 using QuickTranslate.Infrastructure.Translation;
@@ -23,20 +24,30 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
+        services.AddSecretStore(configuration);
         services.AddSingleton<IAppDataProvider, DefaultAppDataProvider>();
 
-        services.AddSingleton(sp =>
+        services.AddSingleton<ISettingsManager>(sp =>
         {
             var appDataProvider = sp.GetRequiredService<IAppDataProvider>();
             var appDataDir = appDataProvider.GetAppDataDirectory();
-            return new SettingsManager(appDataDir);
+            var secretStore = sp.GetRequiredService<ISecretStore>();
+            var sm = new SettingsManager(appDataDir, secretStore);
+            var appSettings = sm.LoadAsync().GetAwaiter().GetResult();
+            return sm;
+        });
+
+        services.AddSingleton(sp =>
+        {
+            var sm = sp.GetRequiredService<ISettingsManager>();
+            return (SettingsManager)sm;
         });
 
         services.AddSingleton<SingleInstanceGuard>();
 
         services.AddSingleton<IConfigureOptions<AppSettings>>(sp =>
         {
-            var settingsManager = sp.GetRequiredService<SettingsManager>();
+            var settingsManager = sp.GetRequiredService<ISettingsManager>();
             var appSettings = settingsManager.LoadAsync().GetAwaiter().GetResult();
             return new ConfigureOptions<AppSettings>(opts =>
             {
@@ -47,6 +58,7 @@ public static class ServiceCollectionExtensions
                 opts.StartWithWindows = appSettings.StartWithWindows;
                 opts.CloseOnOutsideClick = appSettings.CloseOnOutsideClick;
                 opts.DebugLogging = appSettings.DebugLogging;
+                opts.ResolvedApiKey = appSettings.ResolvedApiKey;
             });
         });
 
@@ -85,7 +97,15 @@ public static class ServiceCollectionExtensions
     {
         services.AddOptions<QwenMtOptions>()
             .Bind(configuration.GetSection("Qwen"))
-            .ValidateDataAnnotations();
+            .ValidateDataAnnotations()
+            .PostConfigure<IOptions<AppSettings>>((opts, appSettings) =>
+            {
+                var resolvedKey = appSettings.Value.ResolvedApiKey;
+                if (!string.IsNullOrWhiteSpace(resolvedKey))
+                {
+                    opts.ApiKey = resolvedKey;
+                }
+            });
 
         services.AddHttpClient<ITranslationProvider, QwenMtTranslationProvider>((sp, client) =>
         {
@@ -162,6 +182,14 @@ public static class ServiceCollectionExtensions
             return sp.GetRequiredService<MockOcrEngine>();
         });
 
+        return services;
+    }
+
+    public static IServiceCollection AddSecretStore(this IServiceCollection services, IConfiguration? config = null)
+    {
+        services.AddOptions<SecretStoreOptions>();
+        if (config != null) services.Configure<SecretStoreOptions>(config.GetSection("SecretStore"));
+        services.AddSingleton<ISecretStore, DpapiCurrentUserSecretStore>();
         return services;
     }
 }

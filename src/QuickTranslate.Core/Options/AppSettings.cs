@@ -30,4 +30,10 @@ public class AppSettings
     public bool StartWithWindows { get; set; } = false;
     public bool CloseOnOutsideClick { get; set; } = true;
     public bool DebugLogging { get; set; } = false;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsApiKeyConfigured => !string.IsNullOrWhiteSpace(ResolvedApiKey);
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? ResolvedApiKey { get; set; }
 }
