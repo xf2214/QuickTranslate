@@ -1,9 +1,11 @@
 using System.IO;
+using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using QuickTranslate.App.Bootstrap;
+using QuickTranslate.App.Coordination;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Infrastructure.SingleInstance;
@@ -52,6 +54,8 @@ public partial class App : WpfApplication
             var sp = _host.Services;
             var loggerFactory = sp.GetRequiredService<global::Microsoft.Extensions.Logging.ILoggerFactory>();
             _logger = loggerFactory.CreateLogger<App>();
+
+            RegisterGlobalExceptionHandlers(_logger, sp);
 
             _appLifecycle = sp.GetRequiredService<IAppLifecycle>();
             _appLifecycle.ShuttingDown += OnAppLifecycleShuttingDown;
@@ -145,6 +149,82 @@ public partial class App : WpfApplication
             }
         }
         catch { }
+    }
+
+    private void RegisterGlobalExceptionHandlers(ILogger<App> logger, IServiceProvider sp)
+    {
+        AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+        {
+            var ex = (Exception)e.ExceptionObject;
+            logger.LogCritical(ex, "AppDomain Unhandled Exception (isTerminating={IsTerminating})", e.IsTerminating);
+            TryCleanupAll(sp, logger);
+        };
+
+        DispatcherUnhandledException += (s, e) =>
+        {
+            logger.LogError(e.Exception, "Dispatcher Unhandled Exception");
+            TryCleanupAll(sp, logger);
+            e.Handled = true;
+        };
+
+        TaskScheduler.UnobservedTaskException += (s, e) =>
+        {
+            logger.LogError(e.Exception, "Unobserved Task Exception");
+            e.SetObserved();
+        };
+    }
+
+    private static void TryCleanupAll(IServiceProvider sp, ILogger<App> logger)
+    {
+        try
+        {
+            var overlay = sp.GetService<ISelectionOverlayService>();
+            overlay?.HideAll();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "TryCleanupAll: Hide overlay failed");
+        }
+
+        try
+        {
+            var wordPopup = sp.GetService<IWordPopupService>();
+            wordPopup?.HideAll();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "TryCleanupAll: Hide word popup failed");
+        }
+
+        try
+        {
+            var blockPopup = sp.GetService<IBlockPopupService>();
+            blockPopup?.HideAll();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "TryCleanupAll: Hide block popup failed");
+        }
+
+        try
+        {
+            var wordCoord = sp.GetService<WordInteractionCoordinator>();
+            wordCoord?.CancelAll(returnIdle: true);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "TryCleanupAll: Cancel word coordinator failed");
+        }
+
+        try
+        {
+            var blockCoord = sp.GetService<BlockInteractionCoordinator>();
+            blockCoord?.TryCancelAndClear(returnIdle: true);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "TryCleanupAll: Cancel block coordinator failed");
+        }
     }
 
     private void Cleanup()

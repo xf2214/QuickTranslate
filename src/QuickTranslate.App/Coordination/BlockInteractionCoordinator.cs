@@ -124,7 +124,7 @@ public class BlockInteractionCoordinator : IDisposable
         return slot != _current || slot.Cts.IsCancellationRequested;
     }
 
-    private void TryCancelAndClear(bool returnIdle)
+    public void TryCancelAndClear(bool returnIdle)
     {
         var old = Interlocked.Exchange(ref _current, null);
         if (old != null)
@@ -158,6 +158,7 @@ public class BlockInteractionCoordinator : IDisposable
         var dpiY = monitorInfo.DpiY;
         var mid = monitorInfo.Id;
         PhysicalRect? unionBox = null;
+        PhysicalRect fallbackBox = new PhysicalRect(anchor.X - 100, anchor.Y - 50, 200, 100);
 
         var newSlot = new OperationSlot(Guid.NewGuid(), new CancellationTokenSource(), AppState.Capturing);
         var oldSlot = Interlocked.Exchange(ref _current, newSlot);
@@ -172,7 +173,7 @@ public class BlockInteractionCoordinator : IDisposable
         try
         {
             var (ocr, block, captures) = await _retryCoordinator.SelectBlockWithRetryAsync(
-                anchor, mid, dpiX, dpiY, newSlot.Cts.Token);
+                anchor, mid, dpiX, dpiY, newSlot.Cts.Token).ConfigureAwait(false);
 
             if (IsStaleOrCanceled(newSlot)) return;
 
@@ -193,7 +194,7 @@ public class BlockInteractionCoordinator : IDisposable
 
             SetState(newSlot, AppState.Translating);
             var translation = await _translationRouter.TranslateBlockAsync(
-                block.BlockText!, _settings.Value.TargetLanguage, newSlot.Cts.Token);
+                block.BlockText!, _settings.Value.TargetLanguage, newSlot.Cts.Token).ConfigureAwait(false);
 
             if (IsStaleOrCanceled(newSlot)) return;
 
@@ -204,9 +205,38 @@ public class BlockInteractionCoordinator : IDisposable
         {
             _logger.LogWarning("Block pipeline translation error: Code={Code}, Message={Message}", te.ErrorCode, te.Message);
             _overlayService.HideAll();
-            if (unionBox.HasValue && !IsStaleOrCanceled(newSlot))
+            var errorBox = unionBox ?? fallbackBox;
+            if (!IsStaleOrCanceled(newSlot))
             {
-                _popupService.ShowError(mid, unionBox.Value, dpiX, dpiY, TranslationErrorMessage.ForCode(te.ErrorCode), newSlot.Id);
+                _popupService.ShowError(mid, errorBox, dpiX, dpiY, TranslationErrorMessage.ForCode(te.ErrorCode), newSlot.Id);
+            }
+            else
+            {
+                _popupService.HideAll();
+            }
+            SetState(null, AppState.Idle);
+        }
+        catch (Core.Ocr.OcrException oex) when (oex.ErrorCode == Core.Ocr.OcrErrorCode.Cancelled)
+        {
+            _logger.LogDebug("Operation {Id} OCR cancelled", newSlot.Id);
+            _overlayService.HideAll();
+            _popupService.HideAll();
+            SetState(null, AppState.Idle);
+        }
+        catch (Core.Ocr.OcrException oex)
+        {
+            _logger.LogError(oex, "Block pipeline OCR error: Code={Code}", oex.ErrorCode);
+            _overlayService.HideAll();
+            var errorBox = unionBox ?? fallbackBox;
+            if (!IsStaleOrCanceled(newSlot))
+            {
+                var msg = oex.ErrorCode switch
+                {
+                    Core.Ocr.OcrErrorCode.ModelLoadFailed => "OCR 模型加载失败",
+                    Core.Ocr.OcrErrorCode.InferenceFailed => "OCR 识别失败，请重试",
+                    _ => "OCR 处理失败"
+                };
+                _popupService.ShowError(mid, errorBox, dpiX, dpiY, msg, newSlot.Id);
             }
             else
             {
@@ -225,9 +255,10 @@ public class BlockInteractionCoordinator : IDisposable
         {
             _logger.LogError(ex, "Block pipeline error");
             _overlayService.HideAll();
-            if (unionBox.HasValue && !IsStaleOrCanceled(newSlot))
+            var errorBox = unionBox ?? fallbackBox;
+            if (!IsStaleOrCanceled(newSlot))
             {
-                _popupService.ShowError(mid, unionBox.Value, dpiX, dpiY, "翻译失败，请稍后再试", newSlot.Id);
+                _popupService.ShowError(mid, errorBox, dpiX, dpiY, "翻译失败，请稍后再试", newSlot.Id);
             }
             else
             {

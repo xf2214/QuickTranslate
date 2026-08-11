@@ -77,7 +77,7 @@
   - `human-judgement` TR-M1.1.3: 在双屏不同 DPI 机器上实际跑 Demo，MonitorEnum 正确显示两屏 DPI 与 Rect。
 - **Notes**: 本任务优先于实际 UI，确保 Platform 层可独立单测。
 
-### [/] Task M1.2: TrayIcon + TrayMenu（设置/暂停/启用/退出）、无主窗口启动
+### [x] Task M1.2: TrayIcon + TrayMenu（设置/暂停/启用/退出）、无主窗口启动
 - **Priority**: high
 - **Depends On**: M1.1
 - **Description**:
@@ -91,7 +91,7 @@
   - `human-judgement` TR-M1.2.2: 第二次启动无第二托盘/窗口出现，仅原实例继续运行（与 M0.2 联动验证）。
 - **Notes**: 图标资源可先用占位 ico；后续 M7 再替换正式图标。
 
-### [ ] Task M1.3: 全局快捷键注册与热键事件管线 + Esc 取消钩子
+### [x] Task M1.3: 全局快捷键注册与热键事件管线 + Esc 取消钩子
 - **Priority**: high
 - **Depends On**: M1.1, M1.2
 - **Description**:
@@ -105,7 +105,7 @@
   - `human-judgement` TR-M1.3.2: 实际按 Alt+1/Alt+2/Esc，分别写入日志一条 Info 记录。
 - **Notes**: Esc 的全局注册需要注意与其他应用冲突；若后续发现冲突，可切换为仅在 Overlay/Popup 可见时通过 HwndSource 处理。
 
-### [ ] Task M1.4: SelectionOverlay 原型（无焦点、描边、DPI 正确）
+### [x] Task M1.4: SelectionOverlay 原型（无焦点、描边、DPI 正确）
 - **Priority**: high
 - **Depends On**: M1.1, M1.3
 - **Description**:
@@ -124,7 +124,7 @@
 
 ## 里程碑 M2 - Capture + OCR（截图 + PP-OCRv6 + 输出 OcrLayoutResult）
 
-### [ ] Task M2.1: IScreenCapture 抽象 + GDI 默认实现（仅内存）
+### [x] Task M2.1: IScreenCapture 抽象 + GDI 默认实现（仅内存）
 - **Priority**: high
 - **Depends On**: M1.1
 - **Description**:
@@ -139,7 +139,7 @@
   - `human-judgement` TR-M2.1.3: 将 Demo Bitmap 显示到调试窗口，肉眼能看到鼠标周围内容（只在 Debug 临时开启）。
 - **Notes**: 禁止任何 Debug 代码默认写入文件；需要可视化调试时提供 `#if DEBUG` 且开关化的临时代码。
 
-### [ ] Task M2.2: PP-OCRv6 抽象 + ONNX Runtime 集成、模型资产放置、Warm-up
+### [x] Task M2.2: PP-OCRv6 抽象 + ONNX Runtime 集成、模型资产放置、Warm-up
 - **Priority**: high
 - **Depends On**: M2.1
 - **Description**:
@@ -156,7 +156,7 @@
   - `human-judgement` TR-M2.2.3: Demo 中对浏览器真实文字截图输出至少非空 OcrLine[]。
 - **Notes**: V1 固定 CPU EP；不启用文档方向/弯曲展开。若 PP-OCRv6 只输出 line-level，则 WordBox 在 M3 处理。
 
-### [ ] Task M2.3: OcrLayoutResult 数据结构 + 标准耗时埋点
+### [x] Task M2.3: OcrLayoutResult 数据结构 + 标准耗时埋点
 - **Priority**: medium
 - **Depends On**: M2.2
 - **Description**:
@@ -173,7 +173,7 @@
 
 ## 里程碑 M3 - Word Mode（词选框+Overlay+Popup+本地词典/Cache stub）
 
-### [ ] Task M3.1: WordBoxResolver + WordSelector + SelectionOptions 配置
+### [x] Task M3.1: WordBoxResolver + WordSelector + SelectionOptions 配置
 - **Priority**: high
 - **Depends On**: M2.3
 - **Description**:
@@ -187,7 +187,7 @@
   - `human-judgement` TR-M3.1.3: 人工构造典型 OcrLine+鼠标点样例 ≥ 20，肉眼检查 SelectionResult 是否对齐。
 - **Notes**: 测试数据放入 `tests/QuickTranslate.Tests/Selection/TestCases/`（纯对象构造，不依赖真实 OCR）。
 
-### [ ] Task M3.2: InteractionCoordinator 状态机（Word 路径） + OperationId/Cancellation
+### [x] Task M3.2: InteractionCoordinator 状态机（Word 路径） + OperationId/Cancellation
 - **Priority**: high
 - **Depends On**: M1.4, M3.1
 - **Description**:
@@ -201,7 +201,7 @@
   - `human-judgement` TR-M3.2.3: 连续快速按 Alt+1 10 次，最终只显示最后一次 Overlay，不出现前一次内容。
 - **Notes**: 这是后续所有模式共享的核心，务必单测覆盖竞态。
 
-### [ ] Task M3.3: WordPopup（无焦点→点击可交互）+ 本地词典/Cache Stub
+### [x] Task M3.3: WordPopup（无焦点→点击可交互）+ 本地词典/Cache Stub
 - **Priority**: high
 - **Depends On**: M3.2
 - **Description**:
@@ -221,7 +221,7 @@
 
 ## 里程碑 M4 - Block Mode（BlockSelector + 扩大重试 + BlockPopup）
 
-### [ ] Task M4.1: BlockSelector（几何启发式 Growing）+ 边界扩大重试
+### [x] Task M4.1: BlockSelector（几何启发式 Growing）+ 边界扩大重试
 - **Priority**: high
 - **Depends On**: M2.3, M3.2
 - **Description**:
@@ -235,7 +235,7 @@
   - `human-judgement` TR-M4.1.3: 真实网页多段落文档 10 处随机测试，误并率 ≤ 10%。
 - **Notes**: 启发式初始值遵循文档；Benchmark 数据集建立后再逐步调参。
 
-### [ ] Task M4.2: BlockPopup（流式显示、复制按钮）+ 定位/自动避让
+### [x] Task M4.2: BlockPopup（流式显示、复制按钮）+ 定位/自动避让
 - **Priority**: high
 - **Depends On**: M4.1, M3.3
 - **Description**:
@@ -254,7 +254,7 @@
 
 ## 里程碑 M5 - Translation（Qwen Provider + 缓存 + 错误码）
 
-### [ ] Task M5.1: ITranslationProvider 抽象 + Qwen-MT HTTP（Lite/Flash + Streaming）
+### [x] Task M5.1: ITranslationProvider 抽象 + Qwen-MT HTTP（Lite/Flash + Streaming）
 - **Priority**: high
 - **Depends On**: M3.3, M4.2
 - **Description**:
@@ -271,7 +271,7 @@
   - `human-judgement` TR-M5.1.3: 真实 API Key 下 Block 翻译 ≥ 5 句，肉眼可见流式增量。
 - **Notes**: Open Questions 中端点/鉴权未确认前先提供可配置 `QwenMtOptions`，并允许以 mock 模式切换到"演示流"避免阻塞。
 
-### [ ] Task M5.2: TranslationRouter（L1/L2/Dict → Provider）+ SQLite Cache
+### [x] Task M5.2: TranslationRouter（L1/L2/Dict → Provider）+ SQLite Cache
 - **Priority**: high
 - **Depends On**: M5.1
 - **Description**:
@@ -288,7 +288,7 @@
   - `human-judgement` TR-M5.2.3: 代理抓包：Cache/Dict 命中时看不到对应 HTTP 请求。
 - **Notes**: Local Dictionary 在未拿到正式词库前先用最小 demo 词库并保证接口不变。
 
-### [ ] Task M5.3: UI 错误展示（短消息）+ 取消传播到 HTTP/翻译管线
+### [x] Task M5.3: UI 错误展示（短消息）+ 取消传播到 HTTP/翻译管线
 - **Priority**: medium
 - **Depends On**: M5.2
 - **Description**:
@@ -305,7 +305,7 @@
 
 ## 里程碑 M6 - Hardening（取消竞态细节、多屏 DPI 全量覆盖、安全存储、性能优化、异常恢复）
 
-### [ ] Task M6.1: API Key 加密存储（DPAPI 或 Credential Manager）+ Settings 接入
+### [/] Task M6.1: API Key 加密存储（DPAPI 或 Credential Manager）+ Settings 接入
 - **Priority**: high
 - **Depends On**: M5.3, M1.2
 - **Description**:

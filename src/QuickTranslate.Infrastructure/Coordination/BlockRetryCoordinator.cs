@@ -35,10 +35,10 @@ public class BlockRetryCoordinator
         int count = 0;
         var opts = SelectionOptions.Default;
         PhysicalSize size = new(1200, 720);
-        using (var frame = await Capture.CaptureAroundAsync(anchor, size, ct))
+        using (var frame = await Capture.CaptureAroundAsync(anchor, size, ct).ConfigureAwait(false))
         {
             count++;
-            var ocr = await Ocr.RecognizeAsync(frame, ct);
+            var ocr = await Ocr.RecognizeAsync(frame, ct).ConfigureAwait(false);
             var block = Selector.SelectBlock(ocr, anchor, opts);
             if (block.NoBlockFound) return (ocr, block, count);
             var captureRegion = frame.Region;
@@ -49,10 +49,10 @@ public class BlockRetryCoordinator
             if (!touchLeft && !touchTop && !touchRight && !touchBottom) return (ocr, block, count);
             size = new PhysicalSize((int)Math.Round(size.Width * 1.8), (int)Math.Round(size.Height * 1.8));
         }
-        using (var frame2 = await Capture.CaptureAroundAsync(anchor, size, ct))
+        using (var frame2 = await Capture.CaptureAroundAsync(anchor, size, ct).ConfigureAwait(false))
         {
             count++;
-            var ocr2 = await Ocr.RecognizeAsync(frame2, ct);
+            var ocr2 = await Ocr.RecognizeAsync(frame2, ct).ConfigureAwait(false);
             var blk2 = Selector.SelectBlock(ocr2, anchor, opts);
             return (ocr2, blk2, count);
         }

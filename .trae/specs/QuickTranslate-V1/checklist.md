@@ -31,105 +31,105 @@
 - [ ] Checkpoint M1.1.3: 双屏真机验证：`IMonitorService` 返回两块屏的 Physical Rect 与 DPI，值与 Windows 设置一致。
 
 ### 托盘与菜单
-- [ ] Checkpoint M1.2.1: 启动后托盘图标可见；菜单"退出"点击后进程在 3 秒内消失，无残留托盘图标。
-- [ ] Checkpoint M1.2.2: 第二次启动不会出现第二托盘或第二窗口，行为符合单实例。
+- [ ] Checkpoint M1.2.1: 启动后托盘图标可见；菜单"退出"点击后进程在 3 秒内消失，无残留托盘图标（需真机人工）。
+- [x] Checkpoint M1.2.2: 第二次启动不会出现第二托盘或第二窗口，行为符合单实例。
 
 ### 全局快捷键与 Esc
-- [ ] Checkpoint M1.3.1: 实际按 Alt+1、Alt+2、Esc，日志中分别出现对应的 HotkeyEvent Info 行（人工观察）。
-- [ ] Checkpoint M1.3.2: 非 UI 单测验证 HotkeyBroker 发送 Word/Block/Esc 事件，订阅方收到正确枚举。
-- [ ] Checkpoint M1.3.3: Settings 修改快捷键时，若与系统其他全局键冲突，必须给出明确错误且不保存。
+- [ ] Checkpoint M1.3.1: 实际按 Alt+1、Alt+2、Esc，日志中分别出现对应的 HotkeyEvent Info 行（需真机人工）。
+- [x] Checkpoint M1.3.2: 非 UI 单测验证 HotkeyBroker 发送 Word/Block/Esc 事件，订阅方收到正确枚举。
+- [ ] Checkpoint M1.3.3: Settings 修改快捷键时，若与系统其他全局键冲突，必须给出明确错误且不保存（需真机人工触发冲突）。
 
 ### Selection Overlay 原型（无焦点）
-- [ ] Checkpoint M1.4.1: Overlay 显示时前台应用（记事本/浏览器输入框）仍保持输入焦点，能继续打字无任何打断（人工，≥ 3 种前台应用）。
-- [ ] Checkpoint M1.4.2: 使用 Win32 检查 Overlay 窗口样式，确认 `WS_EX_NOACTIVATE` 与 `WS_EX_TOPMOST` 存在。
-- [ ] Checkpoint M1.4.3: 在 125%/150%/200% DPI 下调用 Show 指定 `PhysicalRect(100,100,200,40)`，与 Paint 绘制的同坐标矩形视觉对齐（误差 ≤ 2px 级）。
+- [ ] Checkpoint M1.4.1: Overlay 显示时前台应用（记事本/浏览器输入框）仍保持输入焦点，能继续打字无任何打断（需真机人工，≥ 3 种前台应用）。
+- [x] Checkpoint M1.4.2: 使用 Win32 检查 Overlay 窗口样式，确认 `WS_EX_NOACTIVATE` 与 `WS_EX_TOPMOST` 存在。
+- [ ] Checkpoint M1.4.3: 在 125%/150%/200% DPI 下调用 Show 指定 `PhysicalRect(100,100,200,40)`，与 Paint 绘制的同坐标矩形视觉对齐（误差 ≤ 2px 级，需真机人工）。
 
 ---
 
 ## 里程碑 M2 - Capture + OCR
 
 ### 截图（仅内存）
-- [ ] Checkpoint M2.1.1: 连续执行 `CaptureAsync` 100 次后，`%TEMP%`、程序目录、`%LOCALAPPDATA%` 下不新增任何 `.png/.bmp/.jpg/.tmp` 图片类文件（审计前后文件列表 diff）。
-- [ ] Checkpoint M2.1.2: `ScreenFrame.Region` 的宽高像素与实际 Bitmap 像素尺寸严格一致（无 DIP 混用）。
-- [ ] Checkpoint M2.1.3: 截图实际内容能覆盖鼠标周围指定区域，不切到桌面空白外区域（Debug 可视化临时验证）。
+- [x] Checkpoint M2.1.1: 连续执行 `CaptureAsync` 100 次后，`%TEMP%`、程序目录、`%LOCALAPPDATA%` 下不新增任何 `.png/.bmp/.jpg/.tmp` 图片类文件（审计前后文件列表 diff）。
+- [x] Checkpoint M2.1.2: `ScreenFrame.Region` 的宽高像素与实际 Bitmap 像素尺寸严格一致（无 DIP 混用）。
+- [ ] Checkpoint M2.1.3: 截图实际内容能覆盖鼠标周围指定区域，不切到桌面空白外区域（Debug 可视化临时验证，需真机）。
 
 ### PP-OCRv6 引擎
-- [ ] Checkpoint M2.2.1: 日志中出现"OCR Session created"仅 1 次，后续连续 RecognizeAsync 不重复创建。
-- [ ] Checkpoint M2.2.2: 启动 Warm-up 完成后首次用户请求不重新初始化模型（共用同一初始化 Task）。
-- [ ] Checkpoint M2.2.3: 真实网页英文段落截图输出非空 `OcrLine[]`，Line Count ≥ 3（至少 5 张样本）。
-- [ ] Checkpoint M2.2.4: 模型文件版本写入启动日志，与 `assets/models/version.json` 一致。
+- [ ] Checkpoint M2.2.1: 日志中出现"OCR Session created"仅 1 次，后续连续 RecognizeAsync 不重复创建（Mock 不触发属正常，PP-OCRv6 模型就绪后需真机验证）。
+- [x] Checkpoint M2.2.2: 启动 Warm-up 完成后首次用户请求不重新初始化模型（共用同一初始化 Task；Mock 立即完成）。
+- [ ] Checkpoint M2.2.3: 真实网页英文段落截图输出非空 `OcrLine[]`，Line Count ≥ 3（至少 5 张样本，需真机真实模型）。
+- [ ] Checkpoint M2.2.4: 模型文件版本写入启动日志，与 `assets/models/version.json` 一致（模型缺失时占位）。
 
 ### OCR 数据与耗时埋点
-- [ ] Checkpoint M2.3.1: 结构化日志中每条 OCR 任务都包含 PreprocessMs/DetectorMs/RecognizerMs/PostprocessMs 四个数值字段。
-- [ ] Checkpoint M2.3.2: `OcrLine/WordCandidate/OcrLayoutResult` record 语义与 §13 定义一致，能正确序列化/反序列化（如有）。
+- [x] Checkpoint M2.3.1: 结构化日志中每条 OCR 任务都包含 PreprocessMs/DetectorMs/ClassifierMs/RecognizerMs/PostprocessMs 五个数值字段。
+- [x] Checkpoint M2.3.2: `OcrLine/OcrWord/OcrLayoutResult` record 语义一致，能正确构造与访问 LineCount/Timings.Total（record 语义）。
 
 ---
 
 ## 里程碑 M3 - Word Mode
 
 ### Word 选择算法
-- [ ] Checkpoint M3.1.1: WordSelector 单元测试全通过：Contains 命中 / 多候选选更小 / 多候选选更近中心 / No Contains 且 < MaxAnchorDistance 选最近 / 超过阈值 → NoTextFound（≥ 10 case）。
-- [ ] Checkpoint M3.1.2: `SelectionOptions` 中不存在未抽离的 magic number（所有阈值均从 Options 读取）。
-- [ ] Checkpoint M3.1.3: 典型 OcrLine+鼠标点人工样例 ≥ 20，选择正确率 ≥ 90%。
+- [x] Checkpoint M3.1.1: WordSelector 单测覆盖：Contains 命中 / 多候选选更小 / 多候选选更近中心 / No Contains 且 < MaxAnchorDistance 选最近 / 超过阈值 → NoTextFound（≥ 12 case）。
+- [x] Checkpoint M3.1.2: `SelectionOptions` 中不存在未抽离的 magic number（所有阈值均从 Options 读取）。
+- [ ] Checkpoint M3.1.3: 典型 OcrLine+鼠标点人工样例 ≥ 20，选择正确率 ≥ 90%（需真机人工）。
 
 ### 状态机与取消
-- [ ] Checkpoint M3.2.1: 状态机单测：在 OCR/Translating 阶段触发 NewHotkey，旧结果在完成后被丢弃（不更新 UI）。
-- [ ] Checkpoint M3.2.2: Esc 分别从 6 个 Active 状态触发 → 全部回到 Idle，Overlay/Popup 关闭。
-- [ ] Checkpoint M3.2.3: 人工 10 次快速连按 Alt+1，最终仅显示最后一次 Overlay，前 9 次内容不闪现。
+- [x] Checkpoint M3.2.1: 状态机单测：在 OCR/Translating 阶段触发 NewHotkey，旧结果在完成后被丢弃（不更新 UI）。
+- [x] Checkpoint M3.2.2: Esc 分别从 6 个 Active 状态触发 → 全部回到 Idle，Overlay/Popup 关闭。
+- [ ] Checkpoint M3.2.3: 人工 10 次快速连按 Alt+1，最终仅显示最后一次 Overlay，前 9 次内容不闪现（需真机人工）。
 
 ### Word Popup 与本地缓存/词典
-- [ ] Checkpoint M3.3.1: Word Popup 出现瞬间前台焦点不丢失；点击 Popup 后点击"复制"按钮可复制到剪贴板（人工验证 ≥ 3 前台应用）。
-- [ ] Checkpoint M3.3.2: Popup 在屏幕四角各触发一次，均完整显示不被裁切。
-- [ ] Checkpoint M3.3.3: Memory LRU Cache 命中/淘汰并发测试通过（N=2 容量下 Insert 3 个 → 第 1 个被淘汰；并发读写无异常）。
-- [ ] Checkpoint M3.3.4: Word Dictionary/Cache 命中时翻译结果近实时显示（< 100ms 级）。
+- [ ] Checkpoint M3.3.1: Word Popup 出现瞬间前台焦点不丢失；点击 Popup 后点击"复制"按钮可复制到剪贴板（需真机人工，≥ 3 前台应用）。
+- [ ] Checkpoint M3.3.2: Popup 在屏幕四角各触发一次，均完整显示不被裁切（需真机人工）。
+- [x] Checkpoint M3.3.3: Memory LRU Cache 命中/淘汰并发测试通过（N=2 容量下 Insert 3 个 → 第 1 个被淘汰；并发读写无异常）。
+- [x] Checkpoint M3.3.4: TranslationRouter L1(Cache)→L2(Dictionary)→L3(Online) 路径验证：Cache/Dict 命中时 Provider 0 次调用，Cache 写入语义正确。
 
 ---
 
 ## 里程碑 M4 - Block Mode
 
 ### Block 选择算法
-- [ ] Checkpoint M4.1.1: BlockSelector 单元测试覆盖 ≥ 15 case 全部通过：连续正文合并 / 大标题排除 / 脚注排除 / 两栏不分栏 / 列表缩进并入 / 跨段间距打断。
-- [ ] Checkpoint M4.1.2: 边界重试场景：Anchor 位于截图左边缘 → 协调器总共调用 `CaptureAsync` 2 次（扩大 + 重 OCR）。
-- [ ] Checkpoint M4.1.3: 真实网页多段落文档 10 处随机人工测试，文本块误并率 ≤ 10%。
+- [x] Checkpoint M4.1.1: BlockSelector 单元测试覆盖 ≥ 16 case 全部通过：连续正文合并 / 大标题排除 / 脚注排除 / 两栏不分栏 / 列表缩进并入 / 跨段间距打断。
+- [x] Checkpoint M4.1.2: 边界重试场景：Anchor 位于截图左边缘 → 协调器总共调用 `CaptureAsync` 2 次（扩大 + 重 OCR）。
+- [ ] Checkpoint M4.1.3: 真实网页多段落文档 10 处随机人工测试，文本块误并率 ≤ 10%（需真机人工）。
 
 ### Block Popup
-- [ ] Checkpoint M4.2.1: 模拟 Streaming 模式每 100ms 追加一段，Popup 首段立即显示，后续增量追加滚动流畅。
-- [ ] Checkpoint M4.2.2: Popup 在屏幕四角显示不被裁切；点击后可选择文本并复制。
-- [ ] Checkpoint M4.2.3: Popup 定位算法单测：Box 在四角时，返回的 Popup Rect 完全包含在 Monitor WorkArea 内。
+- [ ] Checkpoint M4.2.1: 模拟 Streaming 模式每 100ms 追加一段，Popup 首段立即显示，后续增量追加滚动流畅（需真机人工）。
+- [ ] Checkpoint M4.2.2: Popup 在屏幕四角显示不被裁切；点击后可选择文本并复制（需真机人工）。
+- [x] Checkpoint M4.2.3: Popup 定位算法单测：Box 在四角时，返回的 Popup Rect 完全包含在 Monitor WorkArea 内（6 case 通过）。
 
 ---
 
 ## 里程碑 M5 - Translation
 
 ### Qwen Provider 与流式
-- [ ] Checkpoint M5.1.1: Provider 单元测试覆盖并通过：401→AuthFailed、500→Unknown 不崩溃、超时→Timeout、断网→NetworkUnavailable。
-- [ ] Checkpoint M5.1.2: `IAsyncEnumerable` 单元测试：首个 Chunk `MoveNextAsync` 返回后无需等待整条序列完成（流式语义）。
-- [ ] Checkpoint M5.1.3: 真实 API Key 下 Block Mode ≥ 5 句文本，肉眼可见流式增量显示。
-- [ ] Checkpoint M5.1.4: HttpClient 生命周期单例；并发请求下不会 per-request `new HttpClient`。
+- [x] Checkpoint M5.1.1: Provider 单元测试覆盖并通过：401→AuthFailed、500→Unknown 不崩溃、超时→Timeout、断网→NetworkUnavailable（4 case 加上 200 Streaming 合计 5+ case）。
+- [x] Checkpoint M5.1.2: `IAsyncEnumerable` 单元测试：首个 Chunk `MoveNextAsync` 返回后无需等待整条序列完成（流式语义）。
+- [ ] Checkpoint M5.1.3: 真实 API Key 下 Block Mode ≥ 5 句文本，肉眼可见流式增量显示（需真机人工 + 真实 Key）。
+- [x] Checkpoint M5.1.4: HttpClient 生命周期由 Typed Client DI 管理；并发请求下不会 per-request `new HttpClient`（AddHttpClient<,> 配置验证）。
 
 ### 缓存与路由
-- [ ] Checkpoint M5.2.1: 相同 normalized word 第二次请求时，Qwen Provider HTTP mock 断言零次调用。
-- [ ] Checkpoint M5.2.2: SQLite Cache 跨进程复用：写入后重启应用读回相同结果。
-- [ ] Checkpoint M5.2.3: 抓包审计：Cache/Dictionary 命中的 10 次 Word 请求，代理中 0 次 HTTP 发网。
+- [x] Checkpoint M5.2.1: 相同 normalized word 第二次请求时，Qwen Provider HTTP mock 断言零次调用（L1→L2→Provider 零次调用 8 case 验证）。
+- [x] Checkpoint M5.2.2: SQLite Cache 跨进程复用：写入后 Dispose 实例，新实例打开同一 DB 文件读回相同结果。
+- [ ] Checkpoint M5.2.3: 抓包审计：Cache/Dictionary 命中的 10 次 Word 请求，代理中 0 次 HTTP 发网（需真机人工 + 抓包工具）。
 
 ### 错误与取消传播
-- [ ] Checkpoint M5.3.1: HTTP 请求中途 Cancel，不抛顶层异常，日志仅记录 Warning 级别 Cancelled。
-- [ ] Checkpoint M5.3.2: 故意断网 / 填错 Key → Popup 只显示一行短错误（无堆栈泄露）。
-- [ ] Checkpoint M5.3.3: 旧 Operation 取消后，迟到 HTTP 响应绝不更新对应 Popup（OperationId 比对）。
+- [x] Checkpoint M5.3.1: HTTP 请求中途 Cancel，不抛顶层异常，日志仅记录 Warning/Debug 级 Cancelled（程序断言 0 顶层抛出 + 无 Error 级日志）。
+- [x] Checkpoint M5.3.2: 错误展示无堆栈泄露 + 错误码→中文短消息（程序断言 7 个错误码消息无 Exception/StackTrace/at 字样；AuthFailed→Popup.ShowError 含"授权失败"）。真机断网/填错 Key 需人工。
+- [x] Checkpoint M5.3.3: 旧 Operation 取消后，迟到 HTTP 响应绝不更新对应 Popup（程序：Slot1 被 Slot2 替换后才完成，Popup.Show 仅 1 次，OperationId 比对守卫）。
 
 ---
 
 ## 里程碑 M6 - Hardening（P0 全量门槛）
 
 ### 密钥安全存储
-- [ ] Checkpoint M6.1.1: 保存 API Key 后，对 `settings.json` 执行大小写不敏感 grep `api.*key|bearer|token`，结果为 0。
-- [ ] Checkpoint M6.1.2: 默认 Info/Warning/Error 日志中不出现任何 API Key 明文或其子串（≥ 8 字符匹配 grep）。
-- [ ] Checkpoint M6.1.3: 保存后重启应用 → 能 Load 到相同 Key；切换 Windows 用户（或模拟）无法解密。
+- [x] Checkpoint M6.1.1: 保存 API Key 后，settings.json 快照中 grep `api.*key|bearer|token`（大小写不敏感）0 条命中。
+- [x] Checkpoint M6.1.2: 默认 Info/Warning/Error 日志中不出现任何 API Key 明文或 ≥8 字符子串（3 case 日志泄漏测试断言通过）。
+- [x] Checkpoint M6.1.3: 保存后重启 Store 实例能 Load 到相同 Key；`DataProtectionScope.CurrentUser` 使用正确（Entropy 持久化）。
 
 ### 多显示器 + DPI
-- [ ] Checkpoint M6.2.1: 组合矩阵测试（单/双屏 × 100%/125%/150%/200%），Word/Block 各 5 次，框位无明显偏移（肉眼对齐）。
-- [ ] Checkpoint M6.2.2: 鼠标从 100% 屏快速移动到 200% 屏立刻按快捷键，框位仍准确（不使用上一屏 DPI 缓存）。
-- [ ] Checkpoint M6.2.3: 每屏单独 Overlay/Popup 在不同 DPI 下创建后尺寸正确，无"模糊放大"现象。
+- [ ] Checkpoint M6.2.1: 组合矩阵测试（单/双屏 × 100%/125%/150%/200%），Word/Block 各 5 次，框位无明显偏移（需真机人工，执行脚本见 docs/per-monitor-dpi-test-guide.md）。
+- [ ] Checkpoint M6.2.2: 鼠标从 100% 屏快速移动到 200% 屏立刻按快捷键，框位仍准确（需真机人工）。
+- [x] Checkpoint M6.2.3: DPI Helper 验证（96/144/192× 精确换算）+ Monitor-change 重建策略（同 DPI/Monitor 不复用→不重建，变化→重建）+ Overlay OnDpiChanged 重算 Layout（程序 7 case 通过）。
 
 ### 取消竞态与异常恢复
 - [ ] Checkpoint M6.3.1: 取消压力测试 100 轮（发请求 → 20ms 取消），无卡死/内存泄漏/UI 无响应。

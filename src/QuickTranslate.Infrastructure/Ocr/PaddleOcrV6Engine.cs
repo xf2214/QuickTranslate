@@ -127,74 +127,120 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             return;
         }
 
-        await _initTask.Value.WaitAsync(ct);
+        try
+        {
+            await _initTask.Value.WaitAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException oce)
+        {
+            throw OcrException.Cancelled(oce.Message, oce);
+        }
+        catch (Exception ex)
+        {
+            throw OcrException.ModelLoadFailed(ex.Message, ex);
+        }
     }
 
     public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default)
     {
-        if (!_modelReady)
+        try
         {
-            throw new InvalidOperationException(
-                "PP-OCRv6 models missing. Please place det.onnx/cls.onnx/rec.onnx/ppocr_keys.txt under assets/models or %APPDATA%/QuickTranslate/models");
+            if (!_modelReady)
+            {
+                throw OcrException.ModelLoadFailed(
+                    "PP-OCRv6 models missing. Please place det.onnx/cls.onnx/rec.onnx/ppocr_keys.txt under assets/models or %APPDATA%/QuickTranslate/models");
+            }
+
+            var sw = Stopwatch.StartNew();
+            var lines = new List<OcrLine>();
+
+            InferenceSessionsHolder? holder = null;
+            if (_initTask != null)
+            {
+                try
+                {
+                    holder = await _initTask.Value.WaitAsync(ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException oce)
+                {
+                    throw OcrException.Cancelled(oce.Message, oce);
+                }
+            }
+
+            ct.ThrowIfCancellationRequested();
+
+            var preprocess = sw.Elapsed;
+
+            try
+            {
+                var detectorStart = sw.Elapsed;
+                await Task.Yield();
+                ct.ThrowIfCancellationRequested();
+                var detectorElapsed = sw.Elapsed - detectorStart;
+
+                var classifierStart = sw.Elapsed;
+                await Task.Yield();
+                ct.ThrowIfCancellationRequested();
+                var classifierElapsed = sw.Elapsed - classifierStart;
+
+                var recognizerStart = sw.Elapsed;
+                await Task.Yield();
+                ct.ThrowIfCancellationRequested();
+                var recognizerElapsed = sw.Elapsed - recognizerStart;
+
+                var postprocessStart = sw.Elapsed;
+                await Task.Yield();
+                ct.ThrowIfCancellationRequested();
+                var postprocessElapsed = sw.Elapsed - postprocessStart;
+
+                sw.Stop();
+
+                var timings = new OcrTimings(
+                    preprocess,
+                    detectorElapsed,
+                    classifierElapsed,
+                    recognizerElapsed,
+                    postprocessElapsed);
+
+                var result = new OcrLayoutResult(
+                    frame.Region,
+                    lines,
+                    timings,
+                    DateTimeOffset.Now,
+                    DpiX: 96,
+                    DpiY: 96,
+                    EngineName: EngineName,
+                    FromCache: false);
+
+                _logger.LogInformation(
+                    "OCR finished: Engine={EngineName} Lines={LineCount} PreprocessMs={PreprocessMs} DetectorMs={DetectorMs} ClassifierMs={ClassifierMs} RecognizerMs={RecognizerMs} PostprocessMs={PostprocessMs}",
+                    EngineName,
+                    result.LineCount,
+                    timings.Preprocess.TotalMilliseconds,
+                    timings.Detector.TotalMilliseconds,
+                    timings.Classifier.TotalMilliseconds,
+                    timings.Recognizer.TotalMilliseconds,
+                    timings.Postprocess.TotalMilliseconds);
+
+                return result;
+            }
+            catch (OperationCanceledException oce)
+            {
+                throw OcrException.Cancelled(oce.Message, oce);
+            }
         }
-
-        var sw = Stopwatch.StartNew();
-        var lines = new List<OcrLine>();
-
-        InferenceSessionsHolder? holder = null;
-        if (_initTask != null)
+        catch (OperationCanceledException oce)
         {
-            holder = await _initTask.Value.WaitAsync(ct);
+            throw OcrException.Cancelled(oce.Message, oce);
         }
-
-        var preprocess = sw.Elapsed;
-
-        var detectorStart = sw.Elapsed;
-        await Task.Yield();
-        var detectorElapsed = sw.Elapsed - detectorStart;
-
-        var classifierStart = sw.Elapsed;
-        await Task.Yield();
-        var classifierElapsed = sw.Elapsed - classifierStart;
-
-        var recognizerStart = sw.Elapsed;
-        await Task.Yield();
-        var recognizerElapsed = sw.Elapsed - recognizerStart;
-
-        var postprocessStart = sw.Elapsed;
-        await Task.Yield();
-        var postprocessElapsed = sw.Elapsed - postprocessStart;
-
-        sw.Stop();
-
-        var timings = new OcrTimings(
-            preprocess,
-            detectorElapsed,
-            classifierElapsed,
-            recognizerElapsed,
-            postprocessElapsed);
-
-        var result = new OcrLayoutResult(
-            frame.Region,
-            lines,
-            timings,
-            DateTimeOffset.Now,
-            DpiX: 96,
-            DpiY: 96,
-            EngineName: EngineName,
-            FromCache: false);
-
-        _logger.LogInformation(
-            "OCR finished: Engine={EngineName} Lines={LineCount} PreprocessMs={PreprocessMs} DetectorMs={DetectorMs} ClassifierMs={ClassifierMs} RecognizerMs={RecognizerMs} PostprocessMs={PostprocessMs}",
-            EngineName,
-            result.LineCount,
-            timings.Preprocess.TotalMilliseconds,
-            timings.Detector.TotalMilliseconds,
-            timings.Classifier.TotalMilliseconds,
-            timings.Recognizer.TotalMilliseconds,
-            timings.Postprocess.TotalMilliseconds);
-
-        return result;
+        catch (OcrException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw OcrException.InferenceFailed(ex.Message, ex);
+        }
     }
 
     public void Dispose()

@@ -115,15 +115,47 @@ public class FakeOcrEngine : IOcrEngine
 {
     public TaskCompletionSource<OcrLayoutResult> RecognizeTcs { get; set; } = new();
     public int RecognizeCount { get; private set; }
+    public Func<Exception>? InferenceFailureFactory { get; set; }
 
     public string EngineName => "FakeOcr";
     public bool IsAvailable => true;
     public event EventHandler? SessionCreated;
 
-    public Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default)
+    public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default)
     {
         RecognizeCount++;
-        return RecognizeTcs.Task;
+        var tcs = RecognizeTcs;
+        var failureFactory = InferenceFailureFactory;
+        try
+        {
+            if (failureFactory != null)
+            {
+                await Task.Yield();
+                var ex = failureFactory();
+                tcs.TrySetException(ex);
+            }
+
+            var cancelTask = Task.Delay(Timeout.Infinite, ct);
+            var completed = await Task.WhenAny(tcs.Task, cancelTask).ConfigureAwait(false);
+            if (completed == cancelTask)
+            {
+                ct.ThrowIfCancellationRequested();
+            }
+            var result = await tcs.Task.ConfigureAwait(false);
+            return result;
+        }
+        catch (OperationCanceledException oce)
+        {
+            throw OcrException.Cancelled(oce.Message, oce);
+        }
+        catch (OcrException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw OcrException.InferenceFailed(ex.Message, ex);
+        }
     }
 
     public Task WarmUpAsync(CancellationToken ct = default) => Task.CompletedTask;
