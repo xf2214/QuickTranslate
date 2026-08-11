@@ -80,10 +80,10 @@ public class PopupDipLayoutTests
                 var field = typeof(WpfWordPopupService).GetField("_windows",
                     System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                 Assert.NotNull(field);
-                var windows = (Dictionary<MonitorId, WordPopupWindow>)field!.GetValue(service)!;
-                foreach (var w in windows.Values)
+                var windows = (Dictionary<MonitorId, (WordPopupWindow window, uint dpiX, uint dpiY)>)field!.GetValue(service)!;
+                foreach (var v in windows.Values)
                 {
-                    w.Close();
+                    v.window.Close();
                 }
 
                 passed = true;
@@ -145,10 +145,10 @@ public class PopupDipLayoutTests
 
                 var field = typeof(WpfWordPopupService).GetField("_windows",
                     System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                var windows = (Dictionary<MonitorId, WordPopupWindow>)field!.GetValue(service)!;
-                foreach (var w in windows.Values)
+                var windows = (Dictionary<MonitorId, (WordPopupWindow window, uint dpiX, uint dpiY)>)field!.GetValue(service)!;
+                foreach (var v in windows.Values)
                 {
-                    w.Close();
+                    v.window.Close();
                 }
 
                 passed = true;
@@ -225,4 +225,6 @@ public class FakeMonitorServiceForPopup : IMonitorService
     public MonitorInfo? TryGetMonitorFromPoint(PhysicalPoint pt) => _info;
 
     public MonitorInfo? TryGetPrimary() => _info;
+
+    public MonitorId MonitorFromWindow(IntPtr hwnd) => _info.Id;
 }

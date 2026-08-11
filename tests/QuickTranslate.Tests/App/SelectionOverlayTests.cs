@@ -136,8 +136,8 @@ public class SelectionOverlayTests
                 var field = typeof(WpfSelectionOverlayService).GetField("_windows",
                     System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                 Assert.NotNull(field);
-                var windows = (Dictionary<MonitorId, SelectionOverlayWindow>)field!.GetValue(service)!;
-                Assert.All(windows.Values, w => Assert.False(w.IsVisible));
+                var windows = (Dictionary<MonitorId, (SelectionOverlayWindow window, uint dpiX, uint dpiY)>)field!.GetValue(service)!;
+                Assert.All(windows.Values, v => Assert.False(v.window.IsVisible));
 
                 passed = true;
             }
@@ -180,9 +180,9 @@ public class SelectionOverlayTests
                 var field = typeof(WpfSelectionOverlayService).GetField("_windows",
                     System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                 Assert.NotNull(field);
-                var windows = (Dictionary<MonitorId, SelectionOverlayWindow>)field!.GetValue(service)!;
-                Assert.False(windows[mid1].IsVisible, "mid1 should be hidden");
-                Assert.True(windows[mid2].IsVisible, "mid2 should still be visible");
+                var windows = (Dictionary<MonitorId, (SelectionOverlayWindow window, uint dpiX, uint dpiY)>)field!.GetValue(service)!;
+                Assert.False(windows[mid1].window.IsVisible, "mid1 should be hidden");
+                Assert.True(windows[mid2].window.IsVisible, "mid2 should still be visible");
 
                 service.HideAll();
                 passed = true;

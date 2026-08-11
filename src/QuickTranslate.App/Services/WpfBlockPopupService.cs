@@ -4,6 +4,7 @@ using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Geometry;
 using QuickTranslate.Core.Selection;
 using QuickTranslate.Core.Translation;
+using QuickTranslate.App.Coordination;
 
 namespace QuickTranslate.App.Services;
 
@@ -12,6 +13,9 @@ public class WpfBlockPopupService : IBlockPopupService
     private readonly IDpiMapper _dpiMapper;
     private readonly IMonitorService _monitorService;
     private BlockPopupWindow? _window;
+    private MonitorId _lastMonitorId = MonitorId.Empty;
+    private uint _lastDpiX;
+    private uint _lastDpiY;
 
     public WpfBlockPopupService(IDpiMapper dpiMapper, IMonitorService monitorService)
     {
@@ -19,12 +23,35 @@ public class WpfBlockPopupService : IBlockPopupService
         _monitorService = monitorService;
     }
 
-    public void Show(BlockSelectionResult blockSelection, TranslationResult translation, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY)
+    private void EnsureWindow(MonitorId monitorId, uint dpiX, uint dpiY)
     {
+        bool monitorChanged = _lastMonitorId != monitorId;
+        bool dpiChanged = !PerMonitorDpiHelpers.AreClose(_lastDpiX, dpiX) || !PerMonitorDpiHelpers.AreClose(_lastDpiY, dpiY);
+
+        if (_window != null && (monitorChanged || dpiChanged))
+        {
+            _window.Close();
+            _window = null;
+        }
+
         if (_window == null)
         {
             _window = new BlockPopupWindow();
+            _lastMonitorId = monitorId;
+            _lastDpiX = dpiX;
+            _lastDpiY = dpiY;
         }
+        else
+        {
+            _lastMonitorId = monitorId;
+            _lastDpiX = dpiX;
+            _lastDpiY = dpiY;
+        }
+    }
+
+    public void Show(BlockSelectionResult blockSelection, TranslationResult translation, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY)
+    {
+        EnsureWindow(monitorId, dpiX, dpiY);
 
         var monitors = _monitorService.EnumerateMonitors();
         var monitorInfo = monitors.FirstOrDefault(m => m.Id == monitorId)
@@ -34,7 +61,7 @@ public class WpfBlockPopupService : IBlockPopupService
                              new PhysicalRect(0, 0, 1920, 1080),
                              dpiX, dpiY, true);
 
-        var preferredSize = _window.GetPreferredPhysicalSize(dpiX, dpiY);
+        var preferredSize = _window!.GetPreferredPhysicalSize(dpiX, dpiY);
 
         var physicalRect = PopupPlacement.Place(anchorBox, monitorInfo.WorkArea, preferredSize);
         var dipRect = _dpiMapper.ToDip(physicalRect, dpiX, dpiY);
@@ -64,10 +91,7 @@ public class WpfBlockPopupService : IBlockPopupService
 
     public void ShowError(MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY, string shortMessage, Guid operationId)
     {
-        if (_window == null)
-        {
-            _window = new BlockPopupWindow();
-        }
+        EnsureWindow(monitorId, dpiX, dpiY);
 
         var monitors = _monitorService.EnumerateMonitors();
         var monitorInfo = monitors.FirstOrDefault(m => m.Id == monitorId)
@@ -77,7 +101,7 @@ public class WpfBlockPopupService : IBlockPopupService
                              new PhysicalRect(0, 0, 1920, 1080),
                              dpiX, dpiY, true);
 
-        var preferredSize = _window.GetPreferredPhysicalSize(dpiX, dpiY);
+        var preferredSize = _window!.GetPreferredPhysicalSize(dpiX, dpiY);
 
         var physicalRect = PopupPlacement.Place(anchorBox, monitorInfo.WorkArea, preferredSize);
         var dipRect = _dpiMapper.ToDip(physicalRect, dpiX, dpiY);
@@ -110,6 +134,9 @@ public class WpfBlockPopupService : IBlockPopupService
         {
             _window.Hide();
             _window = null;
+            _lastMonitorId = MonitorId.Empty;
+            _lastDpiX = 0;
+            _lastDpiY = 0;
         }
     }
 }

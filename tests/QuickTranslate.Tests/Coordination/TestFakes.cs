@@ -73,11 +73,19 @@ public class FakeMonitorService : IMonitorService
         DpiY: 96,
         IsPrimary: true);
 
+    public Func<IntPtr, MonitorId>? MonitorFromWindowFunc { get; set; }
+
     public IReadOnlyList<MonitorInfo> EnumerateMonitors() => new[] { Primary };
 
     public MonitorInfo? TryGetMonitorFromPoint(PhysicalPoint pt) => Primary;
 
     public MonitorInfo? TryGetPrimary() => Primary;
+
+    public MonitorId MonitorFromWindow(IntPtr hwnd)
+    {
+        if (MonitorFromWindowFunc != null) return MonitorFromWindowFunc(hwnd);
+        return Primary.Id;
+    }
 }
 
 public class FakeScreenCapture : IScreenCapture

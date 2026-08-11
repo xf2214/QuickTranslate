@@ -53,6 +53,22 @@ public sealed class MonitorService : IMonitorService
         return null;
     }
 
+    public MonitorId MonitorFromWindow(IntPtr hwnd)
+    {
+        IntPtr hMonitor = User32.MonitorFromWindow(hwnd, User32.MONITOR_DEFAULTTONEAREST);
+        if (hMonitor == IntPtr.Zero) return MonitorId.Empty;
+
+        MONITORINFOEXW mi = new();
+        mi.cbSize = (uint)Marshal.SizeOf<MONITORINFOEXW>();
+        if (!User32.GetMonitorInfoW(hMonitor, ref mi))
+        {
+            return new MonitorId(hMonitor, string.Empty);
+        }
+
+        string deviceName = mi.szDevice ?? string.Empty;
+        return new MonitorId(hMonitor, deviceName);
+    }
+
     private MonitorInfo? GetMonitorInfoInternal(IntPtr hMonitor)
     {
         MONITORINFOEXW mi = new();

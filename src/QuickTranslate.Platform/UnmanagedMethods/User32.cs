@@ -13,6 +13,9 @@ public static unsafe partial class User32
     [LibraryImport(DllName)]
     public static partial IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
 
+    [LibraryImport(DllName)]
+    public static partial IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
     public const uint MONITOR_DEFAULTTONULL = 0x00000000;
     public const uint MONITOR_DEFAULTTOPRIMARY = 0x00000001;
     public const uint MONITOR_DEFAULTTONEAREST = 0x00000002;

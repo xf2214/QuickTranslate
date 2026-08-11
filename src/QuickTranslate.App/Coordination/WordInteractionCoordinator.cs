@@ -149,7 +149,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
                 return;
             }
 
-            _overlayService.Show(sel.Box, mid, monitorInfo.DpiX, monitorInfo.DpiY);
+            _overlayService.Show(sel.Box, mid, dpiX, dpiY);
 
             if (IsStaleOrCanceled(newSlot)) return;
 

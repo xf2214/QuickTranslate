@@ -4,13 +4,14 @@ using QuickTranslate.Core.Geometry;
 using QuickTranslate.App.Windows;
 using QuickTranslate.Platform.UnmanagedMethods;
 using QuickTranslate.Platform.Win32;
+using QuickTranslate.App.Coordination;
 
 namespace QuickTranslate.App.Services;
 
 public class WpfSelectionOverlayService : ISelectionOverlayService
 {
     private readonly IDpiMapper _dpiMapper;
-    private readonly Dictionary<MonitorId, SelectionOverlayWindow> _windows = new();
+    private readonly Dictionary<MonitorId, (SelectionOverlayWindow window, uint dpiX, uint dpiY)> _windows = new();
 
     public WpfSelectionOverlayService(IDpiMapper dpiMapper)
     {
@@ -19,14 +20,33 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
 
     public void Show(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX = 96, uint dpiY = 96)
     {
-        if (!_windows.TryGetValue(monitorId, out var window))
+        bool needsRecreate = true;
+        if (_windows.TryGetValue(monitorId, out var entry))
         {
-            window = new SelectionOverlayWindow();
-            _windows[monitorId] = window;
+            if (PerMonitorDpiHelpers.AreClose(entry.dpiX, dpiX) && PerMonitorDpiHelpers.AreClose(entry.dpiY, dpiY))
+            {
+                needsRecreate = false;
+            }
+            else
+            {
+                entry.window.Close();
+                _windows.Remove(monitorId);
+            }
         }
 
-        DipRect dipRect = _dpiMapper.ToDip(physicalBox, dpiX, dpiY);
-        window.ApplyLayout(dipRect);
+        SelectionOverlayWindow window;
+        if (needsRecreate || !_windows.TryGetValue(monitorId, out entry))
+        {
+            window = new SelectionOverlayWindow();
+            _windows[monitorId] = (window, dpiX, dpiY);
+        }
+        else
+        {
+            window = entry.window;
+            _windows[monitorId] = (window, dpiX, dpiY);
+        }
+
+        window.ApplyPhysicalLayout(physicalBox, dpiX, dpiY);
 
         if (!window.IsVisible)
         {
@@ -41,12 +61,12 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
 
     public void Update(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX = 96, uint dpiY = 96)
     {
-        if (_windows.TryGetValue(monitorId, out var window))
+        if (_windows.TryGetValue(monitorId, out var entry))
         {
-            DipRect dipRect = _dpiMapper.ToDip(physicalBox, dpiX, dpiY);
-            window.ApplyLayout(dipRect);
+            entry.window.ApplyPhysicalLayout(physicalBox, dpiX, dpiY);
+            _windows[monitorId] = (entry.window, dpiX, dpiY);
 
-            IntPtr hwnd = new WindowInteropHelper(window).Handle;
+            IntPtr hwnd = new WindowInteropHelper(entry.window).Handle;
             if (hwnd != IntPtr.Zero)
             {
                 User32.SetWindowPos(
@@ -60,17 +80,17 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
 
     public void Hide(MonitorId monitorId)
     {
-        if (_windows.TryGetValue(monitorId, out var window))
+        if (_windows.TryGetValue(monitorId, out var entry))
         {
-            window.Hide();
+            entry.window.Hide();
         }
     }
 
     public void HideAll()
     {
-        foreach (var window in _windows.Values)
+        foreach (var kvp in _windows)
         {
-            window.Hide();
+            kvp.Value.window.Hide();
         }
     }
 
@@ -79,8 +99,8 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
         var result = new Dictionary<MonitorId, (IntPtr, DipRect)>();
         foreach (var kvp in _windows)
         {
-            IntPtr hwnd = new WindowInteropHelper(kvp.Value).Handle;
-            result[kvp.Key] = (hwnd, kvp.Value.LastLayoutRect);
+            IntPtr hwnd = new WindowInteropHelper(kvp.Value.window).Handle;
+            result[kvp.Key] = (hwnd, kvp.Value.window.LastLayoutRect);
         }
         return result;
     }
