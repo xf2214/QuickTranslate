@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.IO;
 using System.Windows.Forms;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -98,7 +99,7 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
 
         _notifyIcon = new NotifyIcon
         {
-            Icon = GeneratePlaceholderIcon(),
+            Icon = LoadTrayIcon(),
             Text = "QuickTranslate",
             ContextMenuStrip = _contextMenu,
             Visible = false
@@ -194,6 +195,23 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
     {
         if (_pauseMenuItem == null) return;
         _pauseMenuItem.Text = _pauseMenuItem.Checked ? "启用" : "暂停";
+    }
+
+    private static Icon LoadTrayIcon()
+    {
+        try
+        {
+            var iconPath = Path.Combine(AppContext.BaseDirectory, "icons", "QuickTranslate.ico");
+            if (File.Exists(iconPath))
+            {
+                return new Icon(iconPath);
+            }
+        }
+        catch
+        {
+            // 加载失败时回退到占位图标，托盘仍可正常使用
+        }
+        return GeneratePlaceholderIcon();
     }
 
     private static Icon GeneratePlaceholderIcon()

@@ -230,3 +230,6 @@ assets/models/*.txt
 assets/models/*.pt
 assets/models/*.pdiparams
 !assets/models/version.json
+
+# ECDICT intermediate work files (raw CSV / repack intermediates, not tracked)
+assets/dictionaries/_ecdict_work/

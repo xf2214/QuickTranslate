@@ -1,7 +1,41 @@
 {
   "schemaVersion": 1,
-  "det": { "name": "PP-OCRv6_det", "format": "onnx", "version": "0.1.0-mock", "sha256": "", "optional": true },
-  "rec": { "name": "PP-OCRv6_rec", "format": "onnx", "version": "0.1.0-mock", "sha256": "", "optional": true },
-  "cls": { "name": "PP-OCRv6_cls", "format": "onnx", "version": "0.1.0-mock", "sha256": "", "optional": true },
-  "note": "Optional 模型缺失时，QuickTranslate 自动降级为 Mock OCR（可翻译，位置/内容仅供演示）。"
+  "det": {
+    "name": "det",
+    "format": "onnx",
+    "version": "PP-OCRv6_medium_det (HoVDuc/ppocrv5-onnx v1.1.0)",
+    "sha256": "eb13b44b25bb36f89528b68720af8a61d9cf381176107f465db1757b65d086e1",
+    "optional": false,
+    "sizeBytes": 62032837,
+    "url": "https://github.com/HoVDuc/ppocrv5-onnx/releases/download/v1.1.0/PP-OCRv6_medium_det_onnx.zip"
+  },
+  "rec": {
+    "name": "rec",
+    "format": "onnx",
+    "version": "PP-OCRv6_medium_rec (HoVDuc/ppocrv5-onnx v1.1.0)",
+    "sha256": "9c09abf0957f7968c7586464b7397b84ad2387a0497a351af40e9acc71b673ba",
+    "optional": false,
+    "sizeBytes": 76554979,
+    "url": "https://github.com/HoVDuc/ppocrv5-onnx/releases/download/v1.1.0/PP-OCRv6_medium_rec_onnx.zip"
+  },
+  "cls": {
+    "name": "cls",
+    "format": "onnx",
+    "version": "ch_ppocr_mobile_v2.0_cls",
+    "sha256": "",
+    "optional": true,
+    "sizeBytes": 0,
+    "url": "https://paddleocr.bj.bcebos.com/dygraph_v2.0/ch/ch_ppocr_mobile_v2.0_cls_infer.onnx",
+    "note": "分类器模型为可选项；缺失时OCR引擎跳过180度方向分类，不影响文本检测与识别主流程"
+  },
+  "keys": {
+    "name": "ppocr_keys",
+    "format": "txt",
+    "version": "ppocr_keys_v1 (6623 lines)",
+    "sha256": "bc011b936a8d76f226f75daeefc99a961b6ce981f7bfcd200334194faa4fe52b",
+    "optional": false,
+    "sizeBytes": 26253,
+    "url": "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/main/ppocr/utils/ppocr_keys_v1.txt"
+  },
+  "note": "det/rec/keys 为必需文件，cls.onnx 可选。一键下载模型：在项目根执行 powershell -ExecutionPolicy Bypass -File scripts/download-v6-final.ps1。模型缺失时引擎自动降级为 MockOcrEngine（仅用于开发调试）。"
 }

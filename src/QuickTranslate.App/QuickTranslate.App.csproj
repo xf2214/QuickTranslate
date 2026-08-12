@@ -17,7 +17,17 @@
     <Content Include="..\..\assets\models\version.json" Link="models\version.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- ECDICT-lite packed 词典：生成后放在 assets/dictionaries/ecdict-lite.packed，随程序发布
+         不存在时自动跳过复制，不影响 build -->
+    <Content Include="..\..\assets\dictionaries\ecdict-lite.packed"
+             Link="dictionaries\ecdict-lite.packed"
+             Condition="Exists('..\..\assets\dictionaries\ecdict-lite.packed')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="..\..\LICENSES.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\assets\icons\QuickTranslate.ico" Link="icons\QuickTranslate.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

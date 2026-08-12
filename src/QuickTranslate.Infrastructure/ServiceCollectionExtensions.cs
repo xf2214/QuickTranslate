@@ -63,6 +63,7 @@ public static class ServiceCollectionExtensions
         });
 
         services.AddSingleton<ModelVersionVerifier>();
+        services.AddSingleton<IModelDownloader, ModelDownloader>();
 
         services.AddSingleton<ILoggerFactory>(sp =>
         {
@@ -137,7 +138,9 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddCacheAndRouter(this IServiceCollection services)
     {
         services.AddSingleton<ITranslationCache>(_ => new MemoryLruTranslationCache(capacity: 1000));
-        services.AddSingleton<ILocalDictionary, StubMiniDictionary>();
+        // ECDICT-lite 词典：优先读取 packed 高频词 + 用户 overlay，再兜底 stub 59 词
+        // 若 ECDICT 加载路径异常（如 packed 缺失），不影响应用启动——内部自动回退到 stub
+        services.AddSingleton<ILocalDictionary, EcdictLiteDictionary>();
         services.AddSingleton<ITranslationRouter, DefaultTranslationRouter>(sp =>
         {
             var cache = sp.GetRequiredService<ITranslationCache>();

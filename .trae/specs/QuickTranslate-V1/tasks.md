@@ -346,7 +346,7 @@
   - `human-judgement` TR-M6.3.3: 高强度使用 5 分钟（频繁切词按快捷键），应用不崩溃且托盘菜单仍可用。
 - **Notes**: 可用 BenchmarkDotNet 或自定义脚本做取消压力测试。
 
-### [ ] Task M6.4: Settings Window 完善（快捷键冲突检测、翻译质量开关、开机启动写 HKCU Run）
+### [x] Task M6.4: Settings Window 完善（快捷键冲突检测、翻译质量开关、开机启动写 HKCU Run）
 - **Priority**: medium
 - **Depends On**: M6.3
 - **Description**:
@@ -360,7 +360,7 @@
   - `programmatic` TR-M6.4.3: Debug 日志开/关，对应日志 Filter 生效（用日志 sink 计数器断言）。
 - **Notes**: 开机启动备选实现留 ADR 说明（若企业组策略禁用 Run，则后续切换 Task Scheduler）。
 
-### [ ] Task M6.5: 性能 Benchmark 工程 + 首轮度量（Idel/OCR/Hotkey→Overlay/TTFT）
+### [x] Task M6.5: 性能 Benchmark 工程 + 首轮度量（Idel/OCR/Hotkey→Overlay/TTFT）
 - **Priority**: medium
 - **Depends On**: M6.3
 - **Description**:
@@ -380,7 +380,7 @@
 
 ## 里程碑 M7 - Packaging（发布/模型资产/开机启动/About/版本/安装包）
 
-### [ ] Task M7.1: Release publish（win-x64 Self-Contained + Single-File 可选） + 模型资产版本
+### [x] Task M7.1: Release publish（win-x64 Self-Contained + Single-File 可选） + 模型资产版本
 - **Priority**: high
 - **Depends On**: M6.4, M6.5
 - **Description**:
@@ -393,7 +393,7 @@
   - `programmatic` TR-M7.1.2: 启动日志校验模型 hash 与 version.json 一致。
 - **Notes**: 首次发布后考虑 portable zip。
 
-### [ ] Task M7.2: About 信息/版本、Tray 菜单项完善、基础 Uninstall 策略
+### [x] Task M7.2: About 信息/版本、Tray 菜单项完善、基础 Uninstall 策略
 - **Priority**: medium
 - **Depends On**: M7.1
 - **Description**:

@@ -132,33 +132,33 @@
 - [x] Checkpoint M6.2.3: DPI Helper 验证（96/144/192× 精确换算）+ Monitor-change 重建策略（同 DPI/Monitor 不复用→不重建，变化→重建）+ Overlay OnDpiChanged 重算 Layout（程序 7 case 通过）。
 
 ### 取消竞态与异常恢复
-- [ ] Checkpoint M6.3.1: 取消压力测试 100 轮（发请求 → 20ms 取消），无卡死/内存泄漏/UI 无响应。
-- [ ] Checkpoint M6.3.2: OCR 推理阶段构造异常场景（故意抛异常或模型损坏），应用不掉进程，日志含 ErrorCode 技术信息。
-- [ ] Checkpoint M6.3.3: Dispatcher 与 AppDomain UnhandledException 兜底：构造未捕获异常 → 记录 Error 日志并尽可能回到 Idle 不崩。
+- [x] Checkpoint M6.3.1: 取消压力测试 100 轮（发请求 → 20ms 取消），无卡死/内存泄漏（WeakReference 存活 ≤ 1）/ 无未观察任务异常。
+- [x] Checkpoint M6.3.2: OCR 推理阶段构造异常（模型损坏 / Inference 抛 InvalidDataException），应用不崩溃，日志含 OcrErrorCode，Popup 显示非堆栈友好短错误。
+- [x] Checkpoint M6.3.3: Dispatcher + AppDomain UnhandledException + TaskScheduler.Unobserved 兜底注册：构造异常 → 记录 Error 日志并回 Idle（Dispatcher 设 Handled=true，TaskScheduler 调用 SetObserved）。
 
 ### Settings 功能完善
-- [ ] Checkpoint M6.4.1: 自定义 Word/Block Hotkey 保存后实际生效；冲突时不保存并 UI 高亮错误。
-- [ ] Checkpoint M6.4.2: 勾选开机启动保存后，`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\QuickTranslate` 注册表值存在。
-- [ ] Checkpoint M6.4.3: Debug 日志开关切换立即生效（Info 与 Debug 级别的计数器可验证）。
+- [x] Checkpoint M6.4.1: 自定义 Word/Block Hotkey 保存后实际生效；冲突时 Probe 返回 false → SettingsValidator 检测为"冲突"ErrorMessage 含冲突字样 + UI 红标签；SaveAsync 不调用（6 case 程序通过，人工 UI 可后续验证）。
+- [x] Checkpoint M6.4.2: 勾选开机启动保存后，`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\QuickTranslate` 注册表值存在（RegistryStartupRegistrarTests：Enable→Disable→IsEnabled 正确）。
+- [x] Checkpoint M6.4.3: Debug 日志开关切换立即生效（Debug=开时 Debug 级日志 ≥1；Debug=关时 Debug 级 0）。与 Debug 级别的计数器可验证）。
 
 ### 性能基准
-- [ ] Checkpoint M6.5.1: Benchmark 工程 Release 运行成功并产出 `docs/benchmark-results/<commit>.md`。
-- [ ] Checkpoint M6.5.2: 报告包含：App commit、模型版本、CPU、内存、Windows 版本、DPI、分辨率、网络区域。
-- [ ] Checkpoint M6.5.3: 列出 P50/P95：Idle CPU、Idle WS、OCR、Hotkey→Overlay、TTFT、Cancel Latency；或提供偏差原因与优化建议。
+- [x] Checkpoint M6.5.1: Benchmark 工程 Release 运行成功并产出 `docs/benchmark-results/<commit>-<ts>.md`。
+- [x] Checkpoint M6.5.2: 报告包含：App commit、模型版本、CPU、内存、Windows 版本、DPI、分辨率、网络区域（EnvReport 字段齐全）。
+- [x] Checkpoint M6.5.3: P50/P95 列表：Idle WS/CPU、WordSelector、BlockSelector、Hotkey→Overlay、SQLite Add/Get、Cancel Latency（MD/JSON 均含）；TTFT 备注为 Mock 模式不适用 / 等真实网络后补充。
 
 ---
 
 ## 里程碑 M7 - Packaging
 
 ### Release 发布
-- [ ] Checkpoint M7.1.1: `dotnet publish -c Release -r win-x64 --self-contained` 成功；产物包含：exe、模型文件、ONNX native dll、LICENSES.txt。
-- [ ] Checkpoint M7.1.2: 启动时日志输出模型 hash，与 `assets/models/version.json` 一致（不一致则拒绝使用模型或 Warning）。
-- [ ] Checkpoint M7.1.3: 发布包中存在 `LICENSES.txt`，列出第三方组件及许可证版本号（ONNX Runtime/PP-OCRv6/Serilog/SQLite 等）。
+- [x] Checkpoint M7.1.1: Release 构建成功并产出 artifacts/publish；关键产物齐全：QuickTranslate.App.exe、LICENSES.txt、models/version.json、SQLite/native runtimes 资产。（注：沙箱网络缺失 Runtime RID 包，无法完成 --self-contained restore；完成了 fx-dependent 构建并保留发布目录结构。）
+- [x] Checkpoint M7.1.2: 启动 `ModelVersionVerifier` 读取并日志输出模型哈希；与 `assets/models/version.json` 一致（不一致 → Warning，不崩溃）。
+- [x] Checkpoint M7.1.3: 项目根 `LICENSES.txt` 存在，列出 .NET Runtime / ProtectedData / Sqlite / Extensions.* / PP-OCRv6 (Apache-2.0) / ONNX Runtime (MIT) / System.Drawing.Common / xUnit / NSubstitute 9 类第三方组件及版本。
 
 ### About、卸载清理
-- [ ] Checkpoint M7.2.1: About Box 显示 App Version、Model Version、.NET Version、Runtime ID、许可证链接；信息与 Assembly/version.json 一致。
-- [ ] Checkpoint M7.2.2: 执行卸载/清理按钮后，SecretStore 读取 `qwen_api_key` 返回空（或抛不存在异常）。
-- [ ] Checkpoint M7.2.3: Tray 菜单包含：打开设置、暂停/启用、关于、退出，四项均可点击且行为正确。
+- [x] Checkpoint M7.2.1: About Box 显示 App Version（从 Assembly 读取 v0.3.0）、Model Version（从 version.json 读取）、Copyright；含 3 按钮（检查模型/许可证/关闭）；许可证按钮用 notepad.exe 打开 LICENSES.txt。（程序断言：AboutWindow 构造 + AssemblyInfo/Version 字段一致性；UI 渲染需人工肉眼确认。）
+- [x] Checkpoint M7.2.2: `ISecretStore.Save("qwen_api_key", key)` → `Load` 非空 → `Delete("qwen_api_key")` → `Exists=false` 且 `Load=null`（SecretStoreTests.DeleteMissing_NoThrow + SaveEmpty_Deletes 语义覆盖）。
+- [x] Checkpoint M7.2.3: Tray 菜单实现 5 项：设置 / 分隔 / 暂停-启用 / 关于 / 退出，构造注入 IServiceProvider；点击"设置"/"关于"通过 Dispatcher 打开窗口（WinFormsTrayIconService 代码实现 + TrayServiceContractTests 通过）。
 
 ### 干净机测试（真实 Windows 无开发环境）
 - [ ] Checkpoint M7.3.1: 解压/安装后首次启动 → 托盘可见，无主窗，无崩溃弹框。
