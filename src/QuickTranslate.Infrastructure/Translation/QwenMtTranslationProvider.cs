@@ -88,24 +88,33 @@ public class QwenMtTranslationProvider : ITranslationProvider
     private readonly HttpClient _httpClient;
     private readonly IOptions<QwenMtOptions> _opts;
     private readonly ILogger<QwenMtTranslationProvider> _logger;
+    private readonly IOptions<AppSettings>? _appSettings;
 
     public string Name => "Qwen-MT";
 
     public QwenMtTranslationProvider(
         HttpClient httpClient,
         IOptions<QwenMtOptions> opts,
-        ILogger<QwenMtTranslationProvider> logger)
+        ILogger<QwenMtTranslationProvider> logger,
+        IOptions<AppSettings>? appSettings = null)
     {
         _httpClient = httpClient;
         _opts = opts;
         _logger = logger;
+        _appSettings = appSettings;
     }
+
+    // API Key 实时读取 AppSettings 单例（设置窗口保存后就地更新），与 CustomOpenAi 一致；
+    // 未注入 AppSettings（如旧测试直接构造）时回退到 QwenMtOptions 首次解析快照。
+    private string EffectiveApiKey => _appSettings != null
+        ? (_appSettings.Value.ResolvedApiKey ?? string.Empty).Trim()
+        : _opts.Value.ApiKey;
 
     public async IAsyncEnumerable<TranslationChunk> TranslateAsync(
         TranslationRequest req,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        if (_opts.Value.MockMode || string.IsNullOrWhiteSpace(_opts.Value.ApiKey))
+        if (_opts.Value.MockMode || string.IsNullOrWhiteSpace(EffectiveApiKey))
         {
             await foreach (var c in MockStream(req, ct))
             {
@@ -222,7 +231,7 @@ public class QwenMtTranslationProvider : ITranslationProvider
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
             using var request = new HttpRequestMessage(HttpMethod.Post, uri);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", opts.ApiKey);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", EffectiveApiKey);
             request.Content = content;
 
             response = await SendTranslateRequestAsync(request, ct).ConfigureAwait(false);

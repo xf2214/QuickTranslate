@@ -58,6 +58,11 @@ public static class ServiceCollectionExtensions
                 opts.StartWithWindows = appSettings.StartWithWindows;
                 opts.CloseOnOutsideClick = appSettings.CloseOnOutsideClick;
                 opts.DebugLogging = appSettings.DebugLogging;
+                opts.EnableTextToSpeech = appSettings.EnableTextToSpeech;
+                opts.TranslationProvider = appSettings.TranslationProvider;
+                opts.CustomLlmBaseUrl = appSettings.CustomLlmBaseUrl;
+                opts.CustomLlmModel = appSettings.CustomLlmModel;
+                opts.CustomLlmMaxContextLines = appSettings.CustomLlmMaxContextLines;
                 opts.ResolvedApiKey = appSettings.ResolvedApiKey;
             });
         });
@@ -122,7 +127,11 @@ public static class ServiceCollectionExtensions
                 }
             });
 
-        services.AddHttpClient<ITranslationProvider, QwenMtTranslationProvider>((sp, client) =>
+        // 自定义大模型（OpenAI 兼容）：配置实时读取 AppSettings 单例（设置窗口保存后立即生效），
+        // 因此不经过 IOptions 快照。请求 URL 使用绝对地址，不依赖 HttpClient.BaseAddress。
+        services.AddHttpClient<CustomOpenAiTranslationProvider>();
+
+        services.AddHttpClient<QwenMtTranslationProvider>((sp, client) =>
         {
             var opts = sp.GetRequiredService<IOptions<QwenMtOptions>>().Value;
             if (!string.IsNullOrWhiteSpace(opts.BaseAddress))
@@ -131,6 +140,9 @@ public static class ServiceCollectionExtensions
             }
             client.Timeout = opts.Timeout;
         });
+
+        // ITranslationProvider = 分发器：按设置在自定义大模型 / Qwen-MT 之间路由
+        services.AddSingleton<ITranslationProvider, TranslationProviderDispatcher>();
 
         return services;
     }

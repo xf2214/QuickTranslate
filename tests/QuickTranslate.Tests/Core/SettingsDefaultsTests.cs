@@ -24,6 +24,7 @@ public class SettingsDefaultsTests
         Assert.False(settings.StartWithWindows);
         Assert.True(settings.CloseOnOutsideClick);
         Assert.False(settings.DebugLogging);
+        Assert.False(settings.EnableTextToSpeech);
     }
 
     [Fact]

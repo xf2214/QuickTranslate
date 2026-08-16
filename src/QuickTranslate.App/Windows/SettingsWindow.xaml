@@ -2,177 +2,717 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="clr-namespace:QuickTranslate.App.Windows.Controls"
+        xmlns:sys="clr-namespace:System;assembly=mscorlib"
         ShowInTaskbar="False"
         ResizeMode="CanMinimize"
         SizeToContent="Manual"
         WindowStartupLocation="CenterScreen"
-        Title="Settings"
-        Width="520"
-        Height="560"
-        Background="#FFFDFDFD">
-    <Border Padding="20">
+        Title="QuickTranslate 设置"
+        Width="640"
+        MinWidth="560"
+        Height="760"
+        MinHeight="680"
+        Background="#FFFFFF"
+        FontFamily="Segoe UI, Microsoft YaHei UI, PingFang SC, sans-serif"
+        FontSize="13"
+        Foreground="#111827"
+        WindowStyle="SingleBorderWindow">
+    <Window.Resources>
+        <!-- 颜色资源 -->
+        <SolidColorBrush x:Key="BgAccent" Color="#F8FAFC"/>
+        <SolidColorBrush x:Key="CardBg" Color="#FFFFFF"/>
+        <SolidColorBrush x:Key="CardBorder" Color="#E5E7EB"/>
+        <SolidColorBrush x:Key="TextPrimary" Color="#111827"/>
+        <SolidColorBrush x:Key="TextSecondary" Color="#6B7280"/>
+        <SolidColorBrush x:Key="TextTertiary" Color="#9CA3AF"/>
+        <SolidColorBrush x:Key="Brand600" Color="#2563EB"/>
+        <SolidColorBrush x:Key="Brand700" Color="#1D4ED8"/>
+        <SolidColorBrush x:Key="Brand50" Color="#EFF6FF"/>
+        <SolidColorBrush x:Key="Success" Color="#16A34A"/>
+        <SolidColorBrush x:Key="Warning" Color="#D97706"/>
+        <SolidColorBrush x:Key="Danger" Color="#DC2626"/>
+        <SolidColorBrush x:Key="SuccessBg" Color="#F0FDF4"/>
+        <SolidColorBrush x:Key="WarningBg" Color="#FFFBEB"/>
+        <SolidColorBrush x:Key="DangerBg" Color="#FEF2F2"/>
+
+        <!-- Section 标题左竖条 -->
+        <Style x:Key="SectionAccent" TargetType="Border">
+            <Setter Property="Width" Value="3"/>
+            <Setter Property="CornerRadius" Value="1.5"/>
+            <Setter Property="Background" Value="{StaticResource Brand600}"/>
+            <Setter Property="Margin" Value="0 2 8 0"/>
+            <Setter Property="VerticalAlignment" Value="Stretch"/>
+        </Style>
+
+        <!-- Section 卡片 -->
+        <Style x:Key="SectionCard" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource CardBg}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource CardBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="16 14"/>
+            <Setter Property="Margin" Value="0 0 0 14"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect Color="#111827" Opacity="0.05" BlurRadius="10" ShadowDepth="1"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 复选框紧凑样式 -->
+        <Style x:Key="CompactCheckBox" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Padding" Value="4 2"/>
+            <Setter Property="Margin" Value="0 0 0 8"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+
+        <!-- 设置标签 -->
+        <Style x:Key="SettingLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0 0 8 0"/>
+        </Style>
+
+        <!-- 次级描述 -->
+        <Style x:Key="SettingHint" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextTertiary}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Margin" Value="0 2 0 0"/>
+        </Style>
+
+        <!-- 主要按钮：保存 -->
+        <Style x:Key="PrimaryButton" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource Brand600}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="20 7"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="B" CornerRadius="6"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="{StaticResource Brand700}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="#1E40AF"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="B" Property="Background" Value="#93C5FD"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 次要按钮：取消 -->
+        <Style x:Key="SecondaryButton" TargetType="Button">
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="BorderBrush" Value="#D1D5DB"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="20 7"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="B" CornerRadius="6"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="#F9FAFB"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 幽灵按钮：恢复默认 -->
+        <Style x:Key="GhostButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="14 6"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="B" CornerRadius="5"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="#F3F4F6"/>
+                                <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 输入框通用 -->
+        <Style x:Key="StyledTextBox" TargetType="TextBox">
+            <Setter Property="Padding" Value="10 6"/>
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#D1D5DB"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="B" CornerRadius="5"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}">
+                            <ScrollViewer x:Name="PART_ContentHost"
+                                          VerticalAlignment="Center"
+                                          Focusable="False"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="B" Property="BorderBrush" Value="#9CA3AF"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="B" Property="BorderBrush" Value="{StaticResource Brand600}"/>
+                                <Setter TargetName="B" Property="BorderThickness" Value="1.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="StyledPasswordBox" TargetType="PasswordBox">
+            <Setter Property="Padding" Value="10 6"/>
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#D1D5DB"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+        </Style>
+
+        <Style x:Key="StyledComboBox" TargetType="ComboBox">
+            <Setter Property="Padding" Value="8 4"/>
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#D1D5DB"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+
+        <!-- Radio Button 三态组 -->
+        <Style x:Key="QualityRadio" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="Margin" Value="0 0 16 0"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+
+        <!-- 状态行 -->
+        <Style x:Key="StatusRow" TargetType="Grid">
+            <Setter Property="Margin" Value="0 0 0 8"/>
+            <Setter Property="VerticalAlignment" Value="Top"/>
+        </Style>
+
+        <!-- 标题行 -->
+        <Style x:Key="SectionTitleRow" TargetType="Grid">
+            <Setter Property="Margin" Value="0 0 0 12"/>
+        </Style>
+    </Window.Resources>
+
+    <!-- 根容器：承载内容 + Toast 覆盖 -->
+    <Grid>
+    <!-- 外层滚动容器 -->
+    <Border x:Name="RootBorder" Background="{StaticResource BgAccent}" Padding="18 16">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <Grid Grid.Row="0" Margin="0 0 0 16">
+            <!-- 滚动内容区 -->
+            <ScrollViewer Grid.Row="0"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Padding="0 0 4 0"
+                          x:Name="ContentScroll">
+                <StackPanel>
+
+                    <!-- S1: 翻译服务 -->
+                    <Border Style="{StaticResource SectionCard}">
+                        <StackPanel>
+                            <Grid Style="{StaticResource SectionTitleRow}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SectionAccent}"/>
+                                <TextBlock Grid.Column="1"
+                                           Text="🔑 翻译服务"
+                                           FontSize="14"
+                                           FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextPrimary}"
+                                           VerticalAlignment="Center"/>
+                            </Grid>
+
+                            <Grid Margin="0 0 0 10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="96"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="翻译引擎"
+                                           Style="{StaticResource SettingLabel}"
+                                           VerticalAlignment="Center"/>
+                                <ComboBox Grid.Column="1"
+                                          x:Name="TranslationProviderBox"
+                                          Style="{StaticResource StyledComboBox}"
+                                          SelectionChanged="OnTranslationProviderChanged">
+                                    <ComboBoxItem Content="自定义大模型（OpenAI 兼容 · 推荐）" Tag="CustomOpenAi"/>
+                                    <ComboBoxItem Content="Qwen-MT（阿里 DashScope）" Tag="QwenMt"/>
+                                </ComboBox>
+                            </Grid>
+
+                            <!-- 自定义大模型配置 -->
+                            <StackPanel x:Name="CustomLlmPanel">
+                                <Grid Margin="0 0 0 8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="96"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Text="API 地址"
+                                               Style="{StaticResource SettingLabel}"/>
+                                    <TextBox Grid.Column="1"
+                                             x:Name="CustomLlmBaseUrlBox"
+                                             Style="{StaticResource StyledTextBox}"
+                                             Margin="0 0 0 2"/>
+                                </Grid>
+                                <TextBlock Text="OpenAI 兼容端点，例如 https://api.openai.com/v1、https://api.deepseek.com/v1 或本地 http://127.0.0.1:11434/v1（Ollama）。自动补全 /chat/completions。"
+                                           Style="{StaticResource SettingHint}"
+                                           Margin="96 0 0 8"
+                                           TextWrapping="Wrap"/>
+
+                                <Grid Margin="0 0 0 8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="96"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Text="模型名称"
+                                               Style="{StaticResource SettingLabel}"/>
+                                    <TextBox Grid.Column="1"
+                                             x:Name="CustomLlmModelBox"
+                                             Style="{StaticResource StyledTextBox}"
+                                             Margin="0 0 0 2"/>
+                                </Grid>
+                                <TextBlock Text="例如 gpt-4o-mini、deepseek-chat、qwen2.5:7b。支持任何 OpenAI 兼容服务（vLLM / Ollama / one-api / 各云厂商）。"
+                                           Style="{StaticResource SettingHint}"
+                                           Margin="96 0 0 10"
+                                           TextWrapping="Wrap"/>
+                            </StackPanel>
+
+                            <Grid Margin="0 0 0 8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="96"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="API Key"
+                                           Style="{StaticResource SettingLabel}"/>
+                                <PasswordBox Grid.Column="1"
+                                             x:Name="ApiKeyBox"
+                                             PasswordChar="*"
+                                             Style="{StaticResource StyledPasswordBox}"
+                                             Margin="0 0 10 0"/>
+                                <Border Grid.Column="2"
+                                        x:Name="ApiKeyStatusBadge"
+                                        CornerRadius="10"
+                                        Padding="10 3"
+                                        Background="{StaticResource SuccessBg}"
+                                        Margin="0 0 8 0"
+                                        VerticalAlignment="Center">
+                                    <TextBlock x:Name="ApiKeyStatusText"
+                                               Text="未填"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextSecondary}"/>
+                                </Border>
+                                <Button Grid.Column="3"
+                                        x:Name="ClearApiKeyButton"
+                                        Content="清除"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Padding="14 5"
+                                        FontSize="12"/>
+                            </Grid>
+                            <TextBlock Text="自定义大模型：填 OpenAI 兼容服务的 Key（本地 Ollama 可填任意非空值）；Qwen-MT：DashScope 控制台 → API-KEY 管理。留空则使用内置演示翻译（占位结果）。"
+                                       Style="{StaticResource SettingHint}"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- S2: 全局热键 -->
+                    <Border Style="{StaticResource SectionCard}">
+                        <StackPanel>
+                            <Grid Style="{StaticResource SectionTitleRow}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SectionAccent}"/>
+                                <TextBlock Grid.Column="1"
+                                           Text="⌨️ 全局热键"
+                                           FontSize="14"
+                                           FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextPrimary}"
+                                           VerticalAlignment="Center"/>
+                            </Grid>
+
+                            <!-- Word 热键行 -->
+                            <Grid Margin="0 0 0 10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="96"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="单词翻译"
+                                               Style="{StaticResource SettingLabel}"/>
+                                    <TextBlock Text="Alt + 1（默认）"
+                                               Style="{StaticResource SettingHint}"/>
+                                </StackPanel>
+                                <controls:HotkeyRecorder Grid.Column="1"
+                                                         x:Name="WordHotkeyRecorder"
+                                                         VerticalAlignment="Center"/>
+                            </Grid>
+
+                            <!-- Block 热键行 -->
+                            <Grid Margin="0 0 0 4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="96"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="区域句子翻译"
+                                               Style="{StaticResource SettingLabel}"/>
+                                    <TextBlock Text="Alt + 2（默认）"
+                                               Style="{StaticResource SettingHint}"/>
+                                </StackPanel>
+                                <controls:HotkeyRecorder Grid.Column="1"
+                                                         x:Name="BlockHotkeyRecorder"
+                                                         VerticalAlignment="Center"/>
+                            </Grid>
+
+                            <TextBlock Text="提示：按「录制」后直接在键盘按下新的热键组合，松开即保存到输入框。"
+                                       Style="{StaticResource SettingHint}"
+                                       Margin="0 8 0 0"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- S3: 翻译偏好 -->
+                    <Border Style="{StaticResource SectionCard}">
+                        <StackPanel>
+                            <Grid Style="{StaticResource SectionTitleRow}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SectionAccent}"/>
+                                <TextBlock Grid.Column="1"
+                                           Text="🌐 翻译偏好"
+                                           FontSize="14"
+                                           FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextPrimary}"
+                                           VerticalAlignment="Center"/>
+                            </Grid>
+
+                            <Grid Margin="0 0 0 12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="96"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="目标语言"
+                                           Style="{StaticResource SettingLabel}"/>
+                                <ComboBox Grid.Column="1"
+                                          x:Name="TargetLanguageBox"
+                                          Style="{StaticResource StyledComboBox}">
+                                    <ComboBoxItem Content="中文简体 (zh-CN)" Tag="zh-CN"/>
+                                    <ComboBoxItem Content="英语 (en-US)" Tag="en"/>
+                                    <ComboBoxItem Content="日语 (ja-JP)" Tag="ja"/>
+                                    <ComboBoxItem Content="韩语 (ko-KR)" Tag="ko"/>
+                                    <ComboBoxItem Content="德语 (de-DE)" Tag="de"/>
+                                    <ComboBoxItem Content="法语 (fr-FR)" Tag="fr"/>
+                                    <ComboBoxItem Content="西班牙语 (es-ES)" Tag="es"/>
+                                    <ComboBoxItem Content="俄语 (ru-RU)" Tag="ru"/>
+                                </ComboBox>
+                            </Grid>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="96"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="翻译质量"
+                                           Style="{StaticResource SettingLabel}"
+                                           VerticalAlignment="Top"
+                                           Margin="0 4 0 0"/>
+                                <StackPanel Grid.Column="1" Orientation="Vertical" Margin="0 0 0 0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton x:Name="QualityFast"
+                                                     Content="Fast · 速度优先"
+                                                     GroupName="Quality"
+                                                     Style="{StaticResource QualityRadio}"
+                                                     Tag="Fast"/>
+                                        <RadioButton x:Name="QualityBalanced"
+                                                     Content="Balanced · 均衡"
+                                                     GroupName="Quality"
+                                                     Style="{StaticResource QualityRadio}"
+                                                     Tag="Balanced"/>
+                                        <RadioButton x:Name="QualityBest"
+                                                     Content="Best · 最佳质量"
+                                                     GroupName="Quality"
+                                                     Style="{StaticResource QualityRadio}"
+                                                     Tag="Best"/>
+                                    </StackPanel>
+                                    <TextBlock Text="Fast 响应最快、用量少；Best 输出更准确但稍慢。Balanced 取折中。"
+                                               Style="{StaticResource SettingHint}"
+                                               TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- S4: 行为设置 -->
+                    <Border Style="{StaticResource SectionCard}">
+                        <StackPanel>
+                            <Grid Style="{StaticResource SectionTitleRow}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SectionAccent}"/>
+                                <TextBlock Grid.Column="1"
+                                           Text="⚙️ 行为设置"
+                                           FontSize="14"
+                                           FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextPrimary}"
+                                           VerticalAlignment="Center"/>
+                            </Grid>
+
+                            <Grid Margin="0 0 0 0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="96"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="选项"
+                                           Style="{StaticResource SettingLabel}"
+                                           VerticalAlignment="Top"/>
+                                <StackPanel Grid.Column="1">
+                                    <CheckBox x:Name="StartOnBootBox"
+                                              Content="开机启动（系统重启后自动后台运行）"
+                                              Style="{StaticResource CompactCheckBox}"/>
+                                    <CheckBox x:Name="CloseOutsideBox"
+                                              Content="点击翻译窗口外部自动关闭 Popup"
+                                              Style="{StaticResource CompactCheckBox}"/>
+                                    <CheckBox x:Name="EnableReadAloudBox"
+                                              Content="启用朗读功能（翻译完成后播报结果）"
+                                              Style="{StaticResource CompactCheckBox}"/>
+                                    <CheckBox x:Name="DebugLoggingBox"
+                                              Content="启用 Debug 级别日志（排查问题时打开）"
+                                              Style="{StaticResource CompactCheckBox}"/>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- S5: 系统状态 -->
+                    <Border Style="{StaticResource SectionCard}" Margin="0 0 0 0">
+                        <StackPanel>
+                            <Grid Style="{StaticResource SectionTitleRow}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource SectionAccent}"/>
+                                <TextBlock Grid.Column="1"
+                                           Text="ℹ️ 系统状态"
+                                           FontSize="14"
+                                           FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextPrimary}"
+                                           VerticalAlignment="Center"/>
+                            </Grid>
+
+                            <!-- OCR 引擎 -->
+                            <Grid Style="{StaticResource StatusRow}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="96"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="OCR 引擎"
+                                           Style="{StaticResource SettingLabel}"/>
+                                <TextBlock Grid.Column="1"
+                                           x:Name="OcrEngineName"
+                                           Text="检测中..."
+                                           VerticalAlignment="Center"
+                                           Foreground="{StaticResource TextPrimary}"/>
+                                <Border Grid.Column="2"
+                                        x:Name="OcrEngineBadge"
+                                        CornerRadius="10"
+                                        Padding="10 3"
+                                        Background="{StaticResource WarningBg}"
+                                        VerticalAlignment="Center">
+                                    <TextBlock x:Name="OcrEngineStatus"
+                                               Text="未知"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource Warning}"/>
+                                </Border>
+                            </Grid>
+
+                            <!-- 当前热键注册状态 -->
+                            <Grid Style="{StaticResource StatusRow}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="96"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="热键注册"
+                                           Style="{StaticResource SettingLabel}"/>
+                                <TextBlock Grid.Column="1"
+                                           x:Name="HotkeyStatusText"
+                                           Text="单词: Alt+1  区域: Alt+2"
+                                           VerticalAlignment="Center"
+                                           Foreground="{StaticResource TextPrimary}"/>
+                                <Border Grid.Column="2"
+                                        x:Name="HotkeyBadge"
+                                        CornerRadius="10"
+                                        Padding="10 3"
+                                        Background="{StaticResource SuccessBg}"
+                                        VerticalAlignment="Center">
+                                    <TextBlock Text="已生效"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource Success}"/>
+                                </Border>
+                            </Grid>
+
+                            <!-- 版本信息 -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="96"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="程序版本"
+                                           Style="{StaticResource SettingLabel}"/>
+                                <TextBlock Grid.Column="1"
+                                           x:Name="AppVersionText"
+                                           Text="v0.1.0"
+                                           VerticalAlignment="Center"
+                                           Foreground="{StaticResource TextSecondary}"
+                                           FontSize="12"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- 错误提示条 -->
+            <Border Grid.Row="2"
+                    x:Name="ErrorBorder"
+                    CornerRadius="6"
+                    Background="{StaticResource DangerBg}"
+                    Padding="12 8"
+                    Margin="0 0 0 10"
+                    Visibility="Collapsed">
+                <TextBlock x:Name="ErrorLabel"
+                           Foreground="{StaticResource Danger}"
+                           FontSize="12.5"
+                           FontWeight="SemiBold"
+                           TextWrapping="Wrap"/>
+            </Border>
+
+            <!-- 底部按钮 -->
+            <Grid Grid.Row="2" VerticalAlignment="Bottom">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0"
-                           Text="Settings"
-                           FontSize="22"
-                           FontWeight="Bold"
-                           Foreground="#1F2937"/>
+                <Button Grid.Column="0"
+                        x:Name="RestoreDefaultsButton"
+                        Content="恢复默认设置"
+                        Style="{StaticResource GhostButton}"
+                        HorizontalAlignment="Left"/>
                 <Button Grid.Column="1"
-                        x:Name="CloseButton"
-                        Content="×"
-                        FontSize="20"
-                        FontWeight="Bold"
-                        Padding="8 0"
-                        Width="36"
-                        Height="32"
-                        Background="Transparent"
-                        BorderBrush="Transparent"
-                        Foreground="#6B7280"/>
-            </Grid>
-
-            <Grid Grid.Row="1" Margin="0 0 0 12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="100"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0"
-                           Text="API Key"
-                           VerticalAlignment="Center"
-                           Foreground="#374151"/>
-                <PasswordBox Grid.Column="1"
-                             x:Name="ApiKeyBox"
-                             PasswordChar="*"
-                             VerticalContentAlignment="Center"
-                             Padding="6 4"
-                             Margin="0 0 8 0"/>
-                <Button Grid.Column="2"
-                        x:Name="ClearApiKeyButton"
-                        Content="清除"
-                        Padding="10 4"/>
-            </Grid>
-
-            <Grid Grid.Row="2" Margin="0 0 0 12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="100"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0"
-                           Text="Word Hotkey"
-                           VerticalAlignment="Center"
-                           Foreground="#374151"/>
-                <controls:HotkeyRecorder Grid.Column="1"
-                                         x:Name="WordHotkeyRecorder"
-                                         VerticalAlignment="Center"/>
-            </Grid>
-
-            <Grid Grid.Row="3" Margin="0 0 0 12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="100"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0"
-                           Text="Block Hotkey"
-                           VerticalAlignment="Center"
-                           Foreground="#374151"/>
-                <controls:HotkeyRecorder Grid.Column="1"
-                                         x:Name="BlockHotkeyRecorder"
-                                         VerticalAlignment="Center"/>
-            </Grid>
-
-            <StackPanel Grid.Row="4" Margin="0 0 0 12">
-                <Grid Margin="0 0 0 8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="100"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="100"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0"
-                               Text="目标语言"
-                               VerticalAlignment="Center"
-                               Foreground="#374151"/>
-                    <ComboBox Grid.Column="1"
-                              x:Name="TargetLanguageBox"
-                              VerticalContentAlignment="Center"
-                              Margin="0 0 12 0">
-                        <ComboBoxItem Content="中文 (zh-CN)" Tag="zh-CN"/>
-                        <ComboBoxItem Content="英语 (en)" Tag="en"/>
-                        <ComboBoxItem Content="日语 (ja)" Tag="ja"/>
-                        <ComboBoxItem Content="韩语 (ko)" Tag="ko"/>
-                        <ComboBoxItem Content="德语 (de)" Tag="de"/>
-                        <ComboBoxItem Content="法语 (fr)" Tag="fr"/>
-                        <ComboBoxItem Content="西班牙语 (es)" Tag="es"/>
-                        <ComboBoxItem Content="俄语 (ru)" Tag="ru"/>
-                    </ComboBox>
-                    <TextBlock Grid.Column="2"
-                               Text="翻译质量"
-                               VerticalAlignment="Center"
-                               Foreground="#374151"/>
-                    <ComboBox Grid.Column="3"
-                              x:Name="TranslationQualityBox"
-                              VerticalContentAlignment="Center">
-                        <ComboBoxItem Content="Fast" Tag="Fast"/>
-                        <ComboBoxItem Content="Balanced" Tag="Balanced"/>
-                        <ComboBoxItem Content="Best" Tag="Best"/>
-                    </ComboBox>
-                </Grid>
-                <CheckBox x:Name="StartOnBootBox"
-                          Content="开机启动"
-                          Margin="100 0 0 6"
-                          Foreground="#374151"/>
-                <CheckBox x:Name="CloseOutsideBox"
-                          Content="点击外部关闭 Popup"
-                          Margin="100 0 0 6"
-                          Foreground="#374151"/>
-                <CheckBox x:Name="DebugLoggingBox"
-                          Content="Debug 日志"
-                          Margin="100 0 0 0"
-                          Foreground="#374151"/>
-            </StackPanel>
-
-            <TextBlock Grid.Row="5"
-                       x:Name="ErrorLabel"
-                       Foreground="#DC2626"
-                       FontSize="13"
-                       TextWrapping="Wrap"
-                       Visibility="Collapsed"
-                       Margin="0 0 0 8"/>
-
-            <Grid Grid.Row="6" VerticalAlignment="Bottom">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <Button Grid.Column="1"
-                        x:Name="SaveButton"
-                        Content="保存"
-                        Padding="18 6"
-                        Margin="0 0 8 0"
-                        Background="#2563EB"
-                        Foreground="White"
-                        BorderBrush="Transparent"/>
-                <Button Grid.Column="2"
                         x:Name="CancelButton"
                         Content="取消"
-                        Padding="18 6"/>
+                        Style="{StaticResource SecondaryButton}"
+                        Margin="0 0 8 0"/>
+                <Button Grid.Column="2"
+                        x:Name="SaveButton"
+                        Content="保存设置"
+                        Style="{StaticResource PrimaryButton}"
+                        Margin="0 0 8 0"/>
             </Grid>
         </Grid>
     </Border>
+
+    <!-- Toast 覆盖层（悬浮于内容之上，底部居中） -->
+    <Border x:Name="ToastBorder"
+            Background="#0F172A"
+            CornerRadius="10"
+            Padding="20 12"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Bottom"
+            Margin="0 0 0 88"
+            Visibility="Collapsed"
+            Opacity="0">
+        <Border.Effect>
+            <DropShadowEffect Opacity="0.25" BlurRadius="16" ShadowDepth="0"/>
+        </Border.Effect>
+        <TextBlock x:Name="ToastText"
+                   FontSize="13"
+                   FontWeight="SemiBold"
+                   Foreground="#FFFFFF"/>
+    </Border>
+    </Grid>
 </Window>

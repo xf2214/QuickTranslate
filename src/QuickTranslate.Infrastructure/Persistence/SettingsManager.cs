@@ -56,7 +56,28 @@ public class SettingsManager : ISettingsManager
         var json = JsonSerializer.Serialize(settings, SerializerOptions);
         json = SanitizeSettingsJson(json);
         await File.WriteAllTextAsync(_settingsFilePath, json, ct).ConfigureAwait(false);
-        _loadedSettings = settings;
+
+        // 就地更新活跃单例，保证 IOptions<AppSettings>.Value 与磁盘一致、无需重启即可生效。
+        if (_loadedSettings != null && !ReferenceEquals(_loadedSettings, settings))
+        {
+            _loadedSettings.WordHotkey = settings.WordHotkey;
+            _loadedSettings.BlockHotkey = settings.BlockHotkey;
+            _loadedSettings.TargetLanguage = settings.TargetLanguage;
+            _loadedSettings.TranslationQuality = settings.TranslationQuality;
+            _loadedSettings.StartWithWindows = settings.StartWithWindows;
+            _loadedSettings.CloseOnOutsideClick = settings.CloseOnOutsideClick;
+            _loadedSettings.DebugLogging = settings.DebugLogging;
+            _loadedSettings.EnableTextToSpeech = settings.EnableTextToSpeech;
+            _loadedSettings.TranslationProvider = settings.TranslationProvider;
+            _loadedSettings.CustomLlmBaseUrl = settings.CustomLlmBaseUrl;
+            _loadedSettings.CustomLlmModel = settings.CustomLlmModel;
+            _loadedSettings.CustomLlmMaxContextLines = settings.CustomLlmMaxContextLines;
+            _loadedSettings.ResolvedApiKey = settings.ResolvedApiKey;
+        }
+        else
+        {
+            _loadedSettings = settings;
+        }
     }
 
     public void SetApiKey(string? plainKey)
@@ -121,6 +142,7 @@ public class SettingsManager : ISettingsManager
 [JsonSerializable(typeof(AppSettings))]
 [JsonSerializable(typeof(HotkeyCombo))]
 [JsonSerializable(typeof(TranslationQuality))]
+[JsonSerializable(typeof(TranslationProviderKind))]
 [JsonSerializable(typeof(HotkeyModifiers))]
 [JsonSerializable(typeof(KeyboardKey))]
 [JsonSerializable(typeof(Dictionary<string, JsonElement>))]
