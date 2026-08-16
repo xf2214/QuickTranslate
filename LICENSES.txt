@@ -24,17 +24,19 @@ QuickTranslate - Third-Party Licenses
    - 许可证: MIT
    - https://github.com/dotnet/runtime/blob/main/LICENSE.TXT
 
-5) PP-OCRv6 Models (Optional, ONNX format)
-   - 版本: v6.x (百度 PaddleOCR)
+5) PP-OCRv6 Models (ONNX format)
+   - 版本: PP-OCRv6 medium（百度 PaddleOCR）
    - 许可证: Apache-2.0
    - https://github.com/PaddlePaddle/PaddleOCR/blob/release/3.0/LICENSE
-   - 注意：当前版本默认使用 Mock OCR；下载模型后请将 assets/models/*.onnx 放入发布目录 models/ 子目录，重启应用自动启用。
+   - ONNX 转换版来源: https://github.com/HoVDuc/ppocrv5-onnx (Release v1.1.0)
+   - 配套字典 ppocr_keys.txt 为 18708 字符版（由 rec 模型 inference.yml 提取），
+     见 docs/ocr-models-and-custom-llm.md。
 
-6) ONNX Runtime (Microsoft.ML.OnnxRuntime) - 预留
+6) ONNX Runtime (Microsoft.ML.OnnxRuntime)
    - 版本: 1.20.x
    - 许可证: MIT
    - https://github.com/microsoft/onnxruntime/blob/main/LICENSE
-   - 注：如果后续启用真实 OCR，请在 NuGet 中引用并遵守许可证。
+   - 用于 PP-OCRv6 det/rec/cls 推理。
 
 7) System.Drawing.Common
    - 版本: 10.0.x
