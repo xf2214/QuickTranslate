@@ -110,20 +110,36 @@ function ExtractAndPlace([string]$zipPath, [string]$kind, [string]$TargetDir, [s
     Copy-Item $onnx.FullName $dest -Force
     Write-Host ("==> placed {0}.onnx ({1})" -f $kind, (Sz (Get-Item $dest).Length)) -ForegroundColor Green
 
-    # dictionary (biggest txt file)
-    $dict = Get-ChildItem $sub -Recurse -Include '*.txt' | Sort-Object Length -Descending | Select-Object -First 1
-    if ($dict -and $dict.Length -gt 5000) {
+    # dictionary: 从 rec zip 的 inference.yml (PostProcess.character_dict) 生成。
+    # 注意：字典必须与 rec.onnx 配套（v6 medium = 18708 字符 + blank + 空格 = 18710 类），
+    # 不能使用 ppocr_keys_v1.txt（6623 行），否则 CTC 解码全乱码。
+    if ($kind -eq 'rec') {
+        $yml = Get-ChildItem $sub -Recurse -Include '*.yml', '*.yaml' | Select-Object -First 1
+        if (-not $yml) { throw "rec zip has no inference.yml; cannot generate dictionary" }
         $kp = Join-Path $TargetDir 'ppocr_keys.txt'
-        $needCopy = $true
-        if (Test-Path $kp) {
-            $cur = Get-Item $kp
-            if ($cur.Length -gt 50000) { $needCopy = $false }
+        $inDict = $false
+        $sb = New-Object System.Text.StringBuilder
+        foreach ($line in [IO.File]::ReadAllLines($yml.FullName)) {
+            if ($line -match '^[A-Za-z_]') {
+                $inDict = $line.TrimStart().StartsWith('character_dict:')
+                continue
+            }
+            if (-not $inDict) { continue }
+            if ($line -match '^\s*-\s+(.+?)\s*$') {
+                $v = $Matches[1]
+                if ($v.Length -ge 2 -and $v.StartsWith("'") -and $v.EndsWith("'")) {
+                    $v = $v.Substring(1, $v.Length - 2).Replace("''", "'")
+                } elseif ($v.Length -ge 2 -and $v.StartsWith('"') -and $v.EndsWith('"')) {
+                    $v = $v.Substring(1, $v.Length - 2)
+                }
+                [void]$sb.Append($v); [void]$sb.Append("`n")
+            }
         }
-        if ($needCopy) {
-            Copy-Item $dict.FullName $kp -Force
-            $lineCount = (Get-Content $kp | Measure-Object -Line).Lines
-            Write-Host ("==> placed ppocr_keys.txt ({0}, {1} lines, src={2})" -f (Sz (Get-Item $kp).Length), $lineCount, $dict.Name) -ForegroundColor Green
-        }
+        $dictText = $sb.ToString()
+        if ($dictText.Length -lt 10000) { throw "generated dictionary too small ($($dictText.Length) chars)" }
+        [IO.File]::WriteAllText($kp, $dictText, (New-Object System.Text.UTF8Encoding($false)))
+        $lineCount = ($dictText -split "`n").Count - 1
+        Write-Host ("==> generated ppocr_keys.txt ({0}, {1} lines, from {2})" -f (Sz (Get-Item $kp).Length), $lineCount, $yml.Name) -ForegroundColor Green
     }
 
     # optional cls.onnx: any other onnx smaller than 25MB that looks like classifier
