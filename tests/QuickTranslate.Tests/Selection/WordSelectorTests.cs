@@ -244,4 +244,41 @@ public class WordSelectorTests
         Assert.False(result.NoTextFound);
         Assert.Equal("Right", result.Text);
     }
+
+    [Fact]
+    public void Case13_CjkWord_AnchorInside_SelectsIt()
+    {
+        // Alt+1 取词需支持中文（用户实际工作流悬停中文文本）
+        var words = new[]
+        {
+            new OcrWord(new PhysicalRect(0, 0, 40, 40), "识", 0.9f, 0),
+            new OcrWord(new PhysicalRect(40, 0, 40, 40), "别", 0.9f, 0),
+            new OcrWord(new PhysicalRect(80, 0, 40, 40), "框", 0.9f, 0)
+        };
+        var line = new OcrLine(new PhysicalRect(0, 0, 120, 40), words);
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(60, 20));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("别", result.Text);
+        Assert.Equal(new PhysicalRect(40, 0, 40, 40), result.Box);
+    }
+
+    [Fact]
+    public void Case14_PurePunctuationAndDigits_StillFiltered()
+    {
+        var words = new[]
+        {
+            new OcrWord(new PhysicalRect(0, 0, 100, 40), "123.45", 0.9f, 0),
+            new OcrWord(new PhysicalRect(110, 0, 60, 40), "----", 0.9f, 0),
+            new OcrWord(new PhysicalRect(180, 0, 60, 40), "///", 0.9f, 0)
+        };
+        var line = new OcrLine(new PhysicalRect(0, 0, 240, 40), words);
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(50, 20));
+
+        Assert.True(result.NoTextFound);
+    }
 }

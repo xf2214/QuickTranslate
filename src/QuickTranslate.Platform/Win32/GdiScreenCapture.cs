@@ -125,7 +125,7 @@ public sealed class GdiScreenCapture : IScreenCapture
 
         try
         {
-            hdcScreen = Gdi32.GetDC(hDesktop);
+            hdcScreen = User32.GetDC(hDesktop);
             if (hdcScreen == IntPtr.Zero)
                 throw new InvalidOperationException("Failed to get screen DC.");
 
@@ -172,7 +172,7 @@ public sealed class GdiScreenCapture : IScreenCapture
                 Gdi32.DeleteDC(hdcMem);
 
             if (hdcScreen != IntPtr.Zero)
-                Gdi32.ReleaseDC(hDesktop, hdcScreen);
+                User32.ReleaseDC(hDesktop, hdcScreen);
         }
     }
 }

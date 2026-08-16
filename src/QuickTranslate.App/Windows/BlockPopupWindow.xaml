@@ -15,6 +15,10 @@
         MaxHeight="600"
         Left="0"
         Top="0">
+    <!-- 自包含按钮样式：测试会脱离 App 资源直接实例化本窗口 -->
+    <Window.Resources>
+        <ResourceDictionary Source="/QuickTranslate.App;component/Themes/Generic.xaml"/>
+    </Window.Resources>
     <Border x:Name="RootBorder"
             Background="#FFFDFDFD"
             CornerRadius="10"
@@ -33,11 +37,22 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0 0 0 8">
-                <TextBlock x:Name="BlockHeader"
-                           FontSize="12"
-                           Foreground="#6B7280"
-                           Text="块模式"/>
+            <StackPanel Grid.Row="0" Margin="0 0 0 8">
+                <StackPanel Orientation="Horizontal" Margin="0 0 0 6">
+                    <TextBlock x:Name="BlockHeader"
+                               FontSize="12"
+                               Foreground="#6B7280"
+                               Text="块模式"/>
+                </StackPanel>
+
+                <!-- OCR 原文预览（灰字小号，最多 3 行，超出省略）：让用户核对识别范围 -->
+                <TextBlock x:Name="SourceText"
+                           FontSize="11.5"
+                           Foreground="#9CA3AF"
+                           TextWrapping="Wrap"
+                           MaxHeight="54"
+                           TextTrimming="CharacterEllipsis"
+                           Visibility="Collapsed"/>
             </StackPanel>
 
             <ScrollViewer Grid.Row="1"
@@ -55,12 +70,20 @@
                         Orientation="Horizontal"
                         HorizontalAlignment="Right"
                         Margin="0 8 0 0">
+                <Button x:Name="SpeakButton"
+                        Content="🔊 朗读"
+                        Style="{StaticResource PopupActionButton}"
+                        Padding="10 4"
+                        Margin="6 0 0 0"
+                        Visibility="Collapsed"/>
                 <Button x:Name="CopyButton"
                         Content="复制"
+                        Style="{StaticResource PopupActionButton}"
                         Padding="10 4"
                         Margin="6 0 0 0"/>
                 <Button x:Name="DismissButton"
                         Content="关闭"
+                        Style="{StaticResource PopupDismissButton}"
                         Padding="10 4"
                         Margin="6 0 0 0"/>
             </StackPanel>

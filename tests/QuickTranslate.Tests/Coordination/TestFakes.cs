@@ -411,3 +411,31 @@ public static class CoordinatorTestHelpers
         }
     }
 }
+
+public class FakeStatusIndicatorService : IStatusIndicatorService
+{
+    public int ShowCount { get; private set; }
+    public int UpdateCount { get; private set; }
+    public int HideCount { get; private set; }
+    public List<string> Messages { get; } = new();
+    public List<string> ShowMessages { get; } = new();
+
+    public void Show(MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY, string message)
+    {
+        ShowCount++;
+        ShowMessages.Add(message);
+        Messages.Add("Show:" + message);
+    }
+
+    public void Update(string message)
+    {
+        UpdateCount++;
+        Messages.Add("Update:" + message);
+    }
+
+    public void Hide()
+    {
+        HideCount++;
+        Messages.Add("Hide");
+    }
+}

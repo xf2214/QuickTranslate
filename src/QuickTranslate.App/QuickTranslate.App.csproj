@@ -5,6 +5,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>QuickTranslate.App</RootNamespace>
     <AssemblyName>QuickTranslate.App</AssemblyName>
+    <ApplicationIcon>..\..\assets\icons\QuickTranslate.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.*" />
@@ -12,9 +13,31 @@
     <ProjectReference Include="..\QuickTranslate.Infrastructure\QuickTranslate.Infrastructure.csproj" />
     <ProjectReference Include="..\QuickTranslate.Platform\QuickTranslate.Platform.csproj" />
     <ProjectReference Include="..\QuickTranslate.Core\QuickTranslate.Core.csproj" />
+    <ProjectReference Include="..\QuickTranslate.TextToSpeech\QuickTranslate.TextToSpeech.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="..\..\assets\models\version.json" Link="models\version.json">
+    <!-- 复制到 assets\models\：与 PaddleOcrV6Engine / ModelVersionVerifier 的候选目录
+         （BaseDirectory/assets/models）保持一致。历史 Bug：曾复制到 models\version.json，
+         而 models\ 下没有 onnx，校验器把它当成唯一 version.json 却找不到模型文件，
+         每次启动都误报 "SHA256 mismatch; fallback to MockOcrEngine"。 -->
+    <Content Include="..\..\assets\models\version.json" Link="assets\models\version.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- OCR 模型随包发布（存在才复制；新装机无模型时由 ModelDownloader 下载，不阻断构建） -->
+    <Content Include="..\..\assets\models\det.onnx" Link="assets\models\det.onnx"
+             Condition="Exists('..\..\assets\models\det.onnx')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\assets\models\rec.onnx" Link="assets\models\rec.onnx"
+             Condition="Exists('..\..\assets\models\rec.onnx')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\assets\models\cls.onnx" Link="assets\models\cls.onnx"
+             Condition="Exists('..\..\assets\models\cls.onnx')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\assets\models\ppocr_keys.txt" Link="assets\models\ppocr_keys.txt"
+             Condition="Exists('..\..\assets\models\ppocr_keys.txt')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <!-- ECDICT-lite packed 词典：生成后放在 assets/dictionaries/ecdict-lite.packed，随程序发布

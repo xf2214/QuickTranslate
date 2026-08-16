@@ -59,6 +59,7 @@ public static unsafe partial class User32
     public const uint WS_EX_NOACTIVATE = 0x08000000;
     public const uint WS_EX_TOOLWINDOW = 0x00000080;
     public const uint WS_EX_TOPMOST = 0x00000008;
+    public const uint WS_EX_TRANSPARENT = 0x00000020;
 
     public const int SW_HIDE = 0;
     public const int SW_SHOWNORMAL = 1;
@@ -83,6 +84,15 @@ public static unsafe partial class User32
     [LibraryImport(DllName)]
     public static partial IntPtr GetDesktopWindow();
 
+    // GetDC/ReleaseDC 虽然名称含 "DC"，但 Windows 从 user32.dll 导出（非 gdi32.dll）。
+    // 历史 Bug：声明在 Gdi32.cs（gdi32.dll）导致 EntryPointNotFoundException，屏幕截图崩溃，
+    // 进而截断整个 OCR→选定框→翻译→弹窗管线。
+    [LibraryImport(DllName)]
+    public static partial IntPtr GetDC(IntPtr hWnd);
+
+    [LibraryImport(DllName)]
+    public static partial int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
     [LibraryImport(DllName)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
@@ -90,4 +100,30 @@ public static unsafe partial class User32
     [LibraryImport(DllName)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool SetForegroundWindow(IntPtr hWnd);
+
+    // 低级鼠标钩子（WH_MOUSE_LL）——用于支持鼠标侧键作为热键
+    public const int WH_MOUSE_LL = 14;
+
+    public const int WM_XBUTTONDOWN = 0x020B;
+    public const int WM_LBUTTONDOWN = 0x0201;
+    public const int WM_RBUTTONDOWN = 0x0204;
+    public const int WM_MBUTTONDOWN = 0x0207;
+
+    public const int XBUTTON1 = 0x0001;
+    public const int XBUTTON2 = 0x0002;
+
+    [LibraryImport(DllName, SetLastError = true)]
+    public static partial IntPtr SetWindowsHookExW(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+
+    [LibraryImport(DllName, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool UnhookWindowsHookEx(IntPtr hhk);
+
+    [LibraryImport(DllName, SetLastError = true)]
+    public static partial IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [LibraryImport(DllName, SetLastError = true)]
+    public static partial short GetAsyncKeyState(int vKey);
+
+    public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
 }

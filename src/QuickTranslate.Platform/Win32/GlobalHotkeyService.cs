@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using QuickTranslate.Core.Abstractions;
@@ -9,10 +10,16 @@ namespace QuickTranslate.Platform.Win32;
 public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
 {
     private const int MessageHandled = 0;
+    private const int HC_ACTION = 0;
 
     private readonly HwndSource _source;
     private readonly Dictionary<int, (HotkeyModifiers Modifiers, KeyboardKey Key)> _registered = new();
     private bool _disposed;
+
+    // 鼠标按钮热键：RegisterHotKey 不支持鼠标按键（VK 0x01-0x06），需用低级鼠标钩子
+    private readonly Dictionary<int, (HotkeyModifiers Modifiers, KeyboardKey Key)> _mouseButtonHotkeys = new();
+    private IntPtr _mouseHookHandle = IntPtr.Zero;
+    private User32.LowLevelMouseProc? _mouseHookProc;
 
     public event EventHandler<HotkeyEventArgs>? HotkeyPressed;
 
@@ -39,7 +46,7 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
         {
             int id = (int)wParam.ToInt64();
             uint modifiers = (uint)(lParam.ToInt64() & 0xFFFF);
-            uint vk = (uint)((lParam.ToInt64() >> 16) & 0xFFFF);
+            int vk = (int)((lParam.ToInt64() >> 16) & 0xFFFF);
 
             if (_registered.TryGetValue(id, out var info))
             {
@@ -49,7 +56,19 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
                 if ((modifiers & User32.MOD_SHIFT) != 0) mods |= HotkeyModifiers.Shift;
                 if ((modifiers & User32.MOD_WIN) != 0) mods |= HotkeyModifiers.Win;
 
-                KeyboardKey key = Enum.IsDefined(typeof(KeyboardKey), vk) ? (KeyboardKey)vk : KeyboardKey.None;
+                // 按键合法性判断：任何情况下都不得抛异常。曾有构建把 vk 误当 uint，
+                // 导致 Enum.IsDefined 抛 ArgumentException，热键在派发前就被中断（按了没反应）。
+                KeyboardKey key = KeyboardKey.None;
+                try
+                {
+                    key = vk >= 0 && Enum.IsDefined(typeof(KeyboardKey), vk)
+                        ? (KeyboardKey)vk
+                        : KeyboardKey.None;
+                }
+                catch (ArgumentException)
+                {
+                    key = KeyboardKey.None;
+                }
 
                 var args = new HotkeyEventArgs(id, mods, key);
 
@@ -73,6 +92,12 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
     public bool Register(int id, HotkeyModifiers modifiers, KeyboardKey key)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // 鼠标按键走低级鼠标钩子，RegisterHotKey 不支持
+        if (IsMouseButton(key))
+        {
+            return RegisterMouseButtonHotkey(id, modifiers, key);
+        }
 
         uint fsModifiers = 0;
         if (modifiers.HasFlag(HotkeyModifiers.Alt)) fsModifiers |= User32.MOD_ALT;
@@ -98,6 +123,106 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
         return ok;
     }
 
+    private bool RegisterMouseButtonHotkey(int id, HotkeyModifiers modifiers, KeyboardKey key)
+    {
+        // 移除旧的鼠标按键注册
+        _mouseButtonHotkeys.Remove(id);
+
+        _mouseButtonHotkeys[id] = (modifiers, key);
+
+        // 确保钩子已安装
+        EnsureMouseHookInstalled();
+
+        return true;
+    }
+
+    private void EnsureMouseHookInstalled()
+    {
+        if (_mouseHookHandle != IntPtr.Zero)
+            return;
+
+        _mouseHookProc = MouseHookCallback;
+        IntPtr hMod = Kernel32.GetModuleHandleW(null);
+        _mouseHookHandle = User32.SetWindowsHookExW(User32.WH_MOUSE_LL, _mouseHookProc, hMod, 0);
+    }
+
+    private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode == HC_ACTION && _mouseButtonHotkeys.Count > 0)
+        {
+            int msg = (int)wParam;
+            KeyboardKey? pressedButton = null;
+
+            if (msg == User32.WM_XBUTTONDOWN)
+            {
+                // HIWORD of lParam contains the xbutton (1 or 2)
+                int hiWord = Marshal.ReadInt32(lParam, 8); // HIWORD is at offset 8 (after POINT + mouseData low word)
+                int xButton = (hiWord >> 16) & 0xFFFF;
+                pressedButton = xButton == User32.XBUTTON1 ? KeyboardKey.XButton1 : KeyboardKey.XButton2;
+            }
+            else if (msg == User32.WM_LBUTTONDOWN)
+            {
+                pressedButton = KeyboardKey.LButton;
+            }
+            else if (msg == User32.WM_RBUTTONDOWN)
+            {
+                pressedButton = KeyboardKey.RButton;
+            }
+            else if (msg == User32.WM_MBUTTONDOWN)
+            {
+                pressedButton = KeyboardKey.MButton;
+            }
+
+            if (pressedButton != null)
+            {
+                foreach (var kvp in _mouseButtonHotkeys)
+                {
+                    if (kvp.Value.Key == pressedButton && CheckModifiers(kvp.Value.Modifiers))
+                    {
+                        var args = new HotkeyEventArgs(kvp.Key, kvp.Value.Modifiers, kvp.Value.Key);
+
+                        if (Application.Current?.Dispatcher != null)
+                        {
+                            Application.Current.Dispatcher.BeginInvoke(() => HotkeyPressed?.Invoke(this, args));
+                        }
+                        else
+                        {
+                            HotkeyPressed?.Invoke(this, args);
+                        }
+                    }
+                }
+            }
+        }
+
+        return User32.CallNextHookEx(_mouseHookHandle, nCode, wParam, lParam);
+    }
+
+    private static bool CheckModifiers(HotkeyModifiers required)
+    {
+        if (required == HotkeyModifiers.None)
+            return true;
+
+        bool alt = (User32.GetAsyncKeyState(0x12) & 0x8000) != 0;       // VK_MENU
+        bool ctrl = (User32.GetAsyncKeyState(0x11) & 0x8000) != 0;      // VK_CONTROL
+        bool shift = (User32.GetAsyncKeyState(0x10) & 0x8000) != 0;     // VK_SHIFT
+        bool win = (User32.GetAsyncKeyState(0x5B) & 0x8000) != 0 || (User32.GetAsyncKeyState(0x5C) & 0x8000) != 0; // VK_LWIN/VK_RWIN
+
+        if (required.HasFlag(HotkeyModifiers.Alt) && !alt) return false;
+        if (required.HasFlag(HotkeyModifiers.Ctrl) && !ctrl) return false;
+        if (required.HasFlag(HotkeyModifiers.Shift) && !shift) return false;
+        if (required.HasFlag(HotkeyModifiers.Win) && !win) return false;
+        return true;
+    }
+
+    private static bool IsMouseButton(KeyboardKey key)
+    {
+        return key == KeyboardKey.LButton ||
+               key == KeyboardKey.RButton ||
+               key == KeyboardKey.MButton ||
+               key == KeyboardKey.XButton1 ||
+               key == KeyboardKey.XButton2;
+    }
+
     public void Unregister(int id)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -105,6 +230,16 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
         if (_registered.Remove(id))
         {
             User32.UnregisterHotKey(_source.Handle, id);
+        }
+
+        _mouseButtonHotkeys.Remove(id);
+
+        // 没有鼠标按键热键时卸载钩子
+        if (_mouseButtonHotkeys.Count == 0 && _mouseHookHandle != IntPtr.Zero)
+        {
+            User32.UnhookWindowsHookEx(_mouseHookHandle);
+            _mouseHookHandle = IntPtr.Zero;
+            _mouseHookProc = null;
         }
     }
 
@@ -117,6 +252,14 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
             User32.UnregisterHotKey(_source.Handle, id);
         }
         _registered.Clear();
+        _mouseButtonHotkeys.Clear();
+
+        if (_mouseHookHandle != IntPtr.Zero)
+        {
+            User32.UnhookWindowsHookEx(_mouseHookHandle);
+            _mouseHookHandle = IntPtr.Zero;
+            _mouseHookProc = null;
+        }
     }
 
     public void Dispose()

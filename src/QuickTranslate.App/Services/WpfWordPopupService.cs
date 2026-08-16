@@ -1,10 +1,14 @@
 using System.Windows.Interop;
+using System.Windows.Threading;
+using Microsoft.Extensions.Options;
 using QuickTranslate.App.Windows;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Geometry;
+using QuickTranslate.Core.Options;
 using QuickTranslate.Core.Selection;
 using QuickTranslate.Core.Translation;
 using QuickTranslate.App.Coordination;
+using QuickTranslate.TextToSpeech;
 
 namespace QuickTranslate.App.Services;
 
@@ -12,15 +16,38 @@ public class WpfWordPopupService : IWordPopupService
 {
     private readonly IDpiMapper _dpiMapper;
     private readonly IMonitorService _monitorService;
+    private readonly IOptions<AppSettings> _appSettings;
+    private readonly ITextToSpeechService? _textToSpeech;
     private readonly Dictionary<MonitorId, (WordPopupWindow window, uint dpiX, uint dpiY)> _windows = new();
 
-    public WpfWordPopupService(IDpiMapper dpiMapper, IMonitorService monitorService)
+    public WpfWordPopupService(IDpiMapper dpiMapper, IMonitorService monitorService, IOptions<AppSettings> appSettings, ITextToSpeechService? textToSpeech = null)
     {
         _dpiMapper = dpiMapper;
         _monitorService = monitorService;
+        _appSettings = appSettings;
+        _textToSpeech = textToSpeech;
+    }
+
+    private static void RunOnUi(Action a)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+        if (dispatcher == null)
+        {
+            throw new InvalidOperationException(
+                "No WPF dispatcher is available (both Application.Current and Dispatcher.CurrentDispatcher are null). " +
+                "WPF UI services cannot operate on an MTA thread without a host Application instance.");
+        }
+
+        if (dispatcher.CheckAccess()) a();
+        else dispatcher.Invoke(DispatcherPriority.Normal, a);
     }
 
     public void Show(SelectionResult selection, TranslationResult translation, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX = 96, uint dpiY = 96)
+    {
+        RunOnUi(() => ShowCore(selection, translation, monitorId, anchorBox, dpiX, dpiY));
+    }
+
+    private void ShowCore(SelectionResult selection, TranslationResult translation, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY)
     {
         bool needsRecreate = true;
         if (_windows.TryGetValue(monitorId, out var entry))
@@ -56,8 +83,15 @@ public class WpfWordPopupService : IWordPopupService
                              new PhysicalRect(0, 0, 1920, 1080),
                              dpiX, dpiY, true);
 
-        int popupPhysicalW = (int)Math.Round(320.0 * dpiX / 96.0);
-        int popupPhysicalH = (int)Math.Round(150.0 * dpiY / 96.0);
+        // 尺寸随内容自适应（区分 CJK/ASCII 字宽），替代旧固定 320x150：
+        // 短译文不再有大片空白，长译文自动换行增高并受工作区钳制
+        var (estW, estH) = PopupSizeEstimator.EstimateWordPopupSize(
+            selection.Text, translation.TargetText,
+            monitorInfo.WorkArea.Width * 96.0 / dpiX,
+            monitorInfo.WorkArea.Height * 96.0 / dpiY);
+
+        int popupPhysicalW = (int)Math.Round(estW * dpiX / 96.0);
+        int popupPhysicalH = (int)Math.Round(estH * dpiY / 96.0);
         var popupPreferredSize = new PhysicalSize(popupPhysicalW, popupPhysicalH);
 
         var physicalRect = PopupPlacement.Place(anchorBox, monitorInfo.WorkArea, popupPreferredSize);
@@ -66,9 +100,10 @@ public class WpfWordPopupService : IWordPopupService
         window.Left = dipRect.X;
         window.Top = dipRect.Y;
         window.Width = dipRect.Width;
-        window.Height = Math.Max(dipRect.Height, 150);
+        window.Height = Math.Max(dipRect.Height, estH);
 
         window.ApplyContent(selection, translation);
+        window.ApplyTextToSpeech(_textToSpeech, _appSettings.Value.EnableTextToSpeech, _appSettings.Value.TargetLanguage);
         window.SetLastLayoutDipRect(dipRect);
 
         if (!window.IsVisible)
@@ -83,6 +118,11 @@ public class WpfWordPopupService : IWordPopupService
     }
 
     public void ShowError(MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY, string shortMessage, Guid operationId)
+    {
+        RunOnUi(() => ShowErrorCore(monitorId, anchorBox, dpiX, dpiY, shortMessage, operationId));
+    }
+
+    private void ShowErrorCore(MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY, string shortMessage, Guid operationId)
     {
         bool needsRecreate = true;
         if (_windows.TryGetValue(monitorId, out var entry))
@@ -131,6 +171,7 @@ public class WpfWordPopupService : IWordPopupService
         window.Height = Math.Max(dipRect.Height, 120);
 
         window.ShowError(shortMessage);
+        window.ApplyTextToSpeech(null, false, null);
         window.SetLastLayoutDipRect(dipRect);
 
         if (!window.IsVisible)
@@ -146,6 +187,11 @@ public class WpfWordPopupService : IWordPopupService
 
     public void Hide()
     {
+        RunOnUi(HideCore);
+    }
+
+    private void HideCore()
+    {
         foreach (var kvp in _windows)
         {
             kvp.Value.window.Hide();
@@ -153,6 +199,11 @@ public class WpfWordPopupService : IWordPopupService
     }
 
     public void HideAll()
+    {
+        RunOnUi(HideAllCore);
+    }
+
+    private void HideAllCore()
     {
         foreach (var kvp in _windows)
         {

@@ -58,15 +58,9 @@ public class DefaultHotkeyBroker : IHotkeyBroker
             _blockCombo = settings.BlockHotkey;
         }
 
-        var escCombo = new HotkeyCombo(HotkeyModifiers.None, KeyboardKey.Escape);
-        if (!Register(EscId, escCombo))
-        {
-            _logger.LogWarning("Failed to register Escape hotkey: {Combo}", escCombo);
-        }
-        else
-        {
-            _escCombo = escCombo;
-        }
+        // 注意：Escape 键不能通过 RegisterHotKey 无修饰符注册（Win32 API 系统直接拒绝）。
+        // 取消操作由 IEscHook（低级键盘钩子）独立触发，这里不再尝试注册 Esc 全局热键。
+        _escCombo = null;
     }
 
     public Result TryUpdateHotkeys(HotkeyCombo newWord, HotkeyCombo newBlock)
@@ -79,18 +73,44 @@ public class DefaultHotkeyBroker : IHotkeyBroker
 
         if (!Register(WordId, newWord))
         {
-            if (oldWord != null)
-                Register(WordId, oldWord);
+            try
+            {
+                if (oldWord != null)
+                    Register(WordId, oldWord);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to rollback Word hotkey during failed update");
+            }
+            if (oldBlock != null)
+            {
+                try { Register(BlockId, oldBlock); }
+                catch (Exception ex) { _logger.LogWarning(ex, "Failed to rollback Block hotkey after Word failed"); }
+            }
             return Result.Fail($"Word hotkey conflict: {newWord}");
         }
 
         if (!Register(BlockId, newBlock))
         {
             _globalHotkeyService.Unregister(WordId);
-            if (oldWord != null)
-                Register(WordId, oldWord);
-            if (oldBlock != null)
-                Register(BlockId, oldBlock);
+            try
+            {
+                if (oldWord != null)
+                    Register(WordId, oldWord);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to rollback Word hotkey after Block failed");
+            }
+            try
+            {
+                if (oldBlock != null)
+                    Register(BlockId, oldBlock);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to rollback Block hotkey after Block failed");
+            }
             return Result.Fail($"Block hotkey conflict: {newBlock}");
         }
 
@@ -111,6 +131,26 @@ public class DefaultHotkeyBroker : IHotkeyBroker
         const int probeId = 0xBFFF;
         try
         {
+            // 自身已注册的组合不视为冲突（Win32 RegisterHotKey 同句柄下同组合+异ID必失败）
+            if (_wordCombo != null &&
+                _wordCombo.Modifiers == mods &&
+                _wordCombo.Key == key)
+            {
+                return true;
+            }
+            if (_blockCombo != null &&
+                _blockCombo.Modifiers == mods &&
+                _blockCombo.Key == key)
+            {
+                return true;
+            }
+            if (_escCombo != null &&
+                _escCombo.Modifiers == mods &&
+                _escCombo.Key == key)
+            {
+                return true;
+            }
+
             bool ok = _globalHotkeyService.Register(probeId, mods, key);
             if (ok)
             {

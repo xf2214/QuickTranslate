@@ -14,6 +14,10 @@
         MinHeight="120"
         Left="0"
         Top="0">
+    <!-- 自包含按钮样式：测试会脱离 App 资源直接实例化本窗口 -->
+    <Window.Resources>
+        <ResourceDictionary Source="/QuickTranslate.App;component/Themes/Generic.xaml"/>
+    </Window.Resources>
     <Border x:Name="RootBorder"
             Background="#FFFDFDFD"
             CornerRadius="10"
@@ -54,23 +58,35 @@
                            Visibility="Hidden"/>
             </StackPanel>
 
-            <TextBlock Grid.Row="1"
-                       x:Name="TranslationText"
-                       FontSize="14"
-                       Foreground="#111827"
-                       TextWrapping="Wrap"
-                       Margin="0 8 0 8"
-                       Text=""/>
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          MaxHeight="300"
+                          HorizontalScrollBarVisibility="Disabled">
+                <TextBlock x:Name="TranslationText"
+                           FontSize="14"
+                           Foreground="#111827"
+                           TextWrapping="Wrap"
+                           Margin="0 8 0 8"
+                           Text=""/>
+            </ScrollViewer>
 
             <StackPanel Grid.Row="2"
                         Orientation="Horizontal"
                         HorizontalAlignment="Right">
+                <Button x:Name="SpeakButton"
+                        Content="🔊 朗读"
+                        Style="{StaticResource PopupActionButton}"
+                        Padding="10 4"
+                        Margin="6 0 0 0"
+                        Visibility="Collapsed"/>
                 <Button x:Name="CopyButton"
                         Content="复制"
+                        Style="{StaticResource PopupActionButton}"
                         Padding="10 4"
                         Margin="6 0 0 0"/>
                 <Button x:Name="DismissButton"
                         Content="关闭"
+                        Style="{StaticResource PopupDismissButton}"
                         Padding="10 4"
                         Margin="6 0 0 0"/>
             </StackPanel>

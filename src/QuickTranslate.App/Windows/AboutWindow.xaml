@@ -9,8 +9,12 @@
         SizeToContent="Manual"
         WindowStartupLocation="CenterScreen"
         Title="关于 QuickTranslate"
-        Width="400"
-        Height="280">
+        Width="420"
+        Height="360">
+    <!-- 自包含按钮样式：使窗口可脱离 App 资源独立实例化 -->
+    <Window.Resources>
+        <ResourceDictionary Source="/QuickTranslate.App;component/Themes/Generic.xaml"/>
+    </Window.Resources>
     <Border x:Name="RootBorder"
             Background="#FFFDFDFD"
             CornerRadius="12"
@@ -61,6 +65,19 @@
                 <TextBlock x:Name="CopyrightLabel"
                            FontSize="12"
                            Foreground="#6B7280"/>
+                <!-- 模型/翻译能力说明（与 docs/ocr-models-and-custom-llm.md 保持同步） -->
+                <TextBlock x:Name="OcrInfoLabel"
+                           Text="OCR：PP-OCRv6 medium（ONNX Runtime，源 HoVDuc/ppocrv5-onnx）· 字典 18708 字符"
+                           FontSize="11"
+                           Foreground="#9CA3AF"
+                           TextWrapping="Wrap"
+                           Margin="0 10 0 0"/>
+                <TextBlock x:Name="TranslationInfoLabel"
+                           Text="翻译：支持任意 OpenAI 兼容大模型端点（设置 → 翻译引擎），亦可用内置 Qwen-MT"
+                           FontSize="11"
+                           Foreground="#9CA3AF"
+                           TextWrapping="Wrap"
+                           Margin="0 4 0 0"/>
             </StackPanel>
 
             <StackPanel Grid.Row="2"
@@ -69,14 +86,17 @@
                         Margin="0 12 0 0">
                 <Button x:Name="CheckModelButton"
                         Content="检查模型"
+                        Style="{StaticResource PopupActionButton}"
                         Padding="12 5"
                         Margin="0 0 8 0"/>
                 <Button x:Name="LicenseButton"
                         Content="许可证"
+                        Style="{StaticResource PopupActionButton}"
                         Padding="12 5"
                         Margin="0 0 8 0"/>
                 <Button x:Name="CloseButton"
                         Content="关闭"
+                        Style="{StaticResource PopupDismissButton}"
                         Padding="12 5"/>
             </StackPanel>
         </Grid>

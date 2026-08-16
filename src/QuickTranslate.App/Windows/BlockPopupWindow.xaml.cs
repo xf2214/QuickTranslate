@@ -4,12 +4,15 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using QuickTranslate.Core.Geometry;
 using QuickTranslate.Platform.Win32;
+using QuickTranslate.TextToSpeech;
 
 namespace QuickTranslate.App.Windows;
 
 public partial class BlockPopupWindow : Window
 {
     private bool _interactive;
+    private ITextToSpeechService? _textToSpeech;
+    private string? _speechLanguage;
 
     public string FullText { get; private set; } = "";
 
@@ -19,6 +22,7 @@ public partial class BlockPopupWindow : Window
 
         CopyButton.Click += OnCopyButtonClick;
         DismissButton.Click += OnDismissButtonClick;
+        SpeakButton.Click += OnSpeakButtonClick;
         RootBorder.PreviewMouseDown += OnRootBorderPreviewMouseDown;
     }
 
@@ -45,6 +49,24 @@ public partial class BlockPopupWindow : Window
         FullText += delta;
         TranslationText.Text = FullText;
         ScrollViewer1.ScrollToEnd();
+    }
+
+    /// <summary>新一轮展示前清空旧内容（窗口复用时避免上次译文残留/累积）。</summary>
+    public void ResetContent(string? sourceText = null)
+    {
+        FullText = "";
+        TranslationText.Text = "";
+        if (string.IsNullOrWhiteSpace(sourceText))
+        {
+            SourceText.Text = "";
+            SourceText.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            SourceText.Text = sourceText;
+            SourceText.Visibility = Visibility.Visible;
+        }
+        ResetStyle();
     }
 
     public void UpdateHeader(int lineCount)
@@ -87,5 +109,29 @@ public partial class BlockPopupWindow : Window
         int w = (int)Math.Round(440.0 * dpiX / 96.0);
         int h = (int)Math.Round(480.0 * dpiY / 96.0);
         return new PhysicalSize(w, h);
+    }
+
+    /// <summary>
+    /// 配置朗读能力：开启朗读时显示"朗读"按钮，关闭或 TTS 不可用时隐藏。
+    /// </summary>
+    public void ApplyTextToSpeech(ITextToSpeechService? textToSpeech, bool enabled, string? targetLanguage)
+    {
+        _textToSpeech = textToSpeech;
+        _speechLanguage = targetLanguage;
+        SpeakButton.Visibility = enabled && textToSpeech != null ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnSpeakButtonClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(FullText) && _textToSpeech != null)
+            {
+                _textToSpeech.Speak(FullText, _speechLanguage);
+            }
+        }
+        catch
+        {
+        }
     }
 }

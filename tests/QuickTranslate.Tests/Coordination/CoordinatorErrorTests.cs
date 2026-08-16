@@ -179,7 +179,8 @@ public class CoordinatorErrorTests
         await Task.Delay(40);
 
         secondTransTcs.SetResult(FakeTranslationRouter.CreateResult("second-fresh", "zh-CN"));
-        await Task.Delay(100);
+        // 协调器在弹结果前保证选定框至少可见 250ms，需等待其完成
+        await Task.Delay(400);
 
         Assert.Equal(1, popup.ShowCount);
         staleSlot?.Cts.Dispose();

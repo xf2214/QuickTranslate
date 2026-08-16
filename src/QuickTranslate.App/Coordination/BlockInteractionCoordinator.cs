@@ -31,6 +31,7 @@ public class BlockInteractionCoordinator : IDisposable
     private readonly ISelectionOverlayService _overlayService;
     private readonly IBlockPopupService _popupService;
     private readonly ITranslationRouter _translationRouter;
+    private readonly IStatusIndicatorService? _statusIndicator;
     private readonly IOptions<AppSettings> _settings;
     private readonly ILogger<BlockInteractionCoordinator> _logger;
     private readonly IEscHook _escHook;
@@ -39,6 +40,9 @@ public class BlockInteractionCoordinator : IDisposable
     private readonly object _stateLock = new();
     private bool _disposed;
     private bool _started;
+
+    // 翻译前让区域选定框至少可见的时长（毫秒）：瞬时翻译时避免框一闪而过
+    private const int SelectionHoldMs = 250;
 
     public AppState State { get; private set; } = AppState.Idle;
 
@@ -53,7 +57,8 @@ public class BlockInteractionCoordinator : IDisposable
         ITranslationRouter translationRouter,
         IOptions<AppSettings> settings,
         ILogger<BlockInteractionCoordinator> logger,
-        IEscHook escHook)
+        IEscHook escHook,
+        IStatusIndicatorService? statusIndicator = null)
     {
         _cursorService = cursorService;
         _monitorService = monitorService;
@@ -61,6 +66,7 @@ public class BlockInteractionCoordinator : IDisposable
         _overlayService = overlayService;
         _popupService = popupService;
         _translationRouter = translationRouter;
+        _statusIndicator = statusIndicator;
         _settings = settings;
         _logger = logger;
         _escHook = escHook;
@@ -103,6 +109,7 @@ public class BlockInteractionCoordinator : IDisposable
         }
 
         _overlayService.HideAll();
+        _statusIndicator?.Hide();
         _popupService.HideAll();
     }
 
@@ -133,6 +140,7 @@ public class BlockInteractionCoordinator : IDisposable
             old.Cts.Dispose();
         }
         _overlayService.HideAll();
+        _statusIndicator?.Hide();
         _popupService.HideAll();
         if (returnIdle)
         {
@@ -142,6 +150,7 @@ public class BlockInteractionCoordinator : IDisposable
 
     public void RunBlockPipeline()
     {
+        _logger.LogDebug("Block hotkey received, starting block pipeline");
         _ = RunBlockPipelineAsync();
     }
 
@@ -170,6 +179,9 @@ public class BlockInteractionCoordinator : IDisposable
 
         SetState(newSlot, AppState.Capturing);
 
+        // 立即显示"识别中"反馈：块模式要做截图 + OCR 检索，无反馈期间最易被误判为卡死
+        _statusIndicator?.Show(mid, new PhysicalRect(anchor.X - 4, anchor.Y - 4, 8, 8), dpiX, dpiY, "正在识别…");
+
         try
         {
             var (ocr, block, captures) = await _retryCoordinator.SelectBlockWithRetryAsync(
@@ -183,28 +195,58 @@ public class BlockInteractionCoordinator : IDisposable
             if (block.NoBlockFound)
             {
                 _overlayService.HideAll();
-                _popupService.HideAll();
+                _statusIndicator?.Hide();
+                if (!IsStaleOrCanceled(newSlot))
+                {
+                    _popupService.ShowError(mid, fallbackBox, dpiX, dpiY,
+                        "未检测到段落文本，请将鼠标移到英文段落文字上再按 Alt+2", newSlot.Id);
+                }
+                else
+                {
+                    _popupService.HideAll();
+                }
+                SetState(null, AppState.Idle);
                 return;
             }
 
             unionBox = block.UnionBox;
             _overlayService.Show(block.UnionBox, mid, dpiX, dpiY);
+            long overlayShownAt = Environment.TickCount64;
 
             if (IsStaleOrCanceled(newSlot)) return;
 
             SetState(newSlot, AppState.Translating);
+            _statusIndicator?.Update("正在翻译…");
             var translation = await _translationRouter.TranslateBlockAsync(
                 block.BlockText!, _settings.Value.TargetLanguage, newSlot.Cts.Token).ConfigureAwait(false);
 
             if (IsStaleOrCanceled(newSlot)) return;
 
+            // 保证区域选定框至少可见 SelectionHoldMs，让用户先看清翻译范围再弹结果
+            long elapsed = Environment.TickCount64 - overlayShownAt;
+            int remaining = SelectionHoldMs - (int)elapsed;
+            if (remaining > 0)
+            {
+                try
+                {
+                    await Task.Delay(remaining, newSlot.Cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                if (IsStaleOrCanceled(newSlot)) return;
+            }
+
             SetState(newSlot, AppState.Displaying);
+            _statusIndicator?.Hide();
             _popupService.Show(block, translation, mid, block.UnionBox, dpiX, dpiY);
         }
         catch (TranslationException te)
         {
             _logger.LogWarning("Block pipeline translation error: Code={Code}, Message={Message}", te.ErrorCode, te.Message);
             _overlayService.HideAll();
+            _statusIndicator?.Hide();
             var errorBox = unionBox ?? fallbackBox;
             if (!IsStaleOrCanceled(newSlot))
             {
@@ -220,6 +262,7 @@ public class BlockInteractionCoordinator : IDisposable
         {
             _logger.LogDebug("Operation {Id} OCR cancelled", newSlot.Id);
             _overlayService.HideAll();
+            _statusIndicator?.Hide();
             _popupService.HideAll();
             SetState(null, AppState.Idle);
         }
@@ -227,6 +270,7 @@ public class BlockInteractionCoordinator : IDisposable
         {
             _logger.LogError(oex, "Block pipeline OCR error: Code={Code}", oex.ErrorCode);
             _overlayService.HideAll();
+            _statusIndicator?.Hide();
             var errorBox = unionBox ?? fallbackBox;
             if (!IsStaleOrCanceled(newSlot))
             {
@@ -248,6 +292,7 @@ public class BlockInteractionCoordinator : IDisposable
         {
             _logger.LogDebug("Operation {Id} cancelled", newSlot.Id);
             _overlayService.HideAll();
+            _statusIndicator?.Hide();
             _popupService.HideAll();
             SetState(null, AppState.Idle);
         }
@@ -255,6 +300,7 @@ public class BlockInteractionCoordinator : IDisposable
         {
             _logger.LogError(ex, "Block pipeline error");
             _overlayService.HideAll();
+            _statusIndicator?.Hide();
             var errorBox = unionBox ?? fallbackBox;
             if (!IsStaleOrCanceled(newSlot))
             {

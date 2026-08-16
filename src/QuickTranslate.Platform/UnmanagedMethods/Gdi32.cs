@@ -34,10 +34,4 @@ public static partial class Gdi32
     [LibraryImport(DllName)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool DeleteObject(IntPtr ho);
-
-    [LibraryImport(DllName)]
-    public static partial IntPtr GetDC(IntPtr hWnd);
-
-    [LibraryImport(DllName)]
-    public static partial int ReleaseDC(IntPtr hWnd, IntPtr hDC);
 }

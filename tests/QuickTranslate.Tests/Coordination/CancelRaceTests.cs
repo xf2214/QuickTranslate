@@ -62,7 +62,8 @@ public class CancelRaceTests
         Assert.Equal(1, overlay.ShowTotalCount);
 
         secondTransTcs.SetResult(FakeTranslationRouter.CreateResult("hello", "zh-CN"));
-        await Task.Delay(50);
+        // 协调器在弹结果前保证选定框至少可见 250ms，需等待其完成
+        await Task.Delay(400);
 
         Assert.Equal(AppState.Displaying, coord.State);
         Assert.Equal(1, overlay.ShowTotalCount);
@@ -124,7 +125,8 @@ public class CancelRaceTests
         Assert.Equal(2, overlay.ShowTotalCount);
 
         secondTransDone.SetResult(FakeTranslationRouter.CreateResult("hello2", "zh-CN"));
-        await Task.Delay(50);
+        // 协调器在弹结果前保证选定框至少可见 250ms，需等待其完成
+        await Task.Delay(400);
 
         Assert.Equal(AppState.Displaying, coord.State);
         Assert.Equal(1, popup.ShowCount);

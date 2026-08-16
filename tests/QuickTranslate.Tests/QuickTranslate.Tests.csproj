@@ -21,5 +21,6 @@
     <ProjectReference Include="..\..\src\QuickTranslate.Infrastructure\QuickTranslate.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\QuickTranslate.Platform\QuickTranslate.Platform.csproj" />
     <ProjectReference Include="..\..\src\QuickTranslate.App\QuickTranslate.App.csproj" />
+    <ProjectReference Include="..\..\src\QuickTranslate.TextToSpeech\QuickTranslate.TextToSpeech.csproj" />
   </ItemGroup>
 </Project>

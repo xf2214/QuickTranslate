@@ -34,11 +34,16 @@ public class WordInteractionCoordinator : IInteractionCoordinator
     private readonly ISelectionOverlayService _overlayService;
     private readonly ITranslationRouter _translationRouter;
     private readonly IWordPopupService _popupService;
+    private readonly IStatusIndicatorService? _statusIndicator;
     private readonly IOptions<AppSettings> _settings;
     private readonly ILogger<WordInteractionCoordinator> _logger;
 
     private volatile OperationSlot? _current;
     private readonly object _stateLock = new();
+
+    // 翻译前让选定框至少可见的时长（毫秒）：本地词典/缓存瞬时翻译时，
+    // 若不等一拍就弹结果，用户会完全看不到“指示翻译范围”的选定框。
+    private const int SelectionHoldMs = 250;
 
     public AppState State { get; private set; } = AppState.Idle;
 
@@ -56,7 +61,8 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         ITranslationRouter translationRouter,
         IWordPopupService popupService,
         IOptions<AppSettings> settings,
-        ILogger<WordInteractionCoordinator> logger)
+        ILogger<WordInteractionCoordinator> logger,
+        IStatusIndicatorService? statusIndicator = null)
     {
         _appLifecycle = appLifecycle;
         _hotkeyBroker = hotkeyBroker;
@@ -68,6 +74,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         _overlayService = overlayService;
         _translationRouter = translationRouter;
         _popupService = popupService;
+        _statusIndicator = statusIndicator;
         _settings = settings;
         _logger = logger;
 
@@ -91,9 +98,13 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         switch (hotkeyEvent.Type)
         {
             case HotkeyEventType.Word:
+                _logger.LogDebug("Word hotkey received at {Timestamp}, starting word pipeline", hotkeyEvent.Timestamp);
                 _ = RunWordPipeline();
                 break;
             case HotkeyEventType.Block:
+                // Block 热键独立由 AppHost.WireBlockHotkey 订阅 broker.HotkeyFired 并调用
+                // BlockInteractionCoordinator.RunBlockPipeline()。
+                // 这里留空是为了避免 WordCoord / BlockCoord 重复触发 Block 流程。
                 break;
             case HotkeyEventType.Escape:
                 CancelAll(returnIdle: true);
@@ -124,6 +135,9 @@ public class WordInteractionCoordinator : IInteractionCoordinator
 
         SetState(newSlot, AppState.Capturing);
 
+        // 立即显示"识别中"反馈：OCR 首次推理可达数百毫秒，无反馈会被误以为热键失灵
+        _statusIndicator?.Show(mid, new PhysicalRect(cursor.X - 4, cursor.Y - 4, 8, 8), dpiX, dpiY, "正在识别…");
+
         try
         {
             using var frame = await _captureService.CaptureAroundAsync(
@@ -141,33 +155,78 @@ public class WordInteractionCoordinator : IInteractionCoordinator
             var sel = _wordSelector.SelectWord(ocr, cursor, null);
             selectionBox = sel.Box;
 
+            // 诊断日志：记录选词框物理坐标 + DPI，定位"框尺寸不准"问题
+            if (!sel.NoTextFound)
+            {
+                _logger.LogDebug(
+                    "WordSelect: Text='{Text}' Box=({X},{Y},{W}x{H}) Cursor=({CX},{CY}) DPI=({DX},{DY}) Lines={LC}",
+                    sel.Text, sel.Box.X, sel.Box.Y, sel.Box.Width, sel.Box.Height,
+                    cursor.X, cursor.Y, dpiX, dpiY, ocr.Lines.Count);
+            }
+
             if (IsStaleOrCanceled(newSlot)) return;
 
             SetState(newSlot, AppState.OverlayVisible);
             if (sel.NoTextFound)
             {
                 _overlayService.HideAll();
-                _popupService.HideAll();
+                _statusIndicator?.Hide();
+                PhysicalRect hintBox = captureRegion ?? new PhysicalRect(cursor.X - 150, cursor.Y - 60, 300, 120);
+                if (!IsStaleOrCanceled(newSlot))
+                {
+                    _popupService.ShowError(mid, hintBox, dpiX, dpiY,
+                        "未检测到可翻译的文字，请将鼠标移到单词或文字上再按 Alt+1", newSlot.Id);
+                }
+                else
+                {
+                    _popupService.HideAll();
+                }
+                SetState(null, AppState.Idle);
                 return;
             }
 
             _overlayService.Show(sel.Box, mid, dpiX, dpiY);
+            long overlayShownAt = Environment.TickCount64;
 
             if (IsStaleOrCanceled(newSlot)) return;
 
             SetState(newSlot, AppState.Translating);
+            _statusIndicator?.Update("正在翻译…");
+            // 中文词 → 译成英文；非中文（英文等）→ 用户设置的目标语言（默认中文）。
+            // 避免 TargetLanguage=zh-CN 时中文词"中译中"原样回显。
+            var targetLang = ContainsCjk(sel.Text ?? string.Empty)
+                ? "en"
+                : _settings.Value.TargetLanguage;
             var trans = await _translationRouter.TranslateWordAsync(
-                sel.Text ?? "", _settings.Value.TargetLanguage, newSlot.Cts.Token).ConfigureAwait(false);
+                sel.Text ?? "", targetLang, newSlot.Cts.Token).ConfigureAwait(false);
 
             if (IsStaleOrCanceled(newSlot)) return;
 
+            // 保证选定框至少可见 SelectionHoldMs，让用户先看清翻译范围再弹结果
+            long elapsed = Environment.TickCount64 - overlayShownAt;
+            int remaining = SelectionHoldMs - (int)elapsed;
+            if (remaining > 0)
+            {
+                try
+                {
+                    await Task.Delay(remaining, newSlot.Cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                if (IsStaleOrCanceled(newSlot)) return;
+            }
+
             SetState(newSlot, AppState.Displaying);
+            _statusIndicator?.Hide();
             _popupService.Show(sel, trans, mid, sel.Box, dpiX, dpiY);
         }
         catch (TranslationException te)
         {
             _logger.LogWarning("Word pipeline translation error: Code={Code}, Message={Message}", te.ErrorCode, te.Message);
             _overlayService.HideAll();
+            _statusIndicator?.Hide();
             var errorBox = selectionBox ?? captureRegion;
             if (errorBox.HasValue && !IsStaleOrCanceled(newSlot))
             {
@@ -183,6 +242,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         {
             _logger.LogDebug("Operation {Id} OCR cancelled", newSlot.Id);
             _overlayService.HideAll();
+            _statusIndicator?.Hide();
             _popupService.HideAll();
             SetState(null, AppState.Idle);
         }
@@ -190,6 +250,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         {
             _logger.LogError(oex, "Word pipeline OCR error: Code={Code}", oex.ErrorCode);
             _overlayService.HideAll();
+            _statusIndicator?.Hide();
             var errorBox = selectionBox ?? captureRegion;
             if (errorBox.HasValue && !IsStaleOrCanceled(newSlot))
             {
@@ -211,6 +272,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         {
             _logger.LogDebug("Operation {Id} cancelled", newSlot.Id);
             _overlayService.HideAll();
+            _statusIndicator?.Hide();
             _popupService.HideAll();
             SetState(null, AppState.Idle);
         }
@@ -218,6 +280,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         {
             _logger.LogError(ex, "Word pipeline error");
             _overlayService.HideAll();
+            _statusIndicator?.Hide();
             var errorBox = selectionBox ?? captureRegion;
             if (errorBox.HasValue && !IsStaleOrCanceled(newSlot))
             {
@@ -245,6 +308,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
             old.Cts.Dispose();
         }
         _overlayService.HideAll();
+        _statusIndicator?.Hide();
         _popupService.HideAll();
         if (returnIdle)
         {
@@ -267,6 +331,17 @@ public class WordInteractionCoordinator : IInteractionCoordinator
 
     public void ShowTranslationPopup(string sourceText, string translatedText)
     {
+    }
+
+    private static bool ContainsCjk(string text)
+    {
+        foreach (var c in text)
+        {
+            if (c >= 0x4E00 && c <= 0x9FFF || c >= 0x3400 && c <= 0x4DBF ||
+                c >= 0x3040 && c <= 0x30FF || c >= 0xAC00 && c <= 0xD7AF)
+                return true;
+        }
+        return false;
     }
 
     public void ShowSettingsWindow()

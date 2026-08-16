@@ -114,7 +114,8 @@ public class BlockInteractionCoordinatorTests
 
         var transResult = FakeTranslationRouter.CreateResult("Hello block text", "zh-CN");
         translator.TranslateBlockTcs.SetResult(transResult);
-        await Task.Delay(40);
+        // 协调器在弹结果前保证选定框至少可见 250ms，需等待其完成
+        await Task.Delay(400);
 
         Assert.Equal(1, overlay.ShowTotalCount);
         Assert.Equal(1, popup.ShowCount);

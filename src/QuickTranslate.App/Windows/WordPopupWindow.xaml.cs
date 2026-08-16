@@ -7,6 +7,7 @@ using QuickTranslate.Core.Geometry;
 using QuickTranslate.Core.Selection;
 using QuickTranslate.Core.Translation;
 using QuickTranslate.Platform.Win32;
+using QuickTranslate.TextToSpeech;
 
 namespace QuickTranslate.App.Windows;
 
@@ -19,6 +20,8 @@ public partial class WordPopupWindow : Window
     private SelectionResult? _lastSelection;
     private TranslationResult? _lastTranslation;
     private bool _allowActivate;
+    private ITextToSpeechService? _textToSpeech;
+    private string? _speechLanguage;
 
     public WordPopupWindow()
     {
@@ -26,8 +29,10 @@ public partial class WordPopupWindow : Window
 
         CopyButton.Click += OnCopyButtonClick;
         DismissButton.Click += OnDismissButtonClick;
+        SpeakButton.Click += OnSpeakButtonClick;
         CopyButton.PreviewMouseDown += OnButtonPreviewMouseDown;
         DismissButton.PreviewMouseDown += OnButtonPreviewMouseDown;
+        SpeakButton.PreviewMouseDown += OnButtonPreviewMouseDown;
         RootBorder.MouseLeftButtonDown += OnRootBorderMouseLeftButtonDown;
     }
 
@@ -133,6 +138,37 @@ public partial class WordPopupWindow : Window
     public void SetLastLayoutDipRect(DipRect rect)
     {
         LastLayoutDipRect = rect;
+    }
+
+    /// <summary>
+    /// 配置朗读能力：开启朗读时显示"朗读"按钮，关闭或 TTS 不可用时隐藏。
+    /// </summary>
+    public void ApplyTextToSpeech(ITextToSpeechService? textToSpeech, bool enabled, string? targetLanguage)
+    {
+        _textToSpeech = textToSpeech;
+        _speechLanguage = targetLanguage;
+        SpeakButton.Visibility = enabled && textToSpeech != null ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnSpeakButtonClick(object sender, RoutedEventArgs e)
+    {
+        _allowActivate = true;
+        try
+        {
+            var text = _lastTranslation?.TargetText ?? WordHeader.Text;
+            if (!string.IsNullOrWhiteSpace(text) && _textToSpeech != null)
+            {
+                _textToSpeech.Speak(text, _speechLanguage);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to speak translation");
+        }
+        finally
+        {
+            _allowActivate = false;
+        }
     }
 }
 

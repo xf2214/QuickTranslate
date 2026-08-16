@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using QuickTranslate.Core.Geometry;
 using QuickTranslate.Core.Ocr;
 
@@ -6,6 +7,24 @@ namespace QuickTranslate.Core.Selection;
 public class WordSelector : IWordSelector
 {
     private readonly IWordBoxResolver _resolver;
+    // Alt+1 取词：候选必须是"词"——包含英文字母（英文单词，允许撇号/连字符），
+    // 或包含 CJK 字符（中文单字/词组）。过滤纯标点、纯数字、纯空白。
+    private static readonly Regex WordLike = new(
+        @"[A-Za-z][A-Za-z'\-]*[A-Za-z]|[A-Za-z]",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static bool IsWordLike(string text)
+    {
+        if (WordLike.IsMatch(text)) return true;
+        // CJK：中日韩统一表意文字 + 扩展A + 假名 + 谚文
+        foreach (var c in text)
+        {
+            if (c >= 0x4E00 && c <= 0x9FFF || c >= 0x3400 && c <= 0x4DBF ||
+                c >= 0x3040 && c <= 0x30FF || c >= 0xAC00 && c <= 0xD7AF)
+                return true;
+        }
+        return false;
+    }
 
     public WordSelector(IWordBoxResolver resolver)
     {
@@ -35,6 +54,10 @@ public class WordSelector : IWordSelector
                     continue;
                 if (c.Confidence < opts.ConfidenceFloor)
                     continue;
+                // Word mode (Alt+1) 只考虑像"词"的候选：英文单词或 CJK 文字，
+                // 过滤纯标点/数字/空白。
+                if (string.IsNullOrWhiteSpace(c.Text)) continue;
+                if (!IsWordLike(c.Text)) continue;
 
                 candidatesTaken++;
 

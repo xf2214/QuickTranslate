@@ -1,18 +1,83 @@
+using System.Collections.Generic;
 using System.Text;
 using System.Windows;
 using SWC = System.Windows.Controls;
 using SWI = System.Windows.Input;
+using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Options;
 
 namespace QuickTranslate.App.Windows.Controls;
+
+public enum HotkeyProbeStatus
+{
+    Unknown,        // 未探测
+    Available,      // 可用
+    SelfConflict,   // 与 Word/Block 另一个热键相同
+    ExternalConflict, // 被外部应用占用
+    Invalid         // 无效键位（纯修饰符等）
+}
 
 public class HotkeyRecorder : SWC.Control
 {
     private SWC.TextBox? _textBox;
     private SWC.Button? _recordButton;
+    private SWC.Button? _clearButton;
     private bool _isRecording;
     private HotkeyModifiers _capturedModifiers;
     private KeyboardKey _capturedKey;
+
+    public IHotkeyBroker? Broker { get; set; }
+
+    /// <summary>用户通过录制或清除改变了热键（而非初始化赋值）</summary>
+    public event EventHandler<HotkeyCombo>? HotkeyChangedByUser;
+
+    /// <summary>用于自冲突检测：由父窗口设置"对方"的当前热键</summary>
+    public HotkeyCombo OtherHotkey
+    {
+        get => (HotkeyCombo)GetValue(OtherHotkeyProperty);
+        set => SetValue(OtherHotkeyProperty, value);
+    }
+
+    public static readonly DependencyProperty OtherHotkeyProperty =
+        DependencyProperty.Register(
+            nameof(OtherHotkey),
+            typeof(HotkeyCombo),
+            typeof(HotkeyRecorder),
+            new FrameworkPropertyMetadata(new HotkeyCombo(), OnOtherHotkeyChanged));
+
+    private static void OnOtherHotkeyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is HotkeyRecorder hr)
+        {
+            hr.RunProbe();
+        }
+    }
+
+    public HotkeyProbeStatus ProbeStatus
+    {
+        get => (HotkeyProbeStatus)GetValue(ProbeStatusProperty);
+        set => SetValue(ProbeStatusProperty, value);
+    }
+
+    public static readonly DependencyProperty ProbeStatusProperty =
+        DependencyProperty.Register(
+            nameof(ProbeStatus),
+            typeof(HotkeyProbeStatus),
+            typeof(HotkeyRecorder),
+            new FrameworkPropertyMetadata(HotkeyProbeStatus.Unknown, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
+
+    public string StatusMessage
+    {
+        get => (string)GetValue(StatusMessageProperty);
+        set => SetValue(StatusMessageProperty, value);
+    }
+
+    public static readonly DependencyProperty StatusMessageProperty =
+        DependencyProperty.Register(
+            nameof(StatusMessage),
+            typeof(string),
+            typeof(HotkeyRecorder),
+            new FrameworkPropertyMetadata(string.Empty));
 
     public static readonly DependencyProperty HotkeyProperty =
         DependencyProperty.Register(
@@ -32,6 +97,7 @@ public class HotkeyRecorder : SWC.Control
         if (d is HotkeyRecorder hr)
         {
             hr.UpdateDisplay();
+            hr.RunProbe();
         }
     }
 
@@ -46,12 +112,16 @@ public class HotkeyRecorder : SWC.Control
 
         _textBox = GetTemplateChild("PART_TextBox") as SWC.TextBox;
         _recordButton = GetTemplateChild("PART_RecordButton") as SWC.Button;
+        _clearButton = GetTemplateChild("PART_ClearButton") as SWC.Button;
 
         if (_textBox != null)
         {
+            _textBox.IsReadOnly = true;
             _textBox.PreviewKeyDown += TextBox_PreviewKeyDown;
-            _textBox.GotFocus += (s, e) => StartRecording();
-            _textBox.LostFocus += (s, e) => StopRecording();
+            // 注意：GotFocus 不再自动进入录制模式——之前的实现会导致 Tab 路过或窗体打开
+            // 时焦点落到录制框，录制模式吞掉所有键盘输入（表现为"数字键1无法正常使用"）。
+            // 现在只允许用户显式点击"录制"按钮才开始捕获。
+            _textBox.GotFocus += (s, e) => _textBox.SelectAll();
         }
 
         if (_recordButton != null)
@@ -59,7 +129,46 @@ public class HotkeyRecorder : SWC.Control
             _recordButton.Click += RecordButton_Click;
         }
 
+        if (_clearButton != null)
+        {
+            _clearButton.Click += ClearButton_Click;
+        }
+
+        // 支持录制鼠标侧键（XButton1 / XButton2）——仅在录制模式下生效
+        PreviewMouseDown += Control_PreviewMouseDown;
+
         UpdateDisplay();
+        RunProbe();
+    }
+
+    private void Control_PreviewMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        KeyboardKey mouseKey = e.ChangedButton switch
+        {
+            System.Windows.Input.MouseButton.XButton1 => KeyboardKey.XButton1,
+            System.Windows.Input.MouseButton.XButton2 => KeyboardKey.XButton2,
+            _ => KeyboardKey.None
+        };
+
+        if (mouseKey == KeyboardKey.None)
+            return;
+
+        e.Handled = true;
+
+        if (!_isRecording)
+            return;
+
+        CommitHotkey(mouseKey);
+    }
+
+    private void ClearButton_Click(object sender, RoutedEventArgs e)
+    {
+        var cleared = new HotkeyCombo(HotkeyModifiers.None, KeyboardKey.None);
+        Hotkey = cleared;
+        ProbeStatus = HotkeyProbeStatus.Invalid;
+        StatusMessage = "未设置";
+        UpdateDisplay();
+        HotkeyChangedByUser?.Invoke(this, cleared);
     }
 
     private void RecordButton_Click(object sender, RoutedEventArgs e)
@@ -94,13 +203,33 @@ public class HotkeyRecorder : SWC.Control
 
     private void TextBox_PreviewKeyDown(object sender, SWI.KeyEventArgs e)
     {
-        e.Handled = true;
-
+        // 只有录制模式下才吞按键；非录制模式要允许键盘事件正常通过（否则 Tab 切换焦点、
+        // 输入框数字/字母全部被吞，表现为"键盘按1没反应"等严重问题）
         if (!_isRecording)
             return;
 
+        e.Handled = true;
+
         var wpfKey = e.Key == SWI.Key.System ? e.SystemKey : e.Key;
 
+        KeyboardKey key = MapWpfKeyToKeyboardKey(wpfKey);
+
+        if (key == KeyboardKey.None)
+            return;
+
+        if (IsModifierKey(key))
+        {
+            _capturedModifiers = CurrentModifiers();
+            _capturedKey = KeyboardKey.None;
+            _textBox!.Text = FormatHotkey(_capturedModifiers, KeyboardKey.None);
+            return;
+        }
+
+        CommitHotkey(key);
+    }
+
+    private HotkeyModifiers CurrentModifiers()
+    {
         var modifiers = HotkeyModifiers.None;
         if (SWI.Keyboard.Modifiers.HasFlag(SWI.ModifierKeys.Control))
             modifiers |= HotkeyModifiers.Ctrl;
@@ -110,27 +239,38 @@ public class HotkeyRecorder : SWC.Control
             modifiers |= HotkeyModifiers.Shift;
         if (SWI.Keyboard.Modifiers.HasFlag(SWI.ModifierKeys.Windows))
             modifiers |= HotkeyModifiers.Win;
+        return modifiers;
+    }
 
-        KeyboardKey key = MapWpfKeyToKeyboardKey(wpfKey);
-
-        if (key == KeyboardKey.None)
-            return;
-
-        if (key == KeyboardKey.ControlKey || key == KeyboardKey.ShiftKey ||
-            key == KeyboardKey.Menu || key == KeyboardKey.LWin || key == KeyboardKey.RWin)
-        {
-            _capturedModifiers = modifiers;
-            _capturedKey = KeyboardKey.None;
-            _textBox!.Text = FormatHotkey(modifiers, KeyboardKey.None);
-            return;
-        }
-
-        _capturedModifiers = modifiers;
+    private void CommitHotkey(KeyboardKey key)
+    {
+        _capturedModifiers = CurrentModifiers();
         _capturedKey = key;
 
-        Hotkey = new HotkeyCombo(modifiers, key);
+        var newCombo = new HotkeyCombo(_capturedModifiers, key);
+        Hotkey = newCombo;
 
         StopRecording();
+        HotkeyChangedByUser?.Invoke(this, newCombo);
+    }
+
+    /// <summary>
+    /// 判断是否为修饰键（含左右侧变体）。WPF 发送的是 LeftCtrl/RightCtrl 等，
+    /// 而非通用 ControlKey/ShiftKey/Menu，因此需全部覆盖。
+    /// </summary>
+    private static bool IsModifierKey(KeyboardKey key)
+    {
+        return key == KeyboardKey.ControlKey ||
+               key == KeyboardKey.ShiftKey ||
+               key == KeyboardKey.Menu ||
+               key == KeyboardKey.LeftCtrl ||
+               key == KeyboardKey.RightCtrl ||
+               key == KeyboardKey.LeftShift ||
+               key == KeyboardKey.RightShift ||
+               key == KeyboardKey.LeftAlt ||
+               key == KeyboardKey.RightAlt ||
+               key == KeyboardKey.LWin ||
+               key == KeyboardKey.RWin;
     }
 
     private void UpdateDisplay()
@@ -139,6 +279,57 @@ public class HotkeyRecorder : SWC.Control
             return;
 
         _textBox.Text = FormatHotkey(Hotkey.Modifiers, Hotkey.Key);
+    }
+
+    private void RunProbe()
+    {
+        // 未设置
+        if (Hotkey.Key == KeyboardKey.None)
+        {
+            ProbeStatus = HotkeyProbeStatus.Unknown;
+            StatusMessage = string.Empty;
+            return;
+        }
+
+        // 自冲突：与 OtherHotkey 完全相同
+        var other = OtherHotkey;
+        if (other.Key != KeyboardKey.None &&
+            other.Modifiers == Hotkey.Modifiers &&
+            other.Key == Hotkey.Key)
+        {
+            ProbeStatus = HotkeyProbeStatus.SelfConflict;
+            StatusMessage = "与另一热键相同";
+            return;
+        }
+
+        // 修饰键单独存在
+        if (IsModifierKey(Hotkey.Key))
+        {
+            ProbeStatus = HotkeyProbeStatus.Invalid;
+            StatusMessage = "仅修饰键无效";
+            return;
+        }
+
+        // 外部冲突探测
+        if (Broker != null)
+        {
+            bool ok = Broker.Probe(Hotkey.Modifiers, Hotkey.Key);
+            if (ok)
+            {
+                ProbeStatus = HotkeyProbeStatus.Available;
+                StatusMessage = "可用";
+            }
+            else
+            {
+                ProbeStatus = HotkeyProbeStatus.ExternalConflict;
+                StatusMessage = "已被占用";
+            }
+        }
+        else
+        {
+            ProbeStatus = HotkeyProbeStatus.Unknown;
+            StatusMessage = string.Empty;
+        }
     }
 
     public static string FormatHotkey(HotkeyModifiers mods, KeyboardKey key)
@@ -202,6 +393,8 @@ public class HotkeyRecorder : SWC.Control
             KeyboardKey.OemPipe => "\\",
             KeyboardKey.OemCloseBrackets => "]",
             KeyboardKey.OemQuotes => "'",
+            KeyboardKey.XButton1 => "鼠标侧键1",
+            KeyboardKey.XButton2 => "鼠标侧键2",
             KeyboardKey.None => "",
             _ => key.ToString()
         };

@@ -1,9 +1,11 @@
 using System.Threading;
 using System.Windows.Interop;
+using Microsoft.Extensions.Options;
 using QuickTranslate.App.Services;
 using QuickTranslate.App.Windows;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Geometry;
+using QuickTranslate.Core.Options;
 using QuickTranslate.Core.Selection;
 using QuickTranslate.Core.Translation;
 using QuickTranslate.Platform.Win32;
@@ -52,12 +54,17 @@ public class PopupDipLayoutTests
                     DpiY: dpi,
                     IsPrimary: true);
                 var monitorSvc = new FakeMonitorServiceForPopup(fakeMonitor);
-                var service = new WpfWordPopupService(dpiMapper, monitorSvc);
+                var service = new WpfWordPopupService(dpiMapper, monitorSvc, Options.Create(new AppSettings()));
 
                 var anchorBox = new PhysicalRect(500, 500, 100, 30);
+                // 期望尺寸与实现同源（PopupSizeEstimator），避免测试与布局逻辑脱节
+                var (expWDip, expHDip) = PopupSizeEstimator.EstimateWordPopupSize(
+                    "hello", "你好",
+                    fakeMonitor.WorkArea.Width * 96.0 / dpi,
+                    fakeMonitor.WorkArea.Height * 96.0 / dpi);
                 var popupPreferredSize = new PhysicalSize(
-                    (int)Math.Round(320.0 * dpi / 96.0),
-                    (int)Math.Round(150.0 * dpi / 96.0));
+                    (int)Math.Round(expWDip * dpi / 96.0),
+                    (int)Math.Round(expHDip * dpi / 96.0));
                 var expectedPhysical = PopupPlacement.Place(anchorBox, fakeMonitor.WorkArea, popupPreferredSize);
 
                 service.Show(MakeSel(anchorBox), MakeTrans(), fakeMonitor.Id, anchorBox, dpiX: dpi, dpiY: dpi);
@@ -125,10 +132,16 @@ public class PopupDipLayoutTests
                     DpiY: dpi,
                     IsPrimary: true);
                 var monitorSvc = new FakeMonitorServiceForPopup(fakeMonitor);
-                var service = new WpfWordPopupService(dpiMapper, monitorSvc);
+                var service = new WpfWordPopupService(dpiMapper, monitorSvc, Options.Create(new AppSettings()));
 
                 var anchorBox = new PhysicalRect(100, 100, 100, 30);
-                var popupPreferredSize = new PhysicalSize(320, 150);
+                var (expWDip2, expHDip2) = PopupSizeEstimator.EstimateWordPopupSize(
+                    "hello", "你好",
+                    fakeMonitor.WorkArea.Width * 96.0 / dpi,
+                    fakeMonitor.WorkArea.Height * 96.0 / dpi);
+                var popupPreferredSize = new PhysicalSize(
+                    (int)Math.Round(expWDip2 * dpi / 96.0),
+                    (int)Math.Round(expHDip2 * dpi / 96.0));
                 var expectedPhysical = PopupPlacement.Place(anchorBox, fakeMonitor.WorkArea, popupPreferredSize);
 
                 service.Show(MakeSel(anchorBox), MakeTrans(), fakeMonitor.Id, anchorBox, dpiX: dpi, dpiY: dpi);
