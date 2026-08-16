@@ -56,9 +56,22 @@ public class MockOcrEngine : IOcrEngine
                 "Alt+2 selects a paragraph block near the cursor."
             };
 
+            // ScreenFrame.Region 是屏幕绝对坐标（GdiScreenCapture 以 cursor 为中心截取）。
+            // MockOcrEngine 原本输出局部 (0-based) 坐标，导致 WordSelector/BlockSelector 拿绝对坐标的
+            // anchor（鼠标位置）比对时永远 miss → NoTextFound → HideAll → 用户以为 "按了没反应"。
+            // 修复：
+            //   1) 所有 Box 改为屏幕绝对坐标；
+            //   2) 5 行硬编码文本围绕 frame.Region 中心垂直排布，保证 anchor（frame 中心附近）
+            //      一定落在至少一行内，从而整条链路（识别 → 选词 → 翻译 → 气泡）可以被完整触发。
             int frameWidth = frame.Region.Width > 0 ? frame.Region.Width : 1920;
             int frameHeight = frame.Region.Height > 0 ? frame.Region.Height : 1080;
-            int lineHeight = frameHeight / Math.Max(lineTexts.Length + 1, 1);
+            int frameLeft = frame.Region.Left;
+            int frameTop = frame.Region.Top;
+            int centerY = frameTop + frameHeight / 2;
+
+            int lineSpacing = Math.Max(frameHeight / (lineTexts.Length + 2), 32);
+            int totalBlockHeight = lineSpacing * (lineTexts.Length - 1);
+            int firstLineCenterY = centerY - totalBlockHeight / 2;
 
             for (int lineIdx = 0; lineIdx < lineTexts.Length; lineIdx++)
             {
@@ -66,11 +79,17 @@ public class MockOcrEngine : IOcrEngine
                 var wordTokens = lineText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 var words = new List<OcrWord>();
 
-                int lineTop = lineIdx * lineHeight + 10;
-                int lineBottom = lineTop + lineHeight - 20;
-                int totalWidth = frameWidth - 40;
-                int charWidth = wordTokens.Sum(w => w.Length);
-                int currentX = 20;
+                int lineCenterY = firstLineCenterY + lineIdx * lineSpacing;
+                int lineTextHeight = Math.Max(lineSpacing - 10, 22);
+                int lineTop = lineCenterY - lineTextHeight / 2;
+                int lineBottom = lineTop + lineTextHeight;
+
+                // 水平内边距 20px（相对 frame 左边界）
+                int contentLeft = frameLeft + 20;
+                int contentRight = frameLeft + frameWidth - 20;
+                int totalWidth = Math.Max(contentRight - contentLeft, 50);
+                int charWidth = Math.Max(wordTokens.Sum(w => w.Length), 1);
+                int currentX = contentLeft;
 
                 for (int wIdx = 0; wIdx < wordTokens.Length; wIdx++)
                 {
@@ -78,7 +97,7 @@ public class MockOcrEngine : IOcrEngine
                     int wordWidth = (int)Math.Round((double)word.Length / charWidth * totalWidth);
                     if (wIdx == wordTokens.Length - 1)
                     {
-                        wordWidth = (frameWidth - 20) - currentX;
+                        wordWidth = contentRight - currentX;
                     }
 
                     var wordBox = new PhysicalRect(
@@ -92,9 +111,9 @@ public class MockOcrEngine : IOcrEngine
                 }
 
                 var lineBox = new PhysicalRect(
-                    X: 10,
+                    X: contentLeft - 10,
                     Y: lineTop,
-                    Width: frameWidth - 20,
+                    Width: (contentRight + 10) - (contentLeft - 10),
                     Height: lineBottom - lineTop);
 
                 lines.Add(new OcrLine(lineBox, words, lineText, 0f));

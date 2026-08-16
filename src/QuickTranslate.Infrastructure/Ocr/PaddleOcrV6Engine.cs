@@ -45,8 +45,17 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         {
             Path.Combine(_appDataProvider.GetAppDataDirectory(), "models"),
             Path.Combine(AppContext.BaseDirectory, "assets", "models"),
-            @"E:\翻译\assets\models"
         };
+
+        // 开发辅助：允许从本机仓库固定位置加载模型，避免每次发布时复制。
+        // 测试 / CI 等无头环境可设置 QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS=1
+        // 跳过本机硬编码路径，确保 MissingModels 等测试的行为可预测。
+        const string disableDevEnv = "QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS";
+        var skipDevPaths = Environment.GetEnvironmentVariable(disableDevEnv);
+        if (!string.Equals(skipDevPaths, "1", StringComparison.Ordinal))
+        {
+            candidateDirs.Add(@"E:\翻译\assets\models");
+        }
 
         foreach (var dir in candidateDirs)
         {
@@ -56,6 +65,22 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 _modelReady = true;
                 _logger.LogInformation("PP-OCRv6 models found in {ModelDir}", dir);
                 break;
+            }
+
+            // 详细 Debug 级日志：列出每个候选路径的命中情况及缺失文件，便于用户在 DebugLogging 打开时快速定位
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                if (!Directory.Exists(dir))
+                {
+                    _logger.LogDebug("PP-OCRv6 model dir {Dir} skipped: directory does not exist", dir);
+                }
+                else
+                {
+                    var required = new[] { "det.onnx", "rec.onnx", "ppocr_keys.txt" };
+                    var missing = required.Where(f => !File.Exists(Path.Combine(dir, f))).ToList();
+                    _logger.LogDebug("PP-OCRv6 model dir {Dir} skipped: missing files = {Missing}", dir,
+                        missing.Count == 0 ? "(none)" : string.Join(", ", missing));
+                }
             }
         }
 
@@ -124,6 +149,32 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                     {
                         var lines = await File.ReadAllLinesAsync(dictPath);
                         holder.CharDictionary = BuildCharDictionary(lines);
+
+                        // 诊断：字典长度必须等于 rec 输出类别数（blank + 字符 + 空格）。
+                        // 不一致（例如 v6 模型误配 ppocr_keys_v1.txt）时 CTC 解码必然全错。
+                        try
+                        {
+                            var outMeta = holder.RecSession.OutputMetadata.Values.First();
+                            var dims = outMeta.Dimensions;
+                            int classCount = dims != null && dims.Length > 0 ? dims[dims.Length - 1] : -1;
+                            if (classCount > 0 && classCount != holder.CharDictionary.Length)
+                            {
+                                _logger.LogWarning(
+                                    "OCR dictionary/model mismatch: dict labels={DictLen} but rec output classes={ClassCount}. " +
+                                    "Recognition will be garbage. ppocr_keys.txt must match the rec.onnx model ({ModelDir}).",
+                                    holder.CharDictionary.Length, classCount, _modelsDirectory);
+                            }
+                            else if (classCount > 0)
+                            {
+                                _logger.LogInformation(
+                                    "OCR dictionary OK: {DictLen} labels = rec output classes {ClassCount}",
+                                    holder.CharDictionary.Length, classCount);
+                            }
+                        }
+                        catch (Exception metaEx)
+                        {
+                            _logger.LogDebug(metaEx, "Could not read rec output metadata for dictionary size check");
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -147,23 +198,28 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
     private static string[] BuildCharDictionary(string[] rawLines)
     {
-        // ppocr_keys.txt: first line is blank space index, then each char on its own line
-        // Standard format: line N => character for label N
-        var list = new List<string>(rawLines.Length + 1) { " " }; // index 0 is space (CTC blank is last)
-        foreach (var line in rawLines)
+        // PP-OCR CTC 标签布局（与 PaddleOCR CTCLabelDecode 一致）：
+        //   label 0        = blank（不输出字符）
+        //   label 1..N     = 字典文件第 1..N 行（每行一个字符）
+        //   label N+1(末位) = 空格（use_space_char=True 追加在末尾）
+        // rec.onnx 输出类别数 C = N + 2（v6 medium: 18708 + 2 = 18710）。
+        // 历史 Bug：旧实现把空格插在首位且假设 blank 在末尾，导致所有字符
+        // 按字典整体偏移一位被解码成相邻字符（识别结果全是乱码/错字）。
+        var list = new List<string>(rawLines.Length + 2) { string.Empty }; // index 0: blank 占位
+        foreach (var rawLine in rawLines)
         {
-            if (string.IsNullOrWhiteSpace(line))
+            // 字典行即字符本身；仅剥离 BOM 与行尾符，内容中的空白（如全角空格）必须原样保留
+            var line = rawLine.TrimEnd('\r', '\n');
+            if (line.Length > 0 && line[0] == '﻿')
             {
-                list.Add(" ");
+                line = line.Substring(1);
             }
-            else
-            {
-                // Some key files have tab-separated index\tchar
-                var tab = line.IndexOf('\t');
-                var ch = tab >= 0 ? line.Substring(tab + 1) : line;
-                list.Add(ch.Length == 0 ? " " : ch);
-            }
+            // 兼容 "index\tchar" 格式的字典文件（若有）；空行保留为空条目以维持标签对齐
+            var tab = line.IndexOf('\t');
+            var ch = tab >= 0 ? line.Substring(tab + 1) : line;
+            list.Add(ch);
         }
+        list.Add(" "); // 末位：空格类
         return list.ToArray();
     }
 
@@ -236,6 +292,14 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 frame.Region.Width, frame.Region.Height);
             var detectorElapsed = sw.Elapsed - detectorStart;
 
+            // 诊断日志：检测框原始尺寸（定位框太扁/偏离问题）
+            _logger.LogDebug("DetBoxes: count={Count} frameRegion=({RX},{RY},{RW}x{RH})",
+                detBoxes.Count, frame.Region.X, frame.Region.Y, frame.Region.Width, frame.Region.Height);
+            foreach (var db in detBoxes)
+            {
+                _logger.LogDebug("  DetBox: ({X},{Y},{W}x{H})", db.X, db.Y, db.Width, db.Height);
+            }
+
             ct.ThrowIfCancellationRequested();
 
             // ===== CLASSIFIER + RECOGNIZER (per box) =====
@@ -247,6 +311,17 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             {
                 ct.ThrowIfCancellationRequested();
                 var box = detBoxes[lineIdx];
+
+                // detBoxes 是截图位图内的 0-based 局部坐标（DbPostprocess 按位图尺寸计算）。
+                // 而 WordSelector 用屏幕绝对坐标的鼠标比对，若直接返回局部坐标将永远 miss →
+                // “未检测到可翻译的单词 / 单词识别不可用”。因此：
+                //   - CropBitmap 用局部 box（它相对 frame.Bitmap 裁剪）；
+                //   - OcrLine/OcrWord 用平移到屏幕绝对坐标的 screenBox（frame.Region 是屏幕坐标）。
+                var screenBox = new PhysicalRect(
+                    box.X + frame.Region.X,
+                    box.Y + frame.Region.Y,
+                    box.Width,
+                    box.Height);
 
                 // Crop line image from original bitmap
                 using var lineBmp = CropBitmap(frame.Bitmap, box);
@@ -277,9 +352,21 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
                     if (!string.IsNullOrWhiteSpace(recText))
                     {
-                        // Build words from text (simple split by whitespace for Latin; single chars for CJK)
-                        var words = BuildWords(recText, box, lineIdx);
-                        var ocrLine = new OcrLine(box, words, recText, clsAngle);
+                        // 词框解析策略（spec 8.3）：优先垂直投影精确词框（空白间隔/垂直投影），
+                        // 段数与 token 数不一致（CJK 混排、噪声等）时回退加权比例法（字符区间估计）。
+                        IReadOnlyList<OcrWord> words;
+                        if (ProjectionWordSegmenter.TrySegment(
+                                recSource, recText, box, frame.Region, clsNeedRotate, lineIdx, out var projWords))
+                        {
+                            words = projWords;
+                            _logger.LogDebug("WordBox: strategy=projection words={Count} line={Idx}", projWords.Count, lineIdx);
+                        }
+                        else
+                        {
+                            words = BuildWords(recText, screenBox, lineIdx);
+                            _logger.LogDebug("WordBox: strategy=proportional words={Count} line={Idx}", words.Count, lineIdx);
+                        }
+                        var ocrLine = new OcrLine(screenBox, words, recText, clsAngle);
                         lines.Add(ocrLine);
                     }
                 }
@@ -380,7 +467,10 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             resized.UnlockBits(bmpData);
         }
 
-        // HWC (BGRA32) -> CHW (RGB normalized)
+        // HWC (BGRA32) -> CHW，通道顺序 BGR（与 PaddleOCR DecodeImage img_mode=BGR 一致）。
+        // 注意：PaddleOCR 对 BGR 图像直接按 [0.485, 0.456, 0.406] 逐通道归一化，
+        // 即 B 通道用 0.485、R 通道用 0.406（历史怪癖，勿“修正”成 RGB 顺序，
+        // 否则与模型训练分布不符，检测框召回率明显下降）。
         var chw = new float[3 * inputH * inputW];
         int hw = inputH * inputW;
         for (int y = 0; y < inputH; y++)
@@ -390,9 +480,9 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 int idx = (y * inputW + x) * 4;
                 byte b = bytes[idx], g = bytes[idx + 1], r = bytes[idx + 2];
                 int chwIdx = y * inputW + x;
-                chw[chwIdx] = ((r / 255f) - DetMean[0]) / DetStd[0];           // R
+                chw[chwIdx] = ((b / 255f) - DetMean[0]) / DetStd[0];           // B
                 chw[hw + chwIdx] = ((g / 255f) - DetMean[1]) / DetStd[1];      // G
-                chw[2 * hw + chwIdx] = ((b / 255f) - DetMean[2]) / DetStd[2];  // B
+                chw[2 * hw + chwIdx] = ((r / 255f) - DetMean[2]) / DetStd[2];  // R
             }
         }
 
@@ -435,8 +525,10 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         int origW, int origH)
     {
         // Simple DB threshold + box extraction
-        const float thresh = 0.3f;
-        const float boxThresh = 0.5f;
+        // 阈值与 PP-OCRv6_medium_det inference.yml 的 DBPostProcess 一致：
+        // thresh=0.2, box_thresh=0.45, unclip_ratio=1.4
+        const float thresh = 0.2f;
+        const float boxThresh = 0.45f;
         const int minSize = 3;
 
         // 1. Threshold: create binary mask
@@ -514,17 +606,91 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 int rx2 = (int)Math.Round((maxX + 1) * predScaleX / scaleW);
                 int ry2 = (int)Math.Round((maxY + 1) * predScaleY / scaleH);
 
-                // Expand slightly
-                int expand = 2;
-                rx1 = Math.Max(0, rx1 - expand);
-                ry1 = Math.Max(0, ry1 - expand);
-                rx2 = Math.Min(origW, rx2 + expand);
-                ry2 = Math.Min(origH, ry2 + expand);
+                // Unclip: PP-OCR standard expands box around its centroid.
+                // DB threshold yields a tight pixel-stroke bounding box (e.g. 9-13px height
+                // for 24px text). Standard formula (per PaddleOCR ppocr/postprocess/db_postprocess.py):
+                //   perimeter = 2*(w+h), area = w*h, dist = area * unclip_ratio / perimeter
+                // unclip_ratio=1.4 与 inference.yml DBPostProcess 一致。
+                int w0 = rx2 - rx1, h0 = ry2 - ry1;
+                if (w0 <= 0 || h0 <= 0) continue;
+                float perimeter = 2f * (w0 + h0);
+                float area = (float)w0 * h0;
+                float unclipRatio = 1.4f;
+                float dist = (area * unclipRatio) / Math.Max(perimeter, 1f);
+                int dx = (int)Math.Round(dist);
+                int dy = (int)Math.Round(dist);
+                // Minimum vertical expansion: ensure we cover at least a typical glyph margin.
+                // For very thin boxes (h=6-12px) the dist formula still gives a small value,
+                // so clamp dy to at least half the original height to guarantee expansion.
+                int minDy = (int)Math.Round(h0 * 0.75);
+                dy = Math.Max(dy, minDy);
+                rx1 = Math.Max(0, rx1 - dx);
+                ry1 = Math.Max(0, ry1 - dy);
+                rx2 = Math.Min(origW, rx2 + dx);
+                ry2 = Math.Min(origH, ry2 + dy);
 
                 int w = rx2 - rx1, h = ry2 - ry1;
                 if (w <= 0 || h <= 0) continue;
                 boxes.Add(new PhysicalRect(rx1, ry1, w, h));
             }
+        }
+
+        // Merge vertically-overlapping boxes that belong to the same text line.
+        // Flood-fill tends to fragment a single line into multiple thin slivers;
+        // merge any two boxes whose vertical ranges overlap significantly.
+        boxes.Sort((a, b) =>
+        {
+            int dx = a.X.CompareTo(b.X);
+            if (dx != 0) return dx;
+            return a.Y.CompareTo(b.Y);
+        });
+
+        var merged = new List<PhysicalRect>();
+        foreach (var b in boxes)
+        {
+            bool absorbed = false;
+            for (int i = 0; i < merged.Count; i++)
+            {
+                var m = merged[i];
+                // Vertical overlap ratio
+                int vInt = Math.Min(b.Bottom, m.Bottom) - Math.Max(b.Y, m.Y);
+                int vMin = Math.Min(b.Height, m.Height);
+                if (vInt > vMin * 0.3)
+                {
+                    // Same line → union
+                    int nx1 = Math.Min(m.X, b.X);
+                    int ny1 = Math.Min(m.Y, b.Y);
+                    int nx2 = Math.Max(m.Right, b.Right);
+                    int ny2 = Math.Max(m.Bottom, b.Bottom);
+                    merged[i] = new PhysicalRect(nx1, ny1, nx2 - nx1, ny2 - ny1);
+                    absorbed = true;
+                    break;
+                }
+            }
+            if (!absorbed) merged.Add(b);
+        }
+        boxes = merged;
+
+        // Final vertical normalize: DB flood-fill components are tight stroke boxes.
+        // After merge each line's box is still vertically under-sized (e.g. 17px for 30px text).
+        // Normalize each box's height to roughly 0.055x the frame's height (≈30px for 540p
+        // capture), which matches common body text on screen, but cap to a sensible range.
+        const double targetRatio = 0.06; // 6% of frame height ≈ typical line gap
+        double baselineLineH = origH * targetRatio;
+        int minH = Math.Max(18, (int)Math.Round(baselineLineH * 0.6));
+        int maxH = Math.Max(60, (int)Math.Round(baselineLineH * 2.0));
+
+        for (int i = 0; i < boxes.Count; i++)
+        {
+            var b = boxes[i];
+            if (b.Height >= minH && b.Height <= maxH) continue;
+            int h = Math.Clamp(b.Height, minH, maxH);
+            int cy = b.Y + b.Height / 2;
+            int ny1 = cy - h / 2;
+            int ny2 = ny1 + h;
+            ny1 = Math.Max(0, ny1);
+            ny2 = Math.Min(origH, ny2);
+            boxes[i] = new PhysicalRect(b.X, ny1, b.Width, ny2 - ny1);
         }
 
         // Sort by Y, then X (reading order)
@@ -604,14 +770,20 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
     private static readonly float[] RecStd = new[] { 0.5f, 0.5f, 0.5f };
     private const int RecH = 48;
     private const int RecMinW = 48;
-    private const int RecMaxW = 320;
+    // 模型导出为动态宽度（TRT 配置最大 3200）。官方静态推理用 320 + 补黑，
+    // 但超宽行压缩到 320 会失真；这里放宽到 1280 保证长句纵横比不失真。
+    private const int RecMaxW = 1280;
 
     private static (float[] Input, int Width) PreprocessRec(Bitmap src)
     {
-        // Height fixed to RecH; width scaled proportionally, clamped + multiple of 4
+        // 高度固定 RecH，宽度按纵横比缩放（与 PaddleOCR RecResizeImg 一致），
+        // 右侧不足部分保留黑色背景。历史 Bug：宽行被等比“压缩”到 320 宽，
+        // 纵横比失真导致长句识别错误率暴涨——这里绝不能拉伸。
+        // 官方训练 image_shape 为 3x48x320，超宽行 clamp 到 RecMaxW 并右侧补黑
+        // （CTC 对补黑时间步输出 blank，无副作用）。
         float ratio = (float)RecH / src.Height;
-        int targetW = (int)Math.Round(src.Width * ratio);
-        targetW = Math.Max(RecMinW, Math.Min(RecMaxW, targetW));
+        int naturalW = (int)Math.Round(src.Width * ratio);
+        int targetW = Math.Clamp(naturalW, RecMinW, RecMaxW);
         targetW = (targetW + 3) / 4 * 4;
 
         using var resized = new Bitmap(targetW, RecH, PixelFormat.Format32bppArgb);
@@ -619,7 +791,9 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         {
             g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
             g.Clear(Color.Black);
-            g.DrawImage(src, new Rectangle(0, 0, targetW, RecH), 0, 0, src.Width, src.Height, GraphicsUnit.Pixel);
+            // 按自然比例绘制（不拉伸）；若 naturalW 超过 targetW（clamp 场景）则等比缩到 targetW
+            int drawW = Math.Min(naturalW, targetW);
+            g.DrawImage(src, new Rectangle(0, 0, drawW, RecH), 0, 0, src.Width, src.Height, GraphicsUnit.Pixel);
         }
 
         var bytes = new byte[targetW * RecH * 4];
@@ -664,8 +838,9 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
     private static string CtcGreedyDecode(float[] probs, int T, int C, string[] dict)
     {
-        // blank class index = C - 1
-        int blankIdx = C - 1;
+        // PaddleOCR CTC 布局：blank 固定在 index 0，字典字符从 1 开始，空格在末位 C-1。
+        // dict 数组由 BuildCharDictionary 按同一布局构建（dict[i] 即 label i 的字符）。
+        int blankIdx = 0;
         var sb = new System.Text.StringBuilder();
         int prevIdx = -1;
 
@@ -682,13 +857,9 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
             if (bestIdx != blankIdx && bestIdx != prevIdx)
             {
-                // Map bestIdx to dict. dict index 0 is space (label 1 in raw? careful).
-                // Our BuildCharDictionary inserts " " at index 0, then each raw line => index 1..N.
-                // Blank is at C-1 (usually blank=dict.Count, which matches "blank" class for ppocr rec).
-                int dictIdx = bestIdx;
-                if (dictIdx >= 0 && dictIdx < dict.Length)
+                if (bestIdx >= 0 && bestIdx < dict.Length)
                 {
-                    sb.Append(dict[dictIdx]);
+                    sb.Append(dict[bestIdx]);
                 }
             }
             prevIdx = bestIdx;
@@ -747,37 +918,73 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
         bool IsCjk(char c) => c >= 0x4E00 && c <= 0x9FFF || c >= 0x3400 && c <= 0x4DBF ||
                               c >= 0x3040 && c <= 0x30FF || c >= 0xAC00 && c <= 0xD7AF;
+        bool IsWide(char c) => IsCjk(c) || c >= 0xFF01 && c <= 0xFF60 || c >= 0xFFE0 && c <= 0xFFE6; // 全角标点
 
-        // Split: each CJK char is a word; ASCII sequences grouped by whitespace
-        int charWidth = Math.Max(1, lineBox.Width / text.Length);
+        // 计算比例字符宽度：CJK/全角占 2 份，其他（拉丁、数字、窄标点）占 1 份。
+        // 这样"English中文123"不会被简单 1/N 平分导致每个字符宽度被拉大/压缩。
+        int totalUnits = 0;
+        foreach (char ch in text)
+        {
+            if (char.IsWhiteSpace(ch)) totalUnits += 1;
+            else if (IsWide(ch)) totalUnits += 2;
+            else totalUnits += 1;
+        }
+        if (totalUnits <= 0) totalUnits = text.Length;
+        int unitW = Math.Max(1, lineBox.Width / totalUnits);
+        // 剩余像素让后面的字符吃掉（避免因整除截断在末端留下空隙）
+        int remainder = lineBox.Width - unitW * totalUnits;
+
         int cursorX = lineBox.X;
         int i = 0;
         while (i < text.Length)
         {
             char c = text[i];
-            if (char.IsWhiteSpace(c)) { i++; cursorX += Math.Max(1, charWidth / 2); continue; }
+            if (char.IsWhiteSpace(c))
+            {
+                int w = unitW;
+                if (remainder > 0) { w++; remainder--; }
+                cursorX += w;
+                i++;
+                continue;
+            }
 
             if (IsCjk(c))
             {
-                var wbox = new PhysicalRect(cursorX, lineBox.Y, charWidth, lineBox.Height);
+                int w = unitW * 2;
+                if (remainder > 0) { w++; remainder--; }
+                int x1 = cursorX;
+                int x2 = Math.Min(lineBox.Right, x1 + w);
+                var wbox = new PhysicalRect(x1, lineBox.Y, Math.Max(1, x2 - x1), lineBox.Height);
                 words.Add(new OcrWord(wbox, c.ToString(), 0.85f, lineIdx));
-                cursorX += charWidth;
+                cursorX = x2;
                 i++;
             }
             else
             {
-                // Group a run of non-space non-CJK as one word
+                // Group a run of non-space non-CJK as one word (Latin/numbers/punctuation sequence)
                 int start = i;
-                while (i < text.Length && !char.IsWhiteSpace(text[i]) && !IsCjk(text[i])) i++;
+                int wordUnits = 0;
+                while (i < text.Length && !char.IsWhiteSpace(text[i]) && !IsCjk(text[i]))
+                {
+                    wordUnits += IsWide(text[i]) ? 2 : 1;
+                    i++;
+                }
                 int len = i - start;
                 if (len <= 0) continue;
-                int wordW = charWidth * len;
+
+                int wordW = unitW * wordUnits;
+                if (remainder > 0) { wordW += Math.Min(remainder, wordUnits); remainder -= Math.Min(remainder, wordUnits); }
                 int x1 = cursorX;
-                int x2 = cursorX + wordW;
-                if (x2 > lineBox.Right) { x2 = lineBox.Right; wordW = x2 - x1; }
-                var wbox = new PhysicalRect(x1, lineBox.Y, Math.Max(1, wordW), lineBox.Height);
+                int x2 = Math.Min(lineBox.Right, x1 + wordW);
+                int wordBoxW = Math.Max(1, x2 - x1);
+                // 英文单词：在框内再收缩 5% 左右的左右边距，避免贴到邻词/框边缘
+                int pad = (int)Math.Round(wordBoxW * 0.03);
+                int nx1 = x1 + pad;
+                int nx2 = x2 - pad;
+                if (nx2 - nx1 < 2) { nx1 = x1; nx2 = x2; }
+                var wbox = new PhysicalRect(nx1, lineBox.Y, Math.Max(1, nx2 - nx1), lineBox.Height);
                 words.Add(new OcrWord(wbox, text.Substring(start, len), 0.9f, lineIdx));
-                cursorX = x2 + Math.Max(1, charWidth / 3);
+                cursorX = x2;
             }
         }
         return words;

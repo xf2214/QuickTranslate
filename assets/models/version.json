@@ -31,11 +31,12 @@
   "keys": {
     "name": "ppocr_keys",
     "format": "txt",
-    "version": "ppocr_keys_v1 (6623 lines)",
-    "sha256": "bc011b936a8d76f226f75daeefc99a961b6ce981f7bfcd200334194faa4fe52b",
+    "version": "ppocrv6_dict (18708 chars, extracted from HoVDuc/ppocrv5-onnx v1.1.0 PP-OCRv6_medium_rec_onnx inference.yml)",
+    "sha256": "b5f2bfe2bdd9448429e3e82b51c789775d9b42f2403d082b00662eb77e401c5d",
     "optional": false,
-    "sizeBytes": 26253,
-    "url": "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/main/ppocr/utils/ppocr_keys_v1.txt"
+    "sizeBytes": 74947,
+    "url": "https://github.com/HoVDuc/ppocrv5-onnx/releases/download/v1.1.0/PP-OCRv6_medium_rec_onnx.zip",
+    "note": "rec 模型输出 18710 类 = blank(首位) + 18708 字符 + 空格(末位)。字典必须与 rec.onnx 配套：PP-OCRv6 medium rec 不能配 ppocr_keys_v1.txt(6623行)，否则 CTC 解码全错。"
   },
   "note": "det/rec/keys 为必需文件，cls.onnx 可选。一键下载模型：在项目根执行 powershell -ExecutionPolicy Bypass -File scripts/download-v6-final.ps1。模型缺失时引擎自动降级为 MockOcrEngine（仅用于开发调试）。"
 }

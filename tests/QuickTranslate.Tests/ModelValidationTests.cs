@@ -15,6 +15,10 @@ using Xunit.Abstractions;
 
 namespace QuickTranslate.Tests;
 
+// 与 OcrEngineFallbackTests / WarmUpOnceTests 共享集合，串行执行：
+// 这些测试依赖进程级环境变量 QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS 切换模型路径，
+// 并行执行会互相污染（一处置 1 会让另一处认为模型缺失 / 存在）。
+[Collection("OcrModelTests")]
 public class ModelValidationTests
 {
     private readonly ITestOutputHelper _out;
@@ -50,7 +54,15 @@ public class ModelValidationTests
         foreach (var c in candidates)
         {
             var full = Path.GetFullPath(c);
-            if (Directory.Exists(full)) return full;
+            // 目录存在还不够：只有实际包含 onnx 模型才算模型目录
+            // （App 项目的 version.json 会传递复制到测试输出 assets\models\ 下，
+            //  仅按目录存在判断会误命中只含 version.json 的空壳目录）
+            if (Directory.Exists(full) &&
+                File.Exists(Path.Combine(full, "det.onnx")) &&
+                File.Exists(Path.Combine(full, "rec.onnx")))
+            {
+                return full;
+            }
         }
         return Path.GetFullPath(candidates[0]);
     }

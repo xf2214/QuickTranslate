@@ -11,8 +11,25 @@ using Xunit;
 
 namespace QuickTranslate.Tests.Infrastructure;
 
+[Collection("OcrModelTests")]
 public class OcrEngineFallbackTests
 {
+    private const string DisableDevModelPathsEnv = "QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS";
+
+    private static IDisposable PinDevModelPathsDisabled()
+    {
+        var prev = Environment.GetEnvironmentVariable(DisableDevModelPathsEnv);
+        Environment.SetEnvironmentVariable(DisableDevModelPathsEnv, "1");
+        return new Disposable(() => Environment.SetEnvironmentVariable(DisableDevModelPathsEnv, prev));
+    }
+
+    private sealed class Disposable : IDisposable
+    {
+        private readonly Action _restore;
+        public Disposable(Action restore) => _restore = restore;
+        public void Dispose() => _restore();
+    }
+
     private class TestAppDataProvider : IAppDataProvider
     {
         private readonly string _appDataDir;
@@ -62,6 +79,8 @@ public class OcrEngineFallbackTests
 
         try
         {
+            using var _ = PinDevModelPathsDisabled();
+
             var appData = new TestAppDataProvider(tempDir, logDir);
             var sp = BuildServiceProvider(appData);
 
@@ -85,6 +104,8 @@ public class OcrEngineFallbackTests
 
         try
         {
+            using var _ = PinDevModelPathsDisabled();
+
             var appData = new TestAppDataProvider(tempDir, logDir);
             var sp = BuildServiceProvider(appData);
 

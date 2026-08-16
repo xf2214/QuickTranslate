@@ -88,11 +88,21 @@ public class ModelVersionVerifier
             @"E:\翻译\assets\models\version.json"
         };
 
+        // 历史Bug：某个目录只有 version.json 而没有模型文件（例如旧 csproj 把
+        // version.json 复制到 bin\models\），若优先命中它，所有 onnx 均按“缺失”
+        // 处理 → 误报 mismatch。这里优先选择“同目录确实存在模型文件”的候选。
+        string? firstExisting = null;
         foreach (var p in candidates)
         {
-            if (File.Exists(p)) return p;
+            if (!File.Exists(p)) continue;
+            if (firstExisting == null) firstExisting = p;
+            var dir = Path.GetDirectoryName(p)!;
+            if (File.Exists(Path.Combine(dir, "det.onnx")) || File.Exists(Path.Combine(dir, "rec.onnx")))
+            {
+                return p;
+            }
         }
-        return null;
+        return firstExisting;
     }
 
     private bool CheckSha256(ModelAssetInfo? asset, string modelsDir)
@@ -108,7 +118,10 @@ public class ModelVersionVerifier
         var filePath = Path.Combine(modelsDir, fileName);
         if (!File.Exists(filePath))
         {
-            return asset.Optional;
+            // 该目录没有此文件 ≠ 文件损坏：引擎会在多个候选目录中查找模型。
+            // 缺失只记录调试日志，不算校验失败（否则会误报 fallback 警告）。
+            _logger.LogDebug("[ModelVersion] {Asset} not present in {Dir}; skip sha check", asset.Name, modelsDir);
+            return true;
         }
 
         try

@@ -8,8 +8,25 @@ using Xunit;
 
 namespace QuickTranslate.Tests.Infrastructure;
 
+[Collection("OcrModelTests")]
 public class WarmUpOnceTests
 {
+    private const string DisableDevModelPathsEnv = "QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS";
+
+    private static IDisposable PinDevModelPathsDisabled()
+    {
+        var prev = Environment.GetEnvironmentVariable(DisableDevModelPathsEnv);
+        Environment.SetEnvironmentVariable(DisableDevModelPathsEnv, "1");
+        return new Disposable(() => Environment.SetEnvironmentVariable(DisableDevModelPathsEnv, prev));
+    }
+
+    private sealed class Disposable : IDisposable
+    {
+        private readonly Action _restore;
+        public Disposable(Action restore) => _restore = restore;
+        public void Dispose() => _restore();
+    }
+
     private class TestAppDataProvider : IAppDataProvider
     {
         private readonly string _appDataDir;
@@ -51,6 +68,8 @@ public class WarmUpOnceTests
 
         try
         {
+            using var _ = PinDevModelPathsDisabled();
+
             var appData = new TestAppDataProvider(tempDir, logDir);
             var settings = Options.Create(new AppSettings());
             var logger = Substitute.For<ILogger<PaddleOcrV6Engine>>();
