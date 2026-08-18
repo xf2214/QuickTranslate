@@ -115,6 +115,11 @@ public class WpfWordPopupService : IWordPopupService
             }
             window.Show();
         }
+        else
+        {
+            // 已可见时复用：取消进行中的退场动画并复播进场
+            window.ReplayEntry();
+        }
     }
 
     public void ShowError(MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY, string shortMessage, Guid operationId)
@@ -183,6 +188,11 @@ public class WpfWordPopupService : IWordPopupService
             }
             window.Show();
         }
+        else
+        {
+            // 已可见时复用：取消进行中的退场动画并复播进场
+            window.ReplayEntry();
+        }
     }
 
     public void Hide()
@@ -194,7 +204,7 @@ public class WpfWordPopupService : IWordPopupService
     {
         foreach (var kvp in _windows)
         {
-            kvp.Value.window.Hide();
+            kvp.Value.window.HideWithFade();
         }
     }
 
@@ -207,7 +217,7 @@ public class WpfWordPopupService : IWordPopupService
     {
         foreach (var kvp in _windows)
         {
-            kvp.Value.window.Hide();
+            kvp.Value.window.HideWithFade();
         }
     }
 

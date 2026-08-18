@@ -27,6 +27,18 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
     private bool _sessionCreatedRaised;
     private bool _disposed;
 
+    // 同帧 det 结果缓存：触带扩展会对同一截图帧再次调用识别（更宽的焦点带），
+    // det 在全帧上运行、结果与带无关 → 复用可省一次 det（~390ms）。
+    private readonly object _detCacheLock = new();
+    private Bitmap? _detCacheBitmap;
+    private List<PhysicalRect>? _detCacheBoxes;
+    private DateTime _detCacheAtUtc;
+    private const double DetCacheTtlSeconds = 8;
+
+    // 焦点带内最多识别的行数：rec ~95ms/行是主要耗时，块生长实际只会用到
+    // 锚点附近的行，远离光标的行识别了也不会被选中，按到带中心距离取最近 N 行。
+    private const int MaxLinesToRecognize = 12;
+
     public string EngineName => "PP-OCRv6-ONNX";
     public bool IsAvailable => _modelReady;
 
@@ -94,6 +106,33 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         {
             _initTask = new Lazy<Task<InferenceSessionsHolder>>(() => InitializeSessionsAsync(),
                 LazyThreadSafetyMode.ExecutionAndPublication);
+        }
+    }
+
+    private bool TryGetDetCache(Bitmap bitmap, out List<PhysicalRect>? boxes)
+    {
+        lock (_detCacheLock)
+        {
+            if (_detCacheBitmap != null
+                && ReferenceEquals(_detCacheBitmap, bitmap)
+                && _detCacheBoxes != null
+                && (DateTime.UtcNow - _detCacheAtUtc).TotalSeconds <= DetCacheTtlSeconds)
+            {
+                boxes = _detCacheBoxes;
+                return true;
+            }
+        }
+        boxes = null;
+        return false;
+    }
+
+    private void SetDetCache(Bitmap bitmap, List<PhysicalRect> boxes)
+    {
+        lock (_detCacheLock)
+        {
+            _detCacheBitmap = bitmap;
+            _detCacheBoxes = boxes;
+            _detCacheAtUtc = DateTime.UtcNow;
         }
     }
 
@@ -247,7 +286,10 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         }
     }
 
-    public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default)
+    public Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default)
+        => RecognizeAsync(frame, null, ct);
+
+    public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, PhysicalRect? focusBand, CancellationToken ct = default)
     {
         try
         {
@@ -279,18 +321,30 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
             ct.ThrowIfCancellationRequested();
 
-            // ===== PREPROCESS =====
+            // ===== PREPROCESS + DETECTOR（同帧缓存命中时跳过） =====
             var preprocessStart = sw.Elapsed;
-            var (detInput, detScaleW, detScaleH, detInputW, detInputH) = PreprocessDet(frame.Bitmap);
-            var preprocess = sw.Elapsed - preprocessStart;
+            TimeSpan preprocess = TimeSpan.Zero;
+            TimeSpan detectorElapsed = TimeSpan.Zero;
+            List<PhysicalRect> detBoxes;
+            bool detCacheHit = TryGetDetCache(frame.Bitmap, out var cachedBoxes);
+            if (detCacheHit)
+            {
+                detBoxes = cachedBoxes!;
+                _logger.LogDebug("DetCache: hit, reused {Count} det boxes for same frame", detBoxes.Count);
+            }
+            else
+            {
+                var (detInput, detScaleW, detScaleH, detInputW, detInputH) = PreprocessDet(frame.Bitmap);
+                preprocess = sw.Elapsed - preprocessStart;
 
-            ct.ThrowIfCancellationRequested();
+                ct.ThrowIfCancellationRequested();
 
-            // ===== DETECTOR =====
-            var detectorStart = sw.Elapsed;
-            var detBoxes = RunDetector(holder.DetSession, detInput, detInputW, detInputH, detScaleW, detScaleH,
-                frame.Region.Width, frame.Region.Height);
-            var detectorElapsed = sw.Elapsed - detectorStart;
+                var detectorStart = sw.Elapsed;
+                detBoxes = RunDetector(holder.DetSession, detInput, detInputW, detInputH, detScaleW, detScaleH,
+                    frame.Region.Width, frame.Region.Height);
+                detectorElapsed = sw.Elapsed - detectorStart;
+                SetDetCache(frame.Bitmap, detBoxes);
+            }
 
             // 诊断日志：检测框原始尺寸（定位框太扁/偏离问题）
             _logger.LogDebug("DetBoxes: count={Count} frameRegion=({RX},{RY},{RW}x{RH})",
@@ -300,81 +354,156 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 _logger.LogDebug("  DetBox: ({X},{Y},{W}x{H})", db.X, db.Y, db.Width, db.Height);
             }
 
+            // 焦点带过滤：只识别与焦点带垂直相交的行。
+            // Block 截图含大量与目标句子无关的行（工具栏/侧栏/远处代码），全部识别既慢
+            // （每行 rec ~100ms）又给块选择引入噪声。焦点带由调用方按光标位置 ± 若干行高给出。
+            int recognizedTotal = detBoxes.Count;
+            if (focusBand.HasValue)
+            {
+                var fb = focusBand.Value;
+                detBoxes = detBoxes
+                    .Where(b => b.Y + frame.Region.Y < fb.Bottom && b.Bottom + frame.Region.Y > fb.Top)
+                    .ToList();
+                _logger.LogDebug("FocusBand: kept {Kept}/{Total} lines band=({X},{Y},{W}x{H})",
+                    detBoxes.Count, recognizedTotal, fb.X, fb.Y, fb.Width, fb.Height);
+
+                // 近邻优先：带内行多于上限时只识别离带中心（≈光标）最近的行，
+                // 避免把远处工具栏/侧栏的行也跑一遍 rec。
+                if (detBoxes.Count > MaxLinesToRecognize)
+                {
+                    int centerY = fb.Y + fb.Height / 2 - frame.Region.Y;
+                    detBoxes = detBoxes
+                        .OrderBy(b => Math.Abs(b.Y + b.Height / 2 - centerY))
+                        .Take(MaxLinesToRecognize)
+                        .OrderBy(b => b.Y)
+                        .ToList();
+                    _logger.LogDebug("FocusBand: capped to nearest {Cap} lines", MaxLinesToRecognize);
+                }
+            }
+
             ct.ThrowIfCancellationRequested();
 
             // ===== CLASSIFIER + RECOGNIZER (per box) =====
-            var lines = new List<OcrLine>();
+            // 串行执行：ORT 单次推理已用满 CPU 核（AppendExecutionProvider_CPU 默认 intra-op），
+            // 低核数机器上多行并行反而因线程超订导致 RecognizerMs 恶化 3-4 倍（实测 8-16s）。
+            // 提速改由焦点带过滤（减少行数）承担。
+            // 裁剪在主线程顺序完成（System.Drawing.Bitmap 非线程安全）。
+            var lineBmps = new Bitmap?[detBoxes.Count];
+            for (int i = 0; i < detBoxes.Count; i++)
+                lineBmps[i] = CropBitmap(frame.Bitmap, detBoxes[i]);
+
+            var lineResults = new (string? Text, IReadOnlyList<OcrWord> Words, string Strategy, float Angle)[detBoxes.Count];
             var classifierTotal = TimeSpan.Zero;
             var recognizerTotal = TimeSpan.Zero;
 
+            try
+            {
+                for (int lineIdx = 0; lineIdx < detBoxes.Count; lineIdx++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var box = detBoxes[lineIdx];
+                    var lineBmp = lineBmps[lineIdx];
+                    if (lineBmp == null) continue;
+
+                    // ===== CLASSIFIER (optional) =====
+                    var clsStart = sw.Elapsed;
+                    float clsAngle = 0f;
+                    bool clsNeedRotate = false;
+                    if (holder.ClsSession != null)
+                    {
+                        var clsInput = PreprocessCls(lineBmp);
+                        (clsAngle, clsNeedRotate) = RunClassifier(holder.ClsSession, clsInput);
+                    }
+                    classifierTotal += sw.Elapsed - clsStart;
+
+                    Bitmap? orientedBmp = null;
+                    try
+                    {
+                        if (clsNeedRotate) orientedBmp = Rotate180(lineBmp);
+                        var recSource = orientedBmp ?? lineBmp;
+
+                        // ===== RECOGNIZER =====
+                        var recStart = sw.Elapsed;
+                        var recInput = PreprocessRec(recSource);
+                        var recText = RunRecognizer(holder.RecSession, recInput, holder.CharDictionary);
+                        recognizerTotal += sw.Elapsed - recStart;
+
+                        if (string.IsNullOrWhiteSpace(recText)) continue;
+
+                        // 词框解析三级策略（spec 8.3）：
+                        // 1) 垂直投影精确切分（含自适应阈值重试 + 多余段合并修复）；
+                        // 2) 受约束最优切分（DP 在墨水最少处下刀，处理粘连/噪声）；
+                        // 3) 加权比例法兜底（字符区间估计，置信度最低）。
+                        IReadOnlyList<OcrWord> words;
+                        string wordStrategy;
+                        if (ProjectionWordSegmenter.TrySegment(
+                                recSource, recText, box, frame.Region, clsNeedRotate, lineIdx, out var projWords, out var projDetail))
+                        {
+                            words = projWords;
+                            wordStrategy = $"projection({projDetail})";
+                        }
+                        else if (ProjectionWordSegmenter.TrySegmentConstrained(
+                                recSource, recText, box, frame.Region, clsNeedRotate, lineIdx, out var constrainedWords))
+                        {
+                            words = constrainedWords;
+                            wordStrategy = "constrained";
+                        }
+                        else
+                        {
+                            // 比例法兜底的词框需屏幕绝对坐标（与投影/受约束切分一致）
+                            var lineScreenBox = new PhysicalRect(
+                                box.X + frame.Region.X, box.Y + frame.Region.Y, box.Width, box.Height);
+                            words = BuildWords(recText, lineScreenBox, lineIdx);
+                            wordStrategy = "proportional";
+                        }
+                        lineResults[lineIdx] = (recText, words, wordStrategy, clsAngle);
+                    }
+                    finally
+                    {
+                        orientedBmp?.Dispose();
+                    }
+                }
+            }
+            finally
+            {
+                foreach (var bmp in lineBmps)
+                    bmp?.Dispose();
+            }
+
+            // 按检测顺序组装行，保证日志与行序稳定
+            var lines = new List<OcrLine>();
             for (int lineIdx = 0; lineIdx < detBoxes.Count; lineIdx++)
             {
-                ct.ThrowIfCancellationRequested();
-                var box = detBoxes[lineIdx];
+                var res = lineResults[lineIdx];
+                if (res.Text == null) continue;
 
                 // detBoxes 是截图位图内的 0-based 局部坐标（DbPostprocess 按位图尺寸计算）。
                 // 而 WordSelector 用屏幕绝对坐标的鼠标比对，若直接返回局部坐标将永远 miss →
                 // “未检测到可翻译的单词 / 单词识别不可用”。因此：
                 //   - CropBitmap 用局部 box（它相对 frame.Bitmap 裁剪）；
                 //   - OcrLine/OcrWord 用平移到屏幕绝对坐标的 screenBox（frame.Region 是屏幕坐标）。
+                var box = detBoxes[lineIdx];
                 var screenBox = new PhysicalRect(
                     box.X + frame.Region.X,
                     box.Y + frame.Region.Y,
                     box.Width,
                     box.Height);
 
-                // Crop line image from original bitmap
-                using var lineBmp = CropBitmap(frame.Bitmap, box);
-                if (lineBmp == null) continue;
-
-                // ===== CLASSIFIER (optional) =====
-                var clsStart = sw.Elapsed;
-                float clsAngle = 0f;
-                bool clsNeedRotate = false;
-                if (holder.ClsSession != null)
-                {
-                    var clsInput = PreprocessCls(lineBmp);
-                    (clsAngle, clsNeedRotate) = RunClassifier(holder.ClsSession, clsInput);
-                }
-                classifierTotal += sw.Elapsed - clsStart;
-
-                Bitmap? orientedBmp = null;
-                try
-                {
-                    if (clsNeedRotate) orientedBmp = Rotate180(lineBmp);
-                    var recSource = orientedBmp ?? lineBmp;
-
-                    // ===== RECOGNIZER =====
-                    var recStart = sw.Elapsed;
-                    var recInput = PreprocessRec(recSource);
-                    var recText = RunRecognizer(holder.RecSession, recInput, holder.CharDictionary);
-                    recognizerTotal += sw.Elapsed - recStart;
-
-                    if (!string.IsNullOrWhiteSpace(recText))
-                    {
-                        // 词框解析策略（spec 8.3）：优先垂直投影精确词框（空白间隔/垂直投影），
-                        // 段数与 token 数不一致（CJK 混排、噪声等）时回退加权比例法（字符区间估计）。
-                        IReadOnlyList<OcrWord> words;
-                        if (ProjectionWordSegmenter.TrySegment(
-                                recSource, recText, box, frame.Region, clsNeedRotate, lineIdx, out var projWords))
-                        {
-                            words = projWords;
-                            _logger.LogDebug("WordBox: strategy=projection words={Count} line={Idx}", projWords.Count, lineIdx);
-                        }
-                        else
-                        {
-                            words = BuildWords(recText, screenBox, lineIdx);
-                            _logger.LogDebug("WordBox: strategy=proportional words={Count} line={Idx}", words.Count, lineIdx);
-                        }
-                        var ocrLine = new OcrLine(screenBox, words, recText, clsAngle);
-                        lines.Add(ocrLine);
-                    }
-                }
-                finally
-                {
-                    orientedBmp?.Dispose();
-                }
+                _logger.LogDebug("WordBox: strategy={Strategy} words={Count} line={Idx}", res.Strategy, res.Words.Count, lineIdx);
+                lines.Add(new OcrLine(screenBox, res.Words, res.Text, res.Angle));
             }
+
+            // det 偶尔把相隔大片空白的两处文字合并成一个检测框（如左右两页中间隔空白），
+            // 导致行框/选区横跨空白区 → 按词框间大空隙拆成独立行。
+            int beforeGapSplit = lines.Count;
+            lines = LineGapSplitter.SplitLines(lines);
+            if (lines.Count != beforeGapSplit)
+                _logger.LogDebug("LineGapSplit: {Before} lines split into {After}", beforeGapSplit, lines.Count);
+
+            // 行首图标单符号清理（?/0/• 等），同步收紧行框改善选区。
+            lines = LeadingGlyphCleaner.Clean(lines, out int glyphCleaned);
+            if (glyphCleaned > 0)
+                _logger.LogDebug("LeadingGlyphClean: removed leading glyph on {Count} lines", glyphCleaned);
 
             // ===== POSTPROCESS =====
             var postprocessStart = sw.Elapsed;
@@ -708,22 +837,23 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
     private static readonly float[] ClsMean = new[] { 0.5f, 0.5f, 0.5f };
     private static readonly float[] ClsStd = new[] { 0.5f, 0.5f, 0.5f };
-    private const int ClsW = 48;
+    // 官方 cls_image_shape = 3x48x192（ch_ppocr_mobile cls 固定输入）。
+    // 等比缩放到高 48，宽不足 192 右侧补黑——勿用正方形 letterbox，
+    // 否则与导出模型的固定输入 shape 不符或产生拉伸失真。
+    private const int ClsW = 192;
     private const int ClsH = 48;
 
     private static float[] PreprocessCls(Bitmap src)
     {
+        float ratio = (float)ClsH / src.Height;
+        int dw = Math.Clamp((int)Math.Round(src.Width * ratio), 1, ClsW);
+
         using var resized = new Bitmap(ClsW, ClsH, PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(resized))
         {
             g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
             g.Clear(Color.Black);
-            var ratio = Math.Min((float)ClsW / src.Width, (float)ClsH / src.Height);
-            int dw = (int)Math.Round(src.Width * ratio);
-            int dh = (int)Math.Round(src.Height * ratio);
-            int dx = (ClsW - dw) / 2;
-            int dy = (ClsH - dh) / 2;
-            g.DrawImage(src, new Rectangle(dx, dy, dw, dh), 0, 0, src.Width, src.Height, GraphicsUnit.Pixel);
+            g.DrawImage(src, new Rectangle(0, 0, dw, ClsH), 0, 0, src.Width, src.Height, GraphicsUnit.Pixel);
         }
 
         var bytes = new byte[ClsW * ClsH * 4];
@@ -755,11 +885,12 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
         // Output shape [1, 2]; label 0 = 0 deg, label 1 = 180 deg
         if (arr.Length < 2) return (0f, false);
-        // Softmax threshold
+        // Softmax threshold：与官方 cls_thresh=0.9 对齐，仅高置信倒置才翻转，
+        // 避免正常行被误判 180° 导致整行识别失败
         float sum = (float)(Math.Exp(arr[0]) + Math.Exp(arr[1]));
         float p0 = (float)Math.Exp(arr[0]) / sum;
         float p1 = (float)Math.Exp(arr[1]) / sum;
-        const float rotateThresh = 0.5f;
+        const float rotateThresh = 0.9f;
         bool need = p1 > rotateThresh && p1 > p0;
         return (need ? 180f : 0f, need);
     }
@@ -955,36 +1086,47 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 int x1 = cursorX;
                 int x2 = Math.Min(lineBox.Right, x1 + w);
                 var wbox = new PhysicalRect(x1, lineBox.Y, Math.Max(1, x2 - x1), lineBox.Height);
-                words.Add(new OcrWord(wbox, c.ToString(), 0.85f, lineIdx));
+                // 比例法框为估算值，置信度低于投影/受约束切分（0.9/0.8），
+                // 让选择层的 ConfidenceFloor 可感知框的可信度。
+                words.Add(new OcrWord(wbox, c.ToString(), 0.6f, lineIdx));
                 cursorX = x2;
                 i++;
             }
             else
             {
-                // Group a run of non-space non-CJK as one word (Latin/numbers/punctuation sequence)
+                // Group a run of non-space non-CJK, then split at script/punctuation
+                // boundaries（如 "MinSegmentWidth;" → "MinSegmentWidth" + ";"），
+                // 避免选取框覆盖到紧贴的标点。
                 int start = i;
-                int wordUnits = 0;
                 while (i < text.Length && !char.IsWhiteSpace(text[i]) && !IsCjk(text[i]))
                 {
-                    wordUnits += IsWide(text[i]) ? 2 : 1;
                     i++;
                 }
-                int len = i - start;
-                if (len <= 0) continue;
+                string chunk = text.Substring(start, i - start);
+                if (chunk.Length <= 0) continue;
 
-                int wordW = unitW * wordUnits;
-                if (remainder > 0) { wordW += Math.Min(remainder, wordUnits); remainder -= Math.Min(remainder, wordUnits); }
-                int x1 = cursorX;
-                int x2 = Math.Min(lineBox.Right, x1 + wordW);
-                int wordBoxW = Math.Max(1, x2 - x1);
-                // 英文单词：在框内再收缩 5% 左右的左右边距，避免贴到邻词/框边缘
-                int pad = (int)Math.Round(wordBoxW * 0.03);
-                int nx1 = x1 + pad;
-                int nx2 = x2 - pad;
-                if (nx2 - nx1 < 2) { nx1 = x1; nx2 = x2; }
-                var wbox = new PhysicalRect(nx1, lineBox.Y, Math.Max(1, nx2 - nx1), lineBox.Height);
-                words.Add(new OcrWord(wbox, text.Substring(start, len), 0.9f, lineIdx));
-                cursorX = x2;
+                var runs = TextRunSplitter.Split(chunk);
+                foreach (var run in runs)
+                {
+                    int wordUnits = 0;
+                    for (int ci = run.Start; ci < run.Start + run.Length; ci++)
+                        wordUnits += IsWide(chunk[ci]) ? 2 : 1;
+                    wordUnits = Math.Max(1, wordUnits);
+
+                    int wordW = unitW * wordUnits;
+                    if (remainder > 0) { wordW += Math.Min(remainder, wordUnits); remainder -= Math.Min(remainder, wordUnits); }
+                    int x1 = cursorX;
+                    int x2 = Math.Min(lineBox.Right, x1 + wordW);
+                    int wordBoxW = Math.Max(1, x2 - x1);
+                    // 在框内再收缩 3% 左右的左右边距，避免贴到邻词/框边缘
+                    int pad = (int)Math.Round(wordBoxW * 0.03);
+                    int nx1 = x1 + pad;
+                    int nx2 = x2 - pad;
+                    if (nx2 - nx1 < 2) { nx1 = x1; nx2 = x2; }
+                    var wbox = new PhysicalRect(nx1, lineBox.Y, Math.Max(1, nx2 - nx1), lineBox.Height);
+                    words.Add(new OcrWord(wbox, run.Slice(chunk), 0.6f, lineIdx));
+                    cursorX = x2;
+                }
             }
         }
         return words;

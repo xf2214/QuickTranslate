@@ -58,10 +58,20 @@ public class WordSelector : IWordSelector
                 // 过滤纯标点/数字/空白。
                 if (string.IsNullOrWhiteSpace(c.Text)) continue;
                 if (!IsWordLike(c.Text)) continue;
+                // 几何合理性：单字符宽超过行高上限 → 比例法兜底把短文本摊到整行宽的
+                // 异常框（如 Text='y' Box=650x60），拒绝以免画出超大选框。
+                // 用整行高度而非词框高做基准：词框经过垂直收紧（如小字号拼音/下标），
+                // 用词框高会把正常词误拒。
+                int refHeight = Math.Max(line.Box.Height, c.Box.Height);
+                if (c.Box.Width > c.Text.Length * refHeight * opts.MaxWordWidthPerCharHeightFactor)
+                    continue;
 
                 candidatesTaken++;
 
-                if (c.Box.Contains(anchor))
+                // 包含判定用宽容模式：词框经过垂直收紧（只贴墨水范围），光标常落在
+                // 词框垂直范围外导致 Contains 失败，退而选“附近最近的词”造成选框偏移。
+                // 同一行内水平命中即视为指向该词（行的垂直范围由行框覆盖）。
+                if (ContainsTolerant(c.Box, line.Box, anchor))
                 {
                     h1.Add((c, line.Text));
                 }
@@ -116,6 +126,18 @@ public class WordSelector : IWordSelector
             Confidence: null,
             OperationId: Guid.NewGuid(),
             NoTextFound: true);
+    }
+
+    /// <summary>
+    /// 宽容包含判定：X 落在词框水平范围内，且 Y 落在所属行框的垂直范围内
+    /// （上下各留少量容差）。词框垂直收紧后高度只贴墨水，直接用 Contains
+    /// 会把光标在字形上下边缘附近的正常指向误判为未命中。
+    /// </summary>
+    private static bool ContainsTolerant(PhysicalRect wordBox, PhysicalRect lineBox, PhysicalPoint anchor)
+    {
+        if (anchor.X < wordBox.Left || anchor.X >= wordBox.Right) return false;
+        int pad = Math.Max(2, lineBox.Height / 6);
+        return anchor.Y >= lineBox.Top - pad && anchor.Y < lineBox.Bottom + pad;
     }
 
     private static double ComputeDistance(PhysicalPoint anchor, PhysicalRect box)

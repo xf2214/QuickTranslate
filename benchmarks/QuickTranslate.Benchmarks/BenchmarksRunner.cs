@@ -349,7 +349,7 @@ public class BenchmarksRunner
         public int ShowCount { get; private set; }
         public event Action? OnShow;
 
-        public void Show(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX = 96, uint dpiY = 96)
+        public void Show(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX = 96, uint dpiY = 96, bool preview = false)
         {
             ShowCount++;
             OnShow?.Invoke();

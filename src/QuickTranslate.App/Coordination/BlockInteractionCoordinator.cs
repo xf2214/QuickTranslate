@@ -44,6 +44,12 @@ public class BlockInteractionCoordinator : IDisposable
     // 翻译前让区域选定框至少可见的时长（毫秒）：瞬时翻译时避免框一闪而过
     private const int SelectionHoldMs = 250;
 
+    // 区域选定框自动消失时长（毫秒）：与 Word 模式保持一致，超时自动收起，Esc 可提前关闭。
+    // 非 const：测试可通过反射调小以避免真实等待。
+    private static int SelectionAutoHideMs = 3000;
+
+    private CancellationTokenSource? _selectionAutoHideCts;
+
     public AppState State { get; private set; } = AppState.Idle;
 
     public OperationSlot? CurrentSlot => _current;
@@ -131,6 +137,33 @@ public class BlockInteractionCoordinator : IDisposable
         return slot != _current || slot.Cts.IsCancellationRequested;
     }
 
+    /// <summary>选定框展示后 SelectionAutoHideMs 自动收起（Popup 保留）；新任务/Esc 会取消。</summary>
+    private void ScheduleSelectionAutoHide(OperationSlot slot)
+    {
+        _selectionAutoHideCts?.Cancel();
+        _selectionAutoHideCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        _selectionAutoHideCts = cts;
+        _ = AutoHideOverlayAsync(slot, cts.Token);
+    }
+
+    private async Task AutoHideOverlayAsync(OperationSlot slot, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(SelectionAutoHideMs, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        // 仅当该操作仍是当前任务时才收起，避免误隐藏新任务的选定框
+        if (!IsStaleOrCanceled(slot))
+        {
+            _overlayService.HideAll();
+        }
+    }
+
     public void TryCancelAndClear(bool returnIdle)
     {
         var old = Interlocked.Exchange(ref _current, null);
@@ -139,6 +172,9 @@ public class BlockInteractionCoordinator : IDisposable
             old.Cts.Cancel();
             old.Cts.Dispose();
         }
+        _selectionAutoHideCts?.Cancel();
+        _selectionAutoHideCts?.Dispose();
+        _selectionAutoHideCts = null;
         _overlayService.HideAll();
         _statusIndicator?.Hide();
         _popupService.HideAll();
@@ -152,6 +188,13 @@ public class BlockInteractionCoordinator : IDisposable
     {
         _logger.LogDebug("Block hotkey received, starting block pipeline");
         _ = RunBlockPipelineAsync();
+    }
+
+    private static string TruncateForLog(string? text, int maxLen)
+    {
+        if (string.IsNullOrEmpty(text)) return "\"\"";
+        var oneLine = text.Replace('\n', '⏎');
+        return oneLine.Length <= maxLen ? $"'{oneLine}'" : $"'{oneLine[..maxLen]}…'";
     }
 
     private async Task RunBlockPipelineAsync()
@@ -210,6 +253,18 @@ public class BlockInteractionCoordinator : IDisposable
             }
 
             unionBox = block.UnionBox;
+            // 诊断日志：记录选块几何 + 文本规模 + 逐行明细，定位“选块不准”问题
+            _logger.LogDebug(
+                "BlockSelect: Lines={Lines} Box=({X},{Y},{W}x{H}) TextLen={Len} Captures={Captures} Preview={Preview}",
+                block.SelectedLines.Count, unionBox.Value.X, unionBox.Value.Y,
+                unionBox.Value.Width, unionBox.Value.Height,
+                block.BlockText?.Length ?? 0, captures,
+                TruncateForLog(block.BlockText, 80));
+            foreach (var line in block.SelectedLines)
+            {
+                _logger.LogDebug("  BlockLine: ({X},{Y},{W}x{H}) Text={Text}",
+                    line.Box.X, line.Box.Y, line.Box.Width, line.Box.Height, TruncateForLog(line.Text, 40));
+            }
             _overlayService.Show(block.UnionBox, mid, dpiX, dpiY);
             long overlayShownAt = Environment.TickCount64;
 
@@ -241,6 +296,8 @@ public class BlockInteractionCoordinator : IDisposable
             SetState(newSlot, AppState.Displaying);
             _statusIndicator?.Hide();
             _popupService.Show(block, translation, mid, block.UnionBox, dpiX, dpiY);
+            // 自动隐藏从 Popup 出现时开始计时，与 Word 模式策略一致
+            ScheduleSelectionAutoHide(newSlot);
         }
         catch (TranslationException te)
         {

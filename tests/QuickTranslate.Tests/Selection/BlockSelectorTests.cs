@@ -239,7 +239,7 @@ public class BlockSelectorTests
     }
 
     [Fact]
-    public void Case16_MaxLinesPerBlock_LimitedTo200()
+    public void Case16_MaxLinesPerBlock_LimitedTo30()
     {
         var lines = new List<OcrLine>();
         int y = 100;
@@ -254,6 +254,92 @@ public class BlockSelectorTests
 
         var result = _selector.SelectBlock(ocr, anchor);
 
-        Assert.True(result.SelectedLines.Count <= 200);
+        Assert.Equal(SelectionOptions.Default.BlockMaxLinesPerBlock, result.SelectedLines.Count);
+    }
+
+    [Fact]
+    public void Case17_AnchorFarFromAllLines_NoBlockFound()
+    {
+        // 光标落在远离所有行的空白区 → 不应把不相近的段落误当目标块
+        var line1 = MakeLine(100, 100, 800, 30, "Far paragraph");
+        var ocr = CreateOcr(line1);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(500, 400));
+
+        Assert.True(result.NoBlockFound);
+        Assert.Null(result.BlockText);
+    }
+
+    [Fact]
+    public void Case18_AnchorNearLine_StillAnchors()
+    {
+        // 光标在行附近（未超出距离上限）→ 仍可锚定该行
+        var line1 = MakeLine(100, 100, 800, 30, "Near paragraph");
+        var ocr = CreateOcr(line1);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(500, 145));
+
+        Assert.False(result.NoBlockFound);
+        Assert.Equal("Near paragraph", result.BlockText);
+    }
+
+    [Fact]
+    public void Case19_WideUiBarAdjacent_NotAbsorbed()
+    {
+        // 紧邻段落的全宽 UI 栏（宽度远超正文行）不应被吸入块
+        var line1 = MakeLine(100, 100, 800, 30, "para one");
+        var line2 = MakeLine(100, 138, 780, 30, "para two");
+        var wideBar = MakeLine(100, 176, 2400, 30, "FULL WIDTH TOOLBAR");
+        var ocr = CreateOcr(line1, line2, wideBar);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(150, 115));
+
+        Assert.False(result.NoBlockFound);
+        Assert.Equal(2, result.SelectedLines.Count);
+        Assert.DoesNotContain("TOOLBAR", result.BlockText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Case20_ShortAnchorLine_FullWidthParagraphStillAbsorbed()
+    {
+        // 锚点落在段末短行时，同段落的全宽正文行仍应被吸入（基准取中位行宽）
+        var line1 = MakeLine(100, 100, 800, 30, "full line one");
+        var line2 = MakeLine(100, 138, 820, 30, "full line two");
+        var tail = MakeLine(100, 176, 200, 30, "tail");
+        var ocr = CreateOcr(line1, line2, tail);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(150, 190));
+
+        Assert.False(result.NoBlockFound);
+        Assert.Equal(3, result.SelectedLines.Count);
+    }
+
+    [Fact]
+    public void Case21_NarrowAnchor_DisjointNextLineLeftAligned_NotMerged()
+    {
+        // 窄锚点行右侧紧邻但不相交的行：旧逻辑下 leftDelta 很小即可通过 OR 判定被吸入，
+        // 水平相交护栏要求必须真正相交才能生长。
+        var narrow = MakeLine(100, 100, 30, 30, "tag");
+        var disjoint = MakeLine(140, 145, 500, 30, "disjoint content");
+        var ocr = CreateOcr(narrow, disjoint);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(115, 115));
+
+        Assert.Single(result.SelectedLines);
+        Assert.DoesNotContain(result.SelectedLines, l => l.Text == "disjoint content");
+    }
+
+    [Fact]
+    public void Case22_SameHeightSeparateColumn_NotMerged()
+    {
+        // 同一垂直范围但水平完全分离的另一栏：verticalGap 为负不能绕过水平条件
+        var left = MakeLine(100, 100, 400, 30, "left column");
+        var right = MakeLine(900, 110, 400, 30, "right column");
+        var ocr = CreateOcr(left, right);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(200, 115));
+
+        Assert.Single(result.SelectedLines);
+        Assert.Equal("left column", result.BlockText);
     }
 }

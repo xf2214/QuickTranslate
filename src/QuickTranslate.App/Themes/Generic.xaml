@@ -24,35 +24,40 @@
     <SolidColorBrush x:Key="HotkeyBadgeExternalConflict" Color="#DC2626"/>
     <SolidColorBrush x:Key="HotkeyBadgeInvalid" Color="#EF4444"/>
 
-    <!-- 弹窗操作按钮（复制/朗读）：现代扁平、圆角、细边框 -->
+    <!-- ==================== Apple 风格共享设计令牌 ==================== -->
+    <SolidColorBrush x:Key="AppleAccentBlue" Color="#007AFF"/>
+    <SolidColorBrush x:Key="AppleTextPrimary" Color="#1C1C1E"/>
+    <SolidColorBrush x:Key="AppleTextSecondary" Color="#8E8E93"/>
+    <SolidColorBrush x:Key="AppleCardBackground" Color="#F8FFFFFF"/>
+    <SolidColorBrush x:Key="AppleHairline" Color="#1A000000"/>
+    <SolidColorBrush x:Key="AppleSuccessGreen" Color="#34C759"/>
+    <SolidColorBrush x:Key="AppleDangerRed" Color="#FF3B30"/>
+
+    <!-- 弹窗操作按钮（复制/朗读）：macOS 胶囊按钮，无边框、全圆角、半透明黑底 -->
     <Style x:Key="PopupActionButton" TargetType="Button">
-        <Setter Property="Background" Value="#FFFFFF"/>
-        <Setter Property="Foreground" Value="#374151"/>
-        <Setter Property="BorderBrush" Value="#E5E7EB"/>
-        <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Background" Value="#0F000000"/>
+        <Setter Property="Foreground" Value="#1C1C1E"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="FontSize" Value="12.5"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border x:Name="B" CornerRadius="6"
+                    <Border x:Name="B" CornerRadius="13"
                             Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}"
                             Padding="{TemplateBinding Padding}">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="B" Property="Background" Value="#F3F4F6"/>
-                            <Setter TargetName="B" Property="BorderBrush" Value="#D1D5DB"/>
+                            <Setter TargetName="B" Property="Background" Value="#1A000000"/>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="B" Property="Background" Value="#E5E7EB"/>
+                            <Setter TargetName="B" Property="Background" Value="#26000000"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter Property="Foreground" Value="#9CA3AF"/>
+                            <Setter Property="Foreground" Value="#8E8E93"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -60,26 +65,24 @@
         </Setter>
     </Style>
 
-    <!-- 弹窗关闭按钮：默认同操作按钮，悬停转红提示关闭 -->
+    <!-- 弹窗关闭按钮：默认同胶囊按钮，悬停转红提示关闭（Apple 红系） -->
     <Style x:Key="PopupDismissButton" TargetType="Button" BasedOn="{StaticResource PopupActionButton}">
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border x:Name="B" CornerRadius="6"
+                    <Border x:Name="B" CornerRadius="13"
                             Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}"
                             Padding="{TemplateBinding Padding}">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="B" Property="Background" Value="#FEF2F2"/>
-                            <Setter TargetName="B" Property="BorderBrush" Value="#FECACA"/>
-                            <Setter Property="Foreground" Value="#DC2626"/>
+                            <Setter TargetName="B" Property="Background" Value="#1AFF3B30"/>
+                            <Setter Property="Foreground" Value="#FF3B30"/>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="B" Property="Background" Value="#FEE2E2"/>
+                            <Setter TargetName="B" Property="Background" Value="#33FF3B30"/>
+                            <Setter Property="Foreground" Value="#FF3B30"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

@@ -53,20 +53,20 @@ public class CancelRaceTests
         firstOcrTcs.SetResult(FakeOcrEngine.CreateResult(new PhysicalRect(0, 0, 720, 320)));
         await Task.Delay(50);
 
-        Assert.Equal(0, overlay.ShowTotalCount);
+        Assert.Equal(0, overlay.SelectionShowCount);
 
         secondOcrTcs.SetResult(FakeOcrEngine.CreateResult(new PhysicalRect(0, 0, 720, 320)));
         await Task.Delay(80);
 
         Assert.Equal(AppState.Translating, coord.State);
-        Assert.Equal(1, overlay.ShowTotalCount);
+        Assert.Equal(1, overlay.SelectionShowCount);
 
         secondTransTcs.SetResult(FakeTranslationRouter.CreateResult("hello", "zh-CN"));
         // 协调器在弹结果前保证选定框至少可见 250ms，需等待其完成
         await Task.Delay(400);
 
         Assert.Equal(AppState.Displaying, coord.State);
-        Assert.Equal(1, overlay.ShowTotalCount);
+        Assert.Equal(1, overlay.SelectionShowCount);
         Assert.Equal(1, popup.ShowCount);
     }
 
@@ -92,7 +92,7 @@ public class CancelRaceTests
         await Task.Delay(80);
 
         Assert.Equal(AppState.Translating, coord.State);
-        Assert.Equal(1, overlay.ShowTotalCount);
+        Assert.Equal(1, overlay.SelectionShowCount);
         var firstTransTcs = translator.TranslateWordTcs;
         var firstSlot = coord.CurrentSlot;
         Assert.NotNull(firstSlot);
@@ -122,7 +122,7 @@ public class CancelRaceTests
         await Task.Delay(80);
 
         Assert.Equal(AppState.Translating, coord.State);
-        Assert.Equal(2, overlay.ShowTotalCount);
+        Assert.Equal(2, overlay.SelectionShowCount);
 
         secondTransDone.SetResult(FakeTranslationRouter.CreateResult("hello2", "zh-CN"));
         // 协调器在弹结果前保证选定框至少可见 250ms，需等待其完成

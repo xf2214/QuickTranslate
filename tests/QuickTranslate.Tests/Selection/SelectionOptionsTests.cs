@@ -16,6 +16,9 @@ public class SelectionOptionsTests
         Assert.Equal(3, opts.MinWordHeight);
         Assert.Equal(0.3f, opts.ConfidenceFloor);
         Assert.Equal(30, opts.MaxCandidatesPerLine);
+        Assert.Equal(1.3f, opts.MaxWordWidthPerCharHeightFactor);
+        Assert.Equal(2.0f, opts.BlockMaxAnchorDistanceFactor);
+        Assert.Equal(2.5f, opts.BlockMaxWidthVsMedianFactor);
     }
 
     [Fact]

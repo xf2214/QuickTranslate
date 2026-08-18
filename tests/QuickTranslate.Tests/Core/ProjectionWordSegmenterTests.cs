@@ -100,10 +100,15 @@ public class ProjectionWordSegmenterTests : IDisposable
         // 坐标换算：frameRegion.X + localBox.X + 局部段坐标
         Assert.True(words[0].Box.X >= frameRegion.X + localBox.X);
         Assert.True(words[1].Box.Right <= frameRegion.X + localBox.X + bmp.Width);
-        // Y/Height 沿用行框
-        Assert.Equal(frameRegion.Y + localBox.Y, words[0].Box.Y);
-        Assert.Equal(localBox.Height, words[0].Box.Height);
+        // Y/Height 垂直收紧：框落在行框内且明显小于整行高（不含行框留白）
+        Assert.True(words[0].Box.Y > frameRegion.Y + localBox.Y,
+            "收紧后框顶应低于行框顶（去掉留白）");
+        Assert.True(words[0].Box.Height < localBox.Height,
+            "收紧后框高应小于整行高");
+        Assert.True(words[0].Box.Y + words[0].Box.Height < frameRegion.Y + localBox.Y + localBox.Height);
         Assert.Equal(2, words[0].LineIndex);
+        // 投影精确切分置信度
+        Assert.Equal(0.9f, words[0].Confidence);
     }
 
     [Fact]
@@ -241,9 +246,160 @@ public class ProjectionWordSegmenterTests : IDisposable
         Assert.True(words[0].Box.Right <= words[1].Box.Left);
         Assert.True(Math.Abs(words[0].Box.Width - words[1].Box.Width) <= 8,
             $"widths {words[0].Box.Width} vs {words[1].Box.Width}");
-        // 坐标换算到屏幕绝对坐标
+        // 坐标换算到屏幕绝对坐标；垂直收紧后框顶低于行框顶、框在行内
         Assert.True(words[0].Box.X >= frameRegion.X);
         Assert.True(words[1].Box.Right <= frameRegion.X + localBox.Width);
-        Assert.Equal(frameRegion.Y, words[0].Box.Y);
+        Assert.True(words[0].Box.Y >= frameRegion.Y);
+        Assert.True(words[0].Box.Y + words[0].Box.Height <= frameRegion.Y + localBox.Height);
+    }
+
+    [Fact]
+    public void Case10_TightSpacing_ConstrainedSplitsTouchingBlocks()
+    {
+        // 两个实心墨块紧贴（无间隙）→ 投影只能切出 1 段，TrySegment 失败；
+        // TrySegmentConstrained 用 DP 在同代价切点中按期望宽度择优：
+        // token 长度 2:5 与墨块宽度 40:100 成比例，切点应落在交界处 x=70。
+        var bmp = new Bitmap(200, 44, PixelFormat.Format32bppArgb);
+        _bitmaps.Add(bmp);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            using var brush = new SolidBrush(Color.Black);
+            g.FillRectangle(brush, 30, 10, 40, 24);   // "aa"（列 30..69）
+            g.FillRectangle(brush, 70, 10, 100, 24);  // "bbbbb"（列 70..169，紧贴前者）
+        }
+        var frameRegion = new PhysicalRect(0, 0, 200, 44);
+        var localBox = new PhysicalRect(0, 0, 200, 44);
+
+        bool exact = ProjectionWordSegmenter.TrySegment(bmp, "aa bbbbb", localBox, frameRegion, false, 0, out _);
+        Assert.False(exact);
+
+        bool ok = ProjectionWordSegmenter.TrySegmentConstrained(bmp, "aa bbbbb", localBox, frameRegion, false, 0, out var words);
+
+        Assert.True(ok);
+        Assert.Equal(2, words.Count);
+        Assert.Equal("aa", words[0].Text);
+        Assert.Equal("bbbbb", words[1].Text);
+        // 切点应落在两墨块交界处附近（x=70 ± 6px）
+        Assert.True(Math.Abs(words[0].Box.Right - 70) <= 6,
+            $"第一段右缘 {words[0].Box.Right} 应贴近交界列 70");
+        // 受约束切分置信度低于投影精确切分
+        Assert.Equal(0.8f, words[0].Confidence);
+    }
+
+    [Fact]
+    public void Case11_PseudoSplit_MergeRepairSucceeds()
+    {
+        // 伪分裂："aa" 墨块内部有 10px 缝隙（大于 gap 阈值被误切成两段），
+        // 但与 "bb" 之间的 31px 才是真正词间距 → 投影切出 3 段，
+        // 合并修复按最小间隔优先合并（10px < 31px）后对齐 2 个 token。
+        var bmp = new Bitmap(200, 44, PixelFormat.Format32bppArgb);
+        _bitmaps.Add(bmp);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            using var brush = new SolidBrush(Color.Black);
+            g.FillRectangle(brush, 30, 10, 19, 24);   // "aa" 左半（列 30..48）
+            g.FillRectangle(brush, 59, 10, 20, 24);   // "aa" 右半（列 59..78，10px 伪缝）
+            g.FillRectangle(brush, 110, 10, 60, 24);  // "bb"（列 110..169，31px 词间距）
+        }
+        var frameRegion = new PhysicalRect(0, 0, 200, 44);
+        var localBox = new PhysicalRect(0, 0, 200, 44);
+
+        bool ok = ProjectionWordSegmenter.TrySegment(bmp, "aa bb", localBox, frameRegion, false, 0, out var words, out var detail);
+
+        Assert.True(ok);
+        Assert.Equal(2, words.Count);
+        Assert.Equal("aa", words[0].Text);
+        Assert.Equal("bb", words[1].Text);
+        // 合并后的 "aa" 框应横跨两块（30..79 附近）
+        Assert.True(words[0].Box.X <= 32 && words[0].Box.Right >= 76,
+            $"合并后 aa 框 ({words[0].Box.X}..{words[0].Box.Right}) 应横跨两块");
+        Assert.Contains("merge", detail);
+    }
+
+    [Fact]
+    public void Case12_VerticalTighten_BoxMatchesInkRange()
+    {
+        // 单墨块位于行 12..26 → 收紧后框高 = 墨水范围 + 上下各 1px padding
+        var bmp = new Bitmap(120, 44, PixelFormat.Format32bppArgb);
+        _bitmaps.Add(bmp);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            using var brush = new SolidBrush(Color.Black);
+            g.FillRectangle(brush, 20, 12, 60, 14); // 墨块行 12..25（含）
+        }
+        var frameRegion = new PhysicalRect(10, 50, 120, 44);
+        var localBox = new PhysicalRect(0, 0, 120, 44);
+
+        bool ok = ProjectionWordSegmenter.TrySegment(bmp, "Hi", localBox, frameRegion, false, 0, out var words);
+
+        Assert.True(ok);
+        Assert.Single(words);
+        Assert.Equal(frameRegion.Y + 11, words[0].Box.Y);   // inkTop(12) - 1
+        Assert.Equal(16, words[0].Box.Height);              // (26) - 11 + 1 = 14 + 2 padding
+    }
+
+    [Fact]
+    public void Case13_TrailingPunctuation_SplitIntoSeparateRun()
+    {
+        // 代码场景：标识符紧贴分号（"MinSegmentWidth;"）是一个 token，
+        // 应按脚本/标点边界拆成独立词框，选取框不再覆盖标点。
+        var (bmp, spans) = DrawWords(new[] { "MinSegmentWidth;" }, height: 44);
+        var frameRegion = new PhysicalRect(0, 0, bmp.Width, bmp.Height);
+        var localBox = new PhysicalRect(0, 0, bmp.Width, bmp.Height);
+
+        bool ok = ProjectionWordSegmenter.TrySegment(bmp, "MinSegmentWidth;", localBox, frameRegion, false, 0, out var words);
+
+        Assert.True(ok);
+        Assert.Equal(2, words.Count);
+        Assert.Equal("MinSegmentWidth", words[0].Text);
+        Assert.Equal(";", words[1].Text);
+        // 标识符框不应覆盖到分号：右缘明显小于整段实测右缘
+        int fullRight = frameRegion.X + spans[0].Right;
+        Assert.True(words[0].Box.Right < fullRight - 2,
+            $"标识符右缘 {words[0].Box.Right} 应小于整段右缘 {fullRight}");
+        Assert.True(words[1].Box.Left >= words[0].Box.Right);
+    }
+
+    [Fact]
+    public void Case14_ApostropheWord_NotSplit()
+    {
+        // don't 中的撇号不应拆分，仍是一个词
+        var (bmp, _) = DrawWords(new[] { "don't" }, height: 44);
+        var frameRegion = new PhysicalRect(0, 0, bmp.Width, bmp.Height);
+        var localBox = new PhysicalRect(0, 0, bmp.Width, bmp.Height);
+
+        bool ok = ProjectionWordSegmenter.TrySegment(bmp, "don't", localBox, frameRegion, false, 0, out var words);
+
+        Assert.True(ok);
+        Assert.Single(words);
+        Assert.Equal("don't", words[0].Text);
+    }
+
+    [Fact]
+    public void Case15_NarrowSegment_RunSplitDoesNotThrow()
+    {
+        // 回归：段宽比 run 数还窄（如 3px 墨水、五个 run）时，
+        // 旧实现 RefineCut 会因 lo>hi 抛 ArgumentException 击穿整个 OCR 管线；
+        // 新实现应退化为均分，不抛异常。
+        var bmp = new Bitmap(60, 20, PixelFormat.Format32bppArgb);
+        _bitmaps.Add(bmp);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            using var brush = new SolidBrush(Color.Black);
+            g.FillRectangle(brush, 20, 5, 3, 10); // 3px 宽墨块
+        }
+        var frameRegion = new PhysicalRect(0, 0, 60, 20);
+        var localBox = new PhysicalRect(0, 0, 60, 20);
+
+        bool ok = ProjectionWordSegmenter.TrySegment(bmp, "a;b;c", localBox, frameRegion, false, 0, out var words);
+
+        Assert.True(ok);
+        Assert.Equal(5, words.Count);
+        Assert.Equal("a", words[0].Text);
+        Assert.Equal(";", words[1].Text);
     }
 }

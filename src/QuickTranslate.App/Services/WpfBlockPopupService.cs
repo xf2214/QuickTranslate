@@ -122,6 +122,7 @@ public class WpfBlockPopupService : IBlockPopupService
         }
         else
         {
+            _window.ReplayEntry();
             _window.Activate();
         }
     }
@@ -174,6 +175,7 @@ public class WpfBlockPopupService : IBlockPopupService
         }
         else
         {
+            _window.ReplayEntry();
             _window.Activate();
         }
     }
@@ -187,7 +189,9 @@ public class WpfBlockPopupService : IBlockPopupService
     {
         if (_window != null)
         {
-            _window.Hide();
+            // 淡出退场：动画完成后由 PopupTransition 内部执行 Hide()；
+            // 此处先释放引用，下次 Show 将新建窗口，旧窗口随动画结束被 GC
+            _window.HideWithFade();
             _window = null;
             _lastMonitorId = MonitorId.Empty;
             _lastDpiX = 0;

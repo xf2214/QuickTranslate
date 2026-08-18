@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
@@ -84,13 +85,40 @@ public class CustomOpenAiTranslationProvider : ITranslationProvider
         return isChinese ? $"[Demo]{req.Text}" : req.Text;
     }
 
-    internal static string BuildSystemPrompt(TranslationRequest req) =>
-        "You are a professional translator. Translate the user's text into " +
-        $"{LanguageName(req.TargetLanguage)}. " +
-        (req.Mode == TranslationMode.Word
+    /// <summary>
+    /// 按质量档位选择系统提示词：Balanced 档即内置默认提示词，
+    /// Fast 档精简求快，Best 档强调准确、自然、风格保真。
+    /// </summary>
+    public static string BuildSystemPrompt(TranslationRequest req)
+    {
+        var lang = LanguageName(req.TargetLanguage);
+        var modeHint = req.Mode == TranslationMode.Word
             ? "The input is a single word or short phrase: give its most common translation, optionally followed by a brief gloss in parentheses. "
-            : "Preserve paragraph breaks. ") +
-        "Output ONLY the translation. No explanations, no quotes, no extra formatting.";
+            : "Preserve paragraph breaks. ";
+
+        return req.Quality switch
+        {
+            TranslationQuality.Fast =>
+                $"You are a fast translation engine. Translate the user's text into {lang}. {modeHint}" +
+                "Be brief and direct. Output ONLY the translation. No explanations, no quotes, no extra formatting.",
+            TranslationQuality.Best =>
+                $"You are an expert professional translator. Translate the user's text into {lang}. {modeHint}" +
+                "Ensure the translation is accurate, natural and fluent, preserving the original tone, style, terminology and formatting. " +
+                "Output ONLY the translation. No explanations, no quotes, no extra formatting.",
+            _ => // Balanced = 默认提示词
+                "You are a professional translator. Translate the user's text into " +
+                $"{lang}. {modeHint}" +
+                "Output ONLY the translation. No explanations, no quotes, no extra formatting."
+        };
+    }
+
+    /// <summary>各档位采样温度：Fast 最确定、Best 略放宽以换取更自然的表达。</summary>
+    public static double TemperatureFor(TranslationQuality quality) => quality switch
+    {
+        TranslationQuality.Fast => 0.0,
+        TranslationQuality.Best => 0.3,
+        _ => 0.1
+    };
 
     internal static string LanguageName(string lang)
     {
@@ -122,7 +150,7 @@ public class CustomOpenAiTranslationProvider : ITranslationProvider
                 new() { Role = "user", Content = req.Text }
             },
             Stream = true,
-            Temperature = 0.1
+            Temperature = TemperatureFor(req.Quality)
         };
 
         var uri = BuildChatCompletionsUrl(baseUrl);
@@ -277,6 +305,109 @@ public class CustomOpenAiTranslationProvider : ITranslationProvider
         }
     }
 
+    // ===== 模型连通性测试（设置窗口「测试连接」按钮）=====
+
+    private const string TestProbeText = "Please reply with exactly: OK";
+
+    /// <summary>
+    /// 用给定的 BaseUrl/Model/ApiKey 发一次最小化非流式请求，验证模型可用性并测量延迟。
+    /// 不依赖 AppSettings 当前值，便于测试窗口里尚未保存的配置。
+    /// </summary>
+    public async Task<ModelTestResult> TestConnectionAsync(
+        string baseUrl, string model, string apiKey, CancellationToken ct = default)
+    {
+        baseUrl = (baseUrl ?? string.Empty).Trim();
+        model = (model ?? string.Empty).Trim();
+        apiKey = (apiKey ?? string.Empty).Trim();
+
+        if (baseUrl.Length == 0 || model.Length == 0)
+            return ModelTestResult.Fail("请先填写 API 地址和模型名称");
+        if (apiKey.Length == 0)
+            return ModelTestResult.Fail("缺少 API Key（本地 Ollama 可填任意非空值）");
+
+        var body = new OpenAiChatRequest
+        {
+            Model = model,
+            Messages = new List<OpenAiChatMessage>
+            {
+                new() { Role = "user", Content = TestProbeText }
+            },
+            Stream = false,
+            Temperature = 0,
+            MaxTokens = 16
+        };
+
+        var sw = Stopwatch.StartNew();
+        HttpResponseMessage response;
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, BuildChatCompletionsUrl(baseUrl));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+            response = await SendWithTimeoutAsync(request, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return ModelTestResult.Fail("请求超时（" + (int)_timeout.TotalSeconds + "s），请检查 API 地址是否可达");
+        }
+        catch (OperationCanceledException)
+        {
+            return ModelTestResult.Fail("测试已取消");
+        }
+        catch (TranslationException tex)
+        {
+            return ModelTestResult.Fail(FriendlyError(tex));
+        }
+        catch (HttpRequestException hre) when (hre.InnerException is SocketException)
+        {
+            return ModelTestResult.Fail("无法连接服务，请检查 API 地址：" + hre.Message);
+        }
+        catch (HttpRequestException hre)
+        {
+            return ModelTestResult.Fail("请求失败：" + hre.Message);
+        }
+
+        try
+        {
+            var raw = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            sw.Stop();
+
+            OpenAiChatResponse? frame;
+            try
+            {
+                frame = JsonSerializer.Deserialize<OpenAiChatResponse>(raw);
+            }
+            catch (JsonException)
+            {
+                return ModelTestResult.Fail("响应不是有效 JSON：" + Truncate(raw, 120));
+            }
+
+            if (frame?.Error?.Message is { } errMsg)
+                return ModelTestResult.Fail("服务端错误：" + Truncate(errMsg, 150));
+
+            var text = frame?.Choices?.FirstOrDefault()?.Message?.Content;
+            if (string.IsNullOrWhiteSpace(text))
+                return ModelTestResult.Fail("模型返回内容为空");
+
+            _logger.LogInformation("Model test succeeded: {Model} in {Ms} ms", model, sw.ElapsedMilliseconds);
+            return ModelTestResult.Ok(sw.Elapsed);
+        }
+        finally
+        {
+            response.Dispose();
+        }
+    }
+
+    private static string FriendlyError(TranslationException ex) => ex.ErrorCode switch
+    {
+        TranslationErrorCode.AuthFailed => "API Key 无效或无权限访问该模型（401/403）",
+        TranslationErrorCode.Throttled => "被限流（429），请稍后再试",
+        TranslationErrorCode.NetworkUnavailable => "无法连接服务，请检查 API 地址和网络",
+        TranslationErrorCode.Timeout => "请求超时，请检查 API 地址是否可达",
+        TranslationErrorCode.InvalidResponse => "响应异常：" + ex.Message,
+        _ => ex.Message
+    };
+
     public static Uri BuildChatCompletionsUrl(string baseUrl)
     {
         // 用户可填带或不带尾斜杠、带或不带 /v1 的地址；统一拼出 {base}/chat/completions
@@ -297,6 +428,13 @@ public class CustomOpenAiTranslationProvider : ITranslationProvider
         string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s.Substring(0, max) + "…");
 }
 
+/// <summary>模型连通性测试结果（设置窗口「测试连接」）。</summary>
+public sealed record ModelTestResult(bool Success, string Message, TimeSpan? Latency = null)
+{
+    public static ModelTestResult Ok(TimeSpan latency) => new(true, string.Empty, latency);
+    public static ModelTestResult Fail(string message) => new(false, message);
+}
+
 internal class OpenAiChatMessage
 {
     [JsonPropertyName("role")] public string Role { get; set; } = "user";
@@ -309,6 +447,7 @@ internal class OpenAiChatRequest
     [JsonPropertyName("messages")] public List<OpenAiChatMessage> Messages { get; set; } = new();
     [JsonPropertyName("stream")] public bool Stream { get; set; }
     [JsonPropertyName("temperature")] public double Temperature { get; set; } = 0.1;
+    [JsonPropertyName("max_tokens")] public int? MaxTokens { get; set; }
 }
 
 internal class OpenAiDelta

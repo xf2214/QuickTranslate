@@ -50,7 +50,7 @@ public class OperationIdStaleDiscardTests
         ocrTcs.SetResult(FakeOcrEngine.CreateResult(new PhysicalRect(0, 0, 720, 320)));
         await Task.Delay(100);
 
-        Assert.Equal(0, overlay.ShowTotalCount);
+        Assert.Equal(0, overlay.SelectionShowCount);
         Assert.Equal(0, popup.ShowCount);
         Assert.Same(replacementSlot, coord.CurrentSlot);
         Assert.NotSame(staleSlot, coord.CurrentSlot);
@@ -81,7 +81,7 @@ public class OperationIdStaleDiscardTests
         await Task.Delay(80);
 
         Assert.True(coord.State == AppState.Translating || coord.State == AppState.OverlayVisible);
-        Assert.Equal(1, overlay.ShowTotalCount);
+        Assert.Equal(1, overlay.SelectionShowCount);
 
         var staleSlot = coord.CurrentSlot;
         Assert.NotNull(staleSlot);

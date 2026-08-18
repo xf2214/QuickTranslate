@@ -51,6 +51,25 @@ public class WordSelectorTests
     }
 
     [Fact]
+    public void Case1b_CursorVerticallyOutsideTightenedWordBox_StillSelectsSameLineWord()
+    {
+        // 词框垂直收紧后只贴墨水（y 5..17），光标在行内但词框垂直范围外（y=32）：
+        // 旧行为会退到“最近词”选中邻行，宽容判定应仍命中同一行水平指向的词。
+        var lineA = new OcrLine(
+            new PhysicalRect(0, 0, 300, 30),
+            new[] { new OcrWord(new PhysicalRect(100, 5, 80, 12), "target", 0.9f, 0) });
+        var lineB = new OcrLine(
+            new PhysicalRect(0, 40, 300, 30),
+            new[] { new OcrWord(new PhysicalRect(120, 45, 60, 12), "near", 0.9f, 1) });
+        var ocr = CreateOcr(lineA, lineB);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(140, 32));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("target", result.Text);
+    }
+
+    [Fact]
     public void Case2_TwoWordsContainAnchor_PicksSmallerArea()
     {
         var words = new[]
@@ -280,5 +299,54 @@ public class WordSelectorTests
         var result = _selector.SelectWord(ocr, new PhysicalPoint(50, 20));
 
         Assert.True(result.NoTextFound);
+    }
+
+    [Fact]
+    public void Case15_AbnormallyWideBox_Rejected_NoTextFound()
+    {
+        // 日志复现：比例法兜底把短文本摊到整行宽（Text='tes' Box=542x51），
+        // 单字符宽远超行高上限 → 拒绝，不再画出超大选框
+        var line = new OcrLine(
+            new PhysicalRect(0, 0, 542, 51),
+            new[] { new OcrWord(new PhysicalRect(0, 0, 542, 51), "tes", 0.9f, 0) });
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(286, 20));
+
+        Assert.True(result.NoTextFound);
+    }
+
+    [Fact]
+    public void Case16_WideBoxRejected_FallsBackToNearbyValidWord()
+    {
+        // 异常宽框被拒后，应退而选择附近几何合理的候选
+        var words = new[]
+        {
+            new OcrWord(new PhysicalRect(0, 0, 650, 60), "y", 0.9f, 0),
+            new OcrWord(new PhysicalRect(0, 65, 120, 30), "valid", 0.9f, 1)
+        };
+        var line1 = new OcrLine(new PhysicalRect(0, 0, 650, 60), new[] { words[0] });
+        var line2 = new OcrLine(new PhysicalRect(0, 65, 120, 30), new[] { words[1] });
+        var ocr = CreateOcr(line1, line2);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(60, 40));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("valid", result.Text);
+    }
+
+    [Fact]
+    public void Case17_LongWordWithinWidthLimit_StillSelected()
+    {
+        // 长标识符（如 ProjectionWordSegmenter）单字符宽未超限 → 不受新过滤影响
+        var line = new OcrLine(
+            new PhysicalRect(0, 0, 261, 31),
+            new[] { new OcrWord(new PhysicalRect(0, 0, 261, 31), "ProjectionWordSegmenter", 0.9f, 0) });
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(130, 15));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("ProjectionWordSegmenter", result.Text);
     }
 }

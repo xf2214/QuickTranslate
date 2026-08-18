@@ -338,6 +338,28 @@
                                            Style="{StaticResource SettingHint}"
                                            Margin="96 0 0 10"
                                            TextWrapping="Wrap"/>
+
+                                <!-- 模型连通性测试 -->
+                                <Grid Margin="0 0 0 6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="96"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button Grid.Column="1"
+                                            x:Name="TestModelButton"
+                                            Content="测试连接"
+                                            Style="{StaticResource SecondaryButton}"
+                                            Padding="14 5"
+                                            FontSize="12"/>
+                                    <TextBlock Grid.Column="2"
+                                               x:Name="ModelTestStatus"
+                                               Text="用当前填写的配置发一次探测请求，验证模型是否可用"
+                                               Style="{StaticResource SettingHint}"
+                                               Margin="10 0 0 0"
+                                               VerticalAlignment="Center"
+                                               TextWrapping="Wrap"/>
+                                </Grid>
                             </StackPanel>
 
                             <Grid Margin="0 0 0 8">

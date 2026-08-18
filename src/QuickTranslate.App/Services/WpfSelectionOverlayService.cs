@@ -38,12 +38,12 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
         else dispatcher.Invoke(DispatcherPriority.Normal, a);
     }
 
-    public void Show(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX = 96, uint dpiY = 96)
+    public void Show(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX = 96, uint dpiY = 96, bool preview = false)
     {
-        RunOnUi(() => ShowCore(physicalBox, monitorId, dpiX, dpiY));
+        RunOnUi(() => ShowCore(physicalBox, monitorId, dpiX, dpiY, preview));
     }
 
-    private void ShowCore(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX, uint dpiY)
+    private void ShowCore(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX, uint dpiY, bool preview)
     {
         bool needsRecreate = true;
         if (_windows.TryGetValue(monitorId, out var entry))
@@ -71,6 +71,7 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
             _windows[monitorId] = (window, dpiX, dpiY);
         }
 
+        window.SetPreviewMode(preview);
         window.ApplyPhysicalLayout(physicalBox, dpiX, dpiY);
 
         if (!window.IsVisible)

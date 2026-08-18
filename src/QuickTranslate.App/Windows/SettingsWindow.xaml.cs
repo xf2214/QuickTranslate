@@ -8,6 +8,7 @@ using QuickTranslate.App.Windows.Controls;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Infrastructure.Logging;
+using QuickTranslate.Infrastructure.Translation;
 using WpfMessageBox = System.Windows.MessageBox;
 
 namespace QuickTranslate.App.Windows;
@@ -18,6 +19,7 @@ public partial class SettingsWindow : Window
     private readonly IHotkeyBroker _hotkeyBroker;
     private readonly IStartupRegistrar _startupRegistrar;
     private readonly IOcrEngine? _ocrEngine;
+    private readonly CustomOpenAiTranslationProvider? _modelTester;
     private readonly AppSettings _appSettings;
     private bool _apiKeyCleared;
 
@@ -26,7 +28,8 @@ public partial class SettingsWindow : Window
         IHotkeyBroker hotkeyBroker,
         IStartupRegistrar startupRegistrar,
         IOptions<AppSettings> appSettingsOptions,
-        IOcrEngine? ocrEngine = null)
+        IOcrEngine? ocrEngine = null,
+        CustomOpenAiTranslationProvider? modelTester = null)
     {
         InitializeComponent();
 
@@ -34,6 +37,7 @@ public partial class SettingsWindow : Window
         _hotkeyBroker = hotkeyBroker;
         _startupRegistrar = startupRegistrar;
         _ocrEngine = ocrEngine;
+        _modelTester = modelTester;
         _appSettings = appSettingsOptions.Value;
 
         Loaded += OnLoaded;
@@ -41,6 +45,7 @@ public partial class SettingsWindow : Window
         SaveButton.Click += OnSaveClicked;
         ClearApiKeyButton.Click += OnClearApiKeyClicked;
         RestoreDefaultsButton.Click += OnRestoreDefaultsClicked;
+        TestModelButton.Click += OnTestModelClicked;
         DebugLoggingBox.Checked += (s, e) => LoggingSwitch.SetDebugEnabled(true);
         DebugLoggingBox.Unchecked += (s, e) => LoggingSwitch.SetDebugEnabled(false);
     }
@@ -52,7 +57,8 @@ public partial class SettingsWindow : Window
         var startupRegistrar = sp.GetRequiredService<IStartupRegistrar>();
         var appSettings = sp.GetRequiredService<IOptions<AppSettings>>();
         var ocrEngine = sp.GetService<IOcrEngine>();
-        return new SettingsWindow(settingsManager, hotkeyBroker, startupRegistrar, appSettings, ocrEngine);
+        var modelTester = sp.GetService<CustomOpenAiTranslationProvider>();
+        return new SettingsWindow(settingsManager, hotkeyBroker, startupRegistrar, appSettings, ocrEngine, modelTester);
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -458,5 +464,70 @@ public partial class SettingsWindow : Window
             if (c != '*') return false;
         }
         return true;
+    }
+
+    // ===== 模型连通性测试 =====
+
+    /// <summary>
+    /// 解析测试用 API Key：输入框里的新值优先（全星号为掩码占位），
+    /// 其次用已保存的 Key；已点过「清除」则视为无 Key。
+    /// </summary>
+    private string ResolveApiKeyForTest()
+    {
+        if (_apiKeyCleared) return string.Empty;
+        var typed = ApiKeyBox.Password;
+        if (!string.IsNullOrEmpty(typed) && !AllStars(typed)) return typed;
+        return _settingsManager.GetApiKey() ?? string.Empty;
+    }
+
+    private void SetModelTestStatus(string text, string state)
+    {
+        ModelTestStatus.Text = text;
+        ModelTestStatus.Foreground = state switch
+        {
+            "ok" => (System.Windows.Media.Brush)FindResource("Success"),
+            "fail" => (System.Windows.Media.Brush)FindResource("Danger"),
+            "testing" => (System.Windows.Media.Brush)FindResource("Warning"),
+            _ => (System.Windows.Media.Brush)FindResource("TextSecondary")
+        };
+    }
+
+    private async void OnTestModelClicked(object sender, RoutedEventArgs e)
+    {
+        if (_modelTester == null)
+        {
+            SetModelTestStatus("测试组件不可用", "fail");
+            return;
+        }
+
+        var baseUrl = CustomLlmBaseUrlBox.Text.Trim();
+        var model = CustomLlmModelBox.Text.Trim();
+        var apiKey = ResolveApiKeyForTest();
+
+        TestModelButton.IsEnabled = false;
+        SetModelTestStatus("正在测试…", "testing");
+
+        try
+        {
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(40));
+            var result = await _modelTester.TestConnectionAsync(baseUrl, model, apiKey, cts.Token);
+
+            if (result.Success)
+            {
+                SetModelTestStatus($"✔ 模型可用（延迟 {(int)result.Latency!.Value.TotalMilliseconds} ms）", "ok");
+            }
+            else
+            {
+                SetModelTestStatus("✖ " + result.Message, "fail");
+            }
+        }
+        catch (Exception ex)
+        {
+            SetModelTestStatus("✖ 测试失败：" + ex.Message, "fail");
+        }
+        finally
+        {
+            TestModelButton.IsEnabled = true;
+        }
     }
 }

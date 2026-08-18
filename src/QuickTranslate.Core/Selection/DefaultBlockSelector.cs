@@ -21,7 +21,27 @@ public class DefaultBlockSelector : IBlockSelector
                 NoBlockFound: true);
         }
 
-        OcrLine anchorLine = FindAnchorLine(ocr.Lines, anchor);
+        OcrLine anchorLine = FindAnchorLine(ocr.Lines, anchor, out bool anchorContained, out double anchorDistance);
+
+        // 光标不在任何行内且离最近行太远 → 视为无目标块，
+        // 避免光标在空白区时把不相近的段落误当目标。
+        if (!anchorContained)
+        {
+            double maxDist = Math.Max(
+                opts.MaxAnchorDistanceBase,
+                anchorLine.Box.Height * opts.BlockMaxAnchorDistanceFactor);
+            if (anchorDistance > maxDist)
+            {
+                return new BlockSelectionResult(
+                    BlockText: null,
+                    UnionBox: PhysicalRect.Empty,
+                    SelectedLines: Array.Empty<OcrLine>(),
+                    Kind: SelectionKind.Block,
+                    OperationId: Guid.NewGuid(),
+                    NoBlockFound: true);
+            }
+        }
+
         int anchorLineIndex = -1;
         for (int idx = 0; idx < ocr.Lines.Count; idx++)
         {
@@ -33,6 +53,10 @@ public class DefaultBlockSelector : IBlockSelector
         }
 
         int medianLineHeight = ComputeMedianLineHeight(ocr.Lines, anchorLine);
+        // 行宽基准取 max(锚点行宽, 中位行宽)：锚点落在段末短行时，
+        // 仍允许吸入同段落的全宽正文行，只拦远超正文宽度的 UI 栏。
+        int widthBaseline = Math.Max(anchorLine.Box.Width, ComputeMedianLineWidth(ocr.Lines));
+        int maxCandidateWidth = (int)Math.Round(widthBaseline * opts.BlockMaxWidthVsMedianFactor);
 
         PhysicalRect union = anchorLine.Box;
         List<OcrLine> selected = new() { anchorLine };
@@ -41,7 +65,7 @@ public class DefaultBlockSelector : IBlockSelector
         {
             if (selected.Count >= opts.BlockMaxLinesPerBlock) break;
             OcrLine candidate = ocr.Lines[i];
-            if (!CheckCandidate(candidate, union, medianLineHeight, opts)) break;
+            if (!CheckCandidate(candidate, union, medianLineHeight, maxCandidateWidth, opts)) break;
             union = UnionRect(union, candidate.Box);
             selected.Insert(0, candidate);
         }
@@ -50,7 +74,7 @@ public class DefaultBlockSelector : IBlockSelector
         {
             if (selected.Count >= opts.BlockMaxLinesPerBlock) break;
             OcrLine candidate = ocr.Lines[i];
-            if (!CheckCandidate(candidate, union, medianLineHeight, opts)) break;
+            if (!CheckCandidate(candidate, union, medianLineHeight, maxCandidateWidth, opts)) break;
             union = UnionRect(union, candidate.Box);
             selected.Add(candidate);
         }
@@ -67,25 +91,43 @@ public class DefaultBlockSelector : IBlockSelector
             NoBlockFound: noBlockFound);
     }
 
-    private static OcrLine FindAnchorLine(IReadOnlyList<OcrLine> lines, PhysicalPoint anchor)
+    private static OcrLine FindAnchorLine(
+        IReadOnlyList<OcrLine> lines, PhysicalPoint anchor, out bool contained, out double bestDistance)
     {
         OcrLine? containing = lines.FirstOrDefault(l => l.Box.Contains(anchor));
-        if (containing != null) return containing;
+        if (containing != null)
+        {
+            contained = true;
+            bestDistance = 0;
+            return containing;
+        }
 
+        contained = false;
         OcrLine best = lines[0];
-        double bestDist = double.MaxValue;
+        bestDistance = double.MaxValue;
         foreach (var line in lines)
         {
-            int cx = line.Box.X + line.Box.Width / 2;
-            int cy = line.Box.Y + line.Box.Height / 2;
-            double dist = Math.Sqrt(Math.Pow(cx - anchor.X, 2) + Math.Pow(cy - anchor.Y, 2));
-            if (dist < bestDist)
+            double dist = DistanceToRect(anchor, line.Box);
+            if (dist < bestDistance)
             {
-                bestDist = dist;
+                bestDistance = dist;
                 best = line;
             }
         }
         return best;
+    }
+
+    private static double DistanceToRect(PhysicalPoint p, PhysicalRect box)
+    {
+        int dx = 0;
+        if (p.X < box.Left) dx = box.Left - p.X;
+        else if (p.X >= box.Right) dx = p.X - (box.Right - 1);
+
+        int dy = 0;
+        if (p.Y < box.Top) dy = box.Top - p.Y;
+        else if (p.Y >= box.Bottom) dy = p.Y - (box.Bottom - 1);
+
+        return Math.Sqrt(dx * dx + dy * dy);
     }
 
     private static int ComputeMedianLineHeight(IReadOnlyList<OcrLine> lines, OcrLine anchorLine)
@@ -97,10 +139,26 @@ public class DefaultBlockSelector : IBlockSelector
         return heights[mid];
     }
 
-    private static bool CheckCandidate(OcrLine candidate, PhysicalRect union, int medianHeight, SelectionOptions opts)
+    private static int ComputeMedianLineWidth(IReadOnlyList<OcrLine> lines)
+    {
+        if (lines.Count == 0) return 0;
+        var widths = lines.Select(l => l.Box.Width).OrderBy(w => w).ToList();
+        return widths[widths.Count / 2];
+    }
+
+    private static bool CheckCandidate(OcrLine candidate, PhysicalRect union, int medianHeight, int maxCandidateWidth, SelectionOptions opts)
     {
         double heightRatio = candidate.Box.Height / (double)medianHeight;
         if (heightRatio < opts.BlockMinHeightRatio || heightRatio > opts.BlockMaxHeightRatio)
+            return false;
+
+        // 宽度护栏：远超正文行宽的全宽 UI 栏/标题栏不吸入块
+        if (candidate.Box.Width > maxCandidateWidth)
+            return false;
+
+        // 候选行必须与块并集水平相交：垂直方向重叠但水平完全分离的行
+        // （如同一高度的另一栏文字）不能因 verticalGap 为负而被误连。
+        if (candidate.Box.Right <= union.Left || candidate.Box.Left >= union.Right)
             return false;
 
         int verticalGap;

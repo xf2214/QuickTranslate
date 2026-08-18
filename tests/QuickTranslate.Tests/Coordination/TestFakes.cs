@@ -98,10 +98,12 @@ public class FakeScreenCapture : IScreenCapture
 {
     public TaskCompletionSource<ScreenFrame> CaptureAroundTcs { get; set; } = new();
     public int CaptureAroundCount { get; private set; }
+    public List<PhysicalSize> CaptureAroundSizes { get; } = new();
 
     public Task<ScreenFrame> CaptureAroundAsync(PhysicalPoint anchor, PhysicalSize size, CancellationToken ct = default)
     {
         CaptureAroundCount++;
+        CaptureAroundSizes.Add(size);
         return CaptureAroundTcs.Task;
     }
 
@@ -122,10 +124,25 @@ public class FakeOcrEngine : IOcrEngine
     public TaskCompletionSource<OcrLayoutResult> RecognizeTcs { get; set; } = new();
     public int RecognizeCount { get; private set; }
     public Func<Exception>? InferenceFailureFactory { get; set; }
+    /// <summary>每次识别调用收到的焦点带（Block 模式非 null，Word 模式为 null）。</summary>
+    public List<PhysicalRect?> FocusBands { get; } = new();
+    /// <summary>同帧多次识别（如触带扩展）时按序返回的预置结果，空则走 RecognizeTcs。</summary>
+    public Queue<OcrLayoutResult> QueuedResults { get; } = new();
 
     public string EngineName => "FakeOcr";
     public bool IsAvailable => true;
     public event EventHandler? SessionCreated;
+
+    public Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, PhysicalRect? focusBand, CancellationToken ct = default)
+    {
+        FocusBands.Add(focusBand);
+        if (QueuedResults.Count > 0)
+        {
+            RecognizeCount++;
+            return Task.FromResult(QueuedResults.Dequeue());
+        }
+        return RecognizeAsync(frame, ct);
+    }
 
     public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default)
     {
@@ -201,17 +218,21 @@ public class FakeOverlayService : ISelectionOverlayService
 {
     public Dictionary<MonitorId, int> ShowCountByMonitor { get; } = new();
     public int ShowTotalCount { get; private set; }
+    public int PreviewShowCount { get; private set; }
+    public int SelectionShowCount { get; private set; }
     public int UpdateCount { get; private set; }
     public int HideCount { get; private set; }
     public int HideAllCount { get; private set; }
-    public List<(PhysicalRect Box, MonitorId Monitor, uint DpiX, uint DpiY)> ShowCalls { get; } = new();
+    public List<(PhysicalRect Box, MonitorId Monitor, uint DpiX, uint DpiY, bool Preview)> ShowCalls { get; } = new();
 
-    public void Show(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX = 96, uint dpiY = 96)
+    public void Show(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX = 96, uint dpiY = 96, bool preview = false)
     {
+        if (preview) PreviewShowCount++;
+        else SelectionShowCount++;
         ShowTotalCount++;
         ShowCountByMonitor.TryGetValue(monitorId, out var c);
         ShowCountByMonitor[monitorId] = c + 1;
-        ShowCalls.Add((physicalBox, monitorId, dpiX, dpiY));
+        ShowCalls.Add((physicalBox, monitorId, dpiX, dpiY, preview));
     }
 
     public void Update(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX = 96, uint dpiY = 96)

@@ -20,14 +20,17 @@
         <ResourceDictionary Source="/QuickTranslate.App;component/Themes/Generic.xaml"/>
     </Window.Resources>
     <Border x:Name="RootBorder"
-            Background="#FFFDFDFD"
-            CornerRadius="10"
+            Background="#F8FFFFFF"
+            BorderBrush="#1A000000"
+            BorderThickness="1"
+            CornerRadius="12"
             Padding="12"
-            SnapsToDevicePixels="True">
+            SnapsToDevicePixels="True"
+            TextElement.FontFamily="Segoe UI Variable Display, Segoe UI, Microsoft YaHei UI">
         <Border.Effect>
-            <DropShadowEffect BlurRadius="18"
-                              ShadowDepth="0"
-                              Opacity="0.15"
+            <DropShadowEffect BlurRadius="28"
+                              ShadowDepth="4"
+                              Opacity="0.16"
                               Color="Black"/>
         </Border.Effect>
         <Grid>
@@ -39,16 +42,20 @@
 
             <StackPanel Grid.Row="0" Margin="0 0 0 8">
                 <StackPanel Orientation="Horizontal" Margin="0 0 0 6">
-                    <TextBlock x:Name="BlockHeader"
-                               FontSize="12"
-                               Foreground="#6B7280"
-                               Text="块模式"/>
+                    <!-- 灰色小胶囊标签：macOS 风格的模式指示 -->
+                    <Border Background="#0F000000" CornerRadius="8" Padding="8 2">
+                        <TextBlock x:Name="BlockHeader"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
+                                   Foreground="#8E8E93"
+                                   Text="块模式"/>
+                    </Border>
                 </StackPanel>
 
                 <!-- OCR 原文预览（灰字小号，最多 3 行，超出省略）：让用户核对识别范围 -->
                 <TextBlock x:Name="SourceText"
                            FontSize="11.5"
-                           Foreground="#9CA3AF"
+                           Foreground="#8E8E93"
                            TextWrapping="Wrap"
                            MaxHeight="54"
                            TextTrimming="CharacterEllipsis"
@@ -61,7 +68,7 @@
                           VerticalScrollBarVisibility="Auto">
                 <TextBlock x:Name="TranslationText"
                            FontSize="14"
-                           Foreground="#111827"
+                           Foreground="#1C1C1E"
                            TextWrapping="Wrap"
                            Text=""/>
             </ScrollViewer>
@@ -73,19 +80,19 @@
                 <Button x:Name="SpeakButton"
                         Content="🔊 朗读"
                         Style="{StaticResource PopupActionButton}"
-                        Padding="10 4"
-                        Margin="6 0 0 0"
+                        Padding="12 5"
+                        Margin="8 0 0 0"
                         Visibility="Collapsed"/>
                 <Button x:Name="CopyButton"
                         Content="复制"
                         Style="{StaticResource PopupActionButton}"
-                        Padding="10 4"
-                        Margin="6 0 0 0"/>
+                        Padding="12 5"
+                        Margin="8 0 0 0"/>
                 <Button x:Name="DismissButton"
                         Content="关闭"
                         Style="{StaticResource PopupDismissButton}"
-                        Padding="10 4"
-                        Margin="6 0 0 0"/>
+                        Padding="12 5"
+                        Margin="8 0 0 0"/>
             </StackPanel>
         </Grid>
     </Border>
