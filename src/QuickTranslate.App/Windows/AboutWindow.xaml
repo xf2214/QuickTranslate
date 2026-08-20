@@ -9,8 +9,8 @@
         SizeToContent="Manual"
         WindowStartupLocation="CenterScreen"
         Title="关于 QuickTranslate"
-        Width="420"
-        Height="360">
+        Width="520"
+        Height="600">
     <!-- 自包含按钮样式：使窗口可脱离 App 资源独立实例化 -->
     <Window.Resources>
         <ResourceDictionary Source="/QuickTranslate.App;component/Themes/Generic.xaml"/>
@@ -26,79 +26,238 @@
                               Opacity="0.18"
                               Color="Black"/>
         </Border.Effect>
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
+        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      CanContentScroll="True"
+                      Padding="0 0 4 0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>   <!-- Header -->
+                    <RowDefinition Height="Auto"/>   <!-- Version / Build -->
+                    <RowDefinition Height="Auto"/>   <!-- Pitch line -->
+                    <RowDefinition Height="Auto"/>   <!-- Hotkeys -->
+                    <RowDefinition Height="Auto"/>   <!-- Capabilities -->
+                    <RowDefinition Height="Auto"/>   <!-- Privacy -->
+                    <RowDefinition Height="Auto"/>   <!-- Model info -->
+                    <RowDefinition Height="Auto"/>   <!-- Translation info -->
+                    <RowDefinition Height="Auto"/>   <!-- Buttons row -->
+                </Grid.RowDefinitions>
 
-            <Grid Grid.Row="0" Margin="0 0 0 12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0"
-                           Text="QT"
-                           FontSize="34"
-                           FontWeight="Bold"
-                           Foreground="#2563EB"
-                           Margin="0 0 14 0"
-                           VerticalAlignment="Center"/>
-                <TextBlock Grid.Column="1"
-                           Text="QuickTranslate"
-                           FontSize="24"
-                           FontWeight="Bold"
-                           Foreground="#111827"
-                           VerticalAlignment="Center"/>
+                <!-- ── Header: Logo + Name + Tagline ── -->
+                <Grid Grid.Row="0" Margin="0 0 0 12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Column="0"
+                            Background="#EEF2FF"
+                            CornerRadius="10"
+                            Width="56" Height="56"
+                            Margin="0 0 14 0"
+                            VerticalAlignment="Center">
+                        <TextBlock Text="QT"
+                                   FontSize="24"
+                                   FontWeight="Bold"
+                                   Foreground="#4338CA"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="QuickTranslate"
+                                   FontSize="22"
+                                   FontWeight="Bold"
+                                   Foreground="#111827"/>
+                        <TextBlock Text="Windows 快速划词翻译工具 · 指哪译哪"
+                                   FontSize="12"
+                                   Foreground="#6B7280"
+                                   Margin="0 2 0 0"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- ── Version / Build / Copyright ── -->
+                <StackPanel Grid.Row="1" Margin="4 0 0 10">
+                    <TextBlock x:Name="VersionLabel"
+                               FontSize="13"
+                               Foreground="#374151"
+                               FontWeight="SemiBold"
+                               Margin="0 0 0 3"/>
+                    <TextBlock x:Name="BuildLabel"
+                               FontSize="11"
+                               Foreground="#6B7280"
+                               Margin="0 0 0 3"/>
+                    <TextBlock x:Name="CopyrightLabel"
+                               FontSize="11"
+                               Foreground="#6B7280"/>
+                </StackPanel>
+
+                <!-- ── Product pitch ── -->
+                <Border Grid.Row="2"
+                        Background="#F9FAFB"
+                        CornerRadius="8"
+                        Padding="12 10"
+                        Margin="0 0 0 12">
+                    <TextBlock TextWrapping="Wrap"
+                               FontSize="12"
+                               Foreground="#374151"
+                               LineHeight="18">
+                        <Run>把鼠标停在目标文字上，按下快捷键，</Run>
+                        <Run FontWeight="SemiBold">无需选中、复制、切换窗口</Run>
+                        <Run>——QuickTranslate 在本地完成 OCR，并把翻译结果就近贴到原文旁弹出。</Run>
+                    </TextBlock>
+                </Border>
+
+                <!-- ── Hotkeys ── -->
+                <Grid Grid.Row="3" Margin="0 0 0 12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="8"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="8"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <!-- Alt + 1 -->
+                    <Border Grid.Column="0"
+                            Background="#EFF6FF"
+                            CornerRadius="8"
+                            Padding="10 10">
+                        <StackPanel>
+                            <TextBlock Text="单词翻译"
+                                       FontSize="11"
+                                       Foreground="#1E40AF"
+                                       FontWeight="SemiBold"
+                                       Margin="0 0 0 4"/>
+                            <TextBlock Text="Alt + 1"
+                                       FontSize="18"
+                                       Foreground="#1E3A8A"
+                                       FontWeight="Bold"/>
+                            <TextBlock Text="词义 + 音标"
+                                       FontSize="10"
+                                       Foreground="#64748B"
+                                       Margin="0 4 0 0"/>
+                        </StackPanel>
+                    </Border>
+                    <!-- Alt + 2 -->
+                    <Border Grid.Column="2"
+                            Background="#FFF7ED"
+                            CornerRadius="8"
+                            Padding="10 10">
+                        <StackPanel>
+                            <TextBlock Text="文本块翻译"
+                                       FontSize="11"
+                                       Foreground="#C2410C"
+                                       FontWeight="SemiBold"
+                                       Margin="0 0 0 4"/>
+                            <TextBlock Text="Alt + 2"
+                                       FontSize="18"
+                                       Foreground="#9A3412"
+                                       FontWeight="Bold"/>
+                            <TextBlock Text="段落流式译文"
+                                       FontSize="10"
+                                       Foreground="#9A3412"
+                                       Margin="0 4 0 0"/>
+                        </StackPanel>
+                    </Border>
+                    <!-- Esc -->
+                    <Border Grid.Column="4"
+                            Background="#F3F4F6"
+                            CornerRadius="8"
+                            Padding="10 10">
+                        <StackPanel>
+                            <TextBlock Text="取消操作"
+                                       FontSize="11"
+                                       Foreground="#374151"
+                                       FontWeight="SemiBold"
+                                       Margin="0 0 0 4"/>
+                            <TextBlock Text="Esc"
+                                       FontSize="18"
+                                       Foreground="#111827"
+                                       FontWeight="Bold"/>
+                            <TextBlock Text="关闭所有浮窗"
+                                       FontSize="10"
+                                       Foreground="#6B7280"
+                                       Margin="0 4 0 0"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <!-- ── Capabilities + Privacy (two sub-cards) ── -->
+                <StackPanel Grid.Row="4" Margin="0 0 0 12">
+                    <TextBlock Text="能力概览"
+                               FontSize="11"
+                               FontWeight="SemiBold"
+                               Foreground="#111827"
+                               Margin="0 0 0 4"/>
+                    <ItemsControl FontSize="11" Foreground="#4B5563">
+                        <ItemsControl.Items>
+                            <TextBlock Text="• 本地 PP-OCRv6 识别（det → cls → rec → CTC 解码），模型 ONNX Runtime CPU 常驻预热"/>
+                            <TextBlock Text="• 多级翻译路由：内存 LRU → SQLite L2 → ECDICT 本地词典 → 在线大模型"/>
+                            <TextBlock Text="• 翻译引擎可切换：OpenAI 兼容端点（SSE 流式）/ Qwen-MT，保存即生效"/>
+                            <TextBlock Text="• PerMonitorV2 高 DPI / 多显示器适配；弹窗绝不抢占当前应用焦点"/>
+                            <TextBlock Text="• 新热键立即取消旧任务（OperationId + Cancellation），旧结果绝不覆盖新结果"/>
+                        </ItemsControl.Items>
+                    </ItemsControl>
+                </StackPanel>
+
+                <StackPanel Grid.Row="5" Margin="0 0 0 12">
+                    <TextBlock Text="隐私承诺"
+                               FontSize="11"
+                               FontWeight="SemiBold"
+                               Foreground="#111827"
+                               Margin="0 0 0 4"/>
+                    <ItemsControl FontSize="11" Foreground="#4B5563">
+                        <ItemsControl.Items>
+                            <TextBlock Text="🔒 截图只存在于内存，OCR 完成立即释放，默认不落盘不上传"/>
+                            <TextBlock Text="🔒 云端只接收 OCR 后的纯文本，绝不发送屏幕图像"/>
+                            <TextBlock Text="🔒 API Key 使用 Windows DPAPI CurrentUser 加密，绝不明文写入 JSON/日志"/>
+                        </ItemsControl.Items>
+                    </ItemsControl>
+                </StackPanel>
+
+                <!-- ── Model + Translation info labels ── -->
+                <StackPanel Grid.Row="6" Margin="0 0 0 4">
+                    <TextBlock x:Name="OcrInfoLabel"
+                               FontSize="10.5"
+                               Foreground="#9CA3AF"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+                <StackPanel Grid.Row="7" Margin="0 0 0 0">
+                    <TextBlock x:Name="TranslationInfoLabel"
+                               FontSize="10.5"
+                               Foreground="#9CA3AF"
+                               TextWrapping="Wrap"/>
+                    <TextBlock x:Name="DictionaryInfoLabel"
+                               FontSize="10.5"
+                               Foreground="#9CA3AF"
+                               TextWrapping="Wrap"
+                               Margin="0 3 0 0"/>
+                </StackPanel>
+
+                <!-- ── Buttons ── -->
+                <StackPanel Grid.Row="8"
+                            Orientation="Horizontal"
+                            HorizontalAlignment="Right"
+                            Margin="0 14 0 0">
+                    <Button x:Name="WebsiteButton"
+                            Content="项目主页"
+                            Style="{StaticResource PopupActionButton}"
+                            Padding="12 5"
+                            Margin="0 0 8 0"/>
+                    <Button x:Name="CheckModelButton"
+                            Content="检查模型"
+                            Style="{StaticResource PopupActionButton}"
+                            Padding="12 5"
+                            Margin="0 0 8 0"/>
+                    <Button x:Name="LicenseButton"
+                            Content="许可证"
+                            Style="{StaticResource PopupActionButton}"
+                            Padding="12 5"
+                            Margin="0 0 8 0"/>
+                    <Button x:Name="CloseButton"
+                            Content="关闭"
+                            Style="{StaticResource PopupDismissButton}"
+                            Padding="12 5"/>
+                </StackPanel>
             </Grid>
-
-            <StackPanel Grid.Row="1" Margin="4 0">
-                <TextBlock x:Name="VersionLabel"
-                           FontSize="13"
-                           Foreground="#374151"
-                           Margin="0 0 0 6"/>
-                <TextBlock x:Name="BuildLabel"
-                           FontSize="12"
-                           Foreground="#6B7280"
-                           Margin="0 0 0 6"/>
-                <TextBlock x:Name="CopyrightLabel"
-                           FontSize="12"
-                           Foreground="#6B7280"/>
-                <!-- 模型/翻译能力说明（与 docs/ocr-models-and-custom-llm.md 保持同步） -->
-                <TextBlock x:Name="OcrInfoLabel"
-                           Text="OCR：PP-OCRv6 medium（ONNX Runtime，源 HoVDuc/ppocrv5-onnx）· 字典 18708 字符"
-                           FontSize="11"
-                           Foreground="#9CA3AF"
-                           TextWrapping="Wrap"
-                           Margin="0 10 0 0"/>
-                <TextBlock x:Name="TranslationInfoLabel"
-                           Text="翻译：支持任意 OpenAI 兼容大模型端点（设置 → 翻译引擎），亦可用内置 Qwen-MT"
-                           FontSize="11"
-                           Foreground="#9CA3AF"
-                           TextWrapping="Wrap"
-                           Margin="0 4 0 0"/>
-            </StackPanel>
-
-            <StackPanel Grid.Row="2"
-                        Orientation="Horizontal"
-                        HorizontalAlignment="Right"
-                        Margin="0 12 0 0">
-                <Button x:Name="CheckModelButton"
-                        Content="检查模型"
-                        Style="{StaticResource PopupActionButton}"
-                        Padding="12 5"
-                        Margin="0 0 8 0"/>
-                <Button x:Name="LicenseButton"
-                        Content="许可证"
-                        Style="{StaticResource PopupActionButton}"
-                        Padding="12 5"
-                        Margin="0 0 8 0"/>
-                <Button x:Name="CloseButton"
-                        Content="关闭"
-                        Style="{StaticResource PopupDismissButton}"
-                        Padding="12 5"/>
-            </StackPanel>
-        </Grid>
+        </ScrollViewer>
     </Border>
 </Window>
