@@ -3,8 +3,10 @@ using System.IO;
 using System.Windows.Forms;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using QuickTranslate.App.Windows;
 using QuickTranslate.Core.Abstractions;
+using QuickTranslate.Core.Options;
 using QuickTranslate.Infrastructure.Services;
 using CoreToolTipIcon = QuickTranslate.Core.Abstractions.ToolTipIcon;
 using WFSToolTipIcon = System.Windows.Forms.ToolTipIcon;
@@ -19,6 +21,7 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
     private NotifyIcon? _notifyIcon;
     private ContextMenuStrip? _contextMenu;
     private ToolStripMenuItem? _pauseMenuItem;
+    private ToolStripMenuItem? _debugModeMenuItem;
     private SettingsWindow? _settingsWindow;
     private AboutWindow? _aboutWindow;
     private bool _disposed;
@@ -83,6 +86,13 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
         UpdatePauseMenuItemText();
         _pauseMenuItem.Click += OnPauseMenuItemClick;
         _contextMenu.Items.Add(_pauseMenuItem);
+
+        _debugModeMenuItem = new ToolStripMenuItem("调试模式");
+        _debugModeMenuItem.CheckOnClick = true;
+        _debugModeMenuItem.Checked = _serviceProvider.GetService<IOptions<AppSettings>>()?.Value.DebugOverlayMode == true;
+        _debugModeMenuItem.ToolTipText = "开启后选中区域显示为实线框，便于排查选词定位；关闭时显示扫描动画";
+        _debugModeMenuItem.Click += OnDebugModeClick;
+        _contextMenu.Items.Add(_debugModeMenuItem);
 
         _contextMenu.Items.Add(new ToolStripSeparator());
 
@@ -171,6 +181,31 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
             _appLifecycle.Resume();
         }
         UpdatePauseMenuItemText();
+    }
+
+    private void OnDebugModeClick(object? sender, EventArgs e)
+    {
+        if (_debugModeMenuItem == null) return;
+
+        try
+        {
+            var appSettings = _serviceProvider.GetRequiredService<IOptions<AppSettings>>().Value;
+            bool enabled = _debugModeMenuItem.Checked;
+            appSettings.DebugOverlayMode = enabled;
+
+            // 持久化到 settings.json（同一实例就地更新，无需重启即生效）
+            var settingsManager = _serviceProvider.GetService<ISettingsManager>();
+            if (settingsManager != null)
+            {
+                _ = settingsManager.SaveAsync(appSettings);
+            }
+
+            _logger.LogInformation("Debug overlay mode {State} via tray menu", enabled ? "enabled" : "disabled");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to toggle debug overlay mode");
+        }
     }
 
     private void OnAppLifecyclePaused(object? sender, EventArgs e)

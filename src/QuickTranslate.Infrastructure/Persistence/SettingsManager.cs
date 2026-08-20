@@ -67,6 +67,7 @@ public class SettingsManager : ISettingsManager
             _loadedSettings.StartWithWindows = settings.StartWithWindows;
             _loadedSettings.CloseOnOutsideClick = settings.CloseOnOutsideClick;
             _loadedSettings.DebugLogging = settings.DebugLogging;
+            _loadedSettings.DebugOverlayMode = settings.DebugOverlayMode;
             _loadedSettings.EnableTextToSpeech = settings.EnableTextToSpeech;
             _loadedSettings.TranslationProvider = settings.TranslationProvider;
             _loadedSettings.CustomLlmBaseUrl = settings.CustomLlmBaseUrl;

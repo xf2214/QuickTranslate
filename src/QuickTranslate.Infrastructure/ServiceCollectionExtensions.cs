@@ -101,10 +101,24 @@ public static class ServiceCollectionExtensions
         AddOcrEngines(services);
         AddSelectionCore(services);
         AddCacheAndRouter(services);
+        AddSqliteL2Cache(services, configuration);
         AddTranslationProvider(services, configuration);
         AddCoordinationServices(services);
 
         return services;
+    }
+
+    /// <summary>
+    /// 接入 SQLite L2 持久缓存：L1 内存缓存重启即失效，若不接 L2，
+    /// 每次重启后所有在线译文都要重新请求（每次数百毫秒~秒级网络耗时）。
+    /// 落盘目录覆盖为 AppData（安装目录可能不可写）。
+    /// </summary>
+    private static void AddSqliteL2Cache(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddSqliteCache(configuration);
+        services.AddOptions<SqliteCacheOptions>()
+            .Configure<IAppDataProvider>((opts, appData) =>
+                opts.DataDirectory = appData.GetAppDataDirectory());
     }
 
     public static IServiceCollection AddCoordinationServices(this IServiceCollection services)
@@ -160,10 +174,27 @@ public static class ServiceCollectionExtensions
             var provider = sp.GetRequiredService<ITranslationProvider>();
             var settings = sp.GetRequiredService<IOptions<AppSettings>>();
             var logger = sp.GetRequiredService<ILogger<DefaultTranslationRouter>>();
-            var l2 = sp.GetService<ITranslationL2Cache>();
+            var l2 = TryResolveL2Cache(sp, logger);
             return new DefaultTranslationRouter(cache, dict, provider, settings, logger, l2);
         });
         return services;
+    }
+
+    /// <summary>
+    /// L2 是可选增强：若 SQLite 构造失败（磁盘/权限/原生库等），
+    /// 降级为无 L2 运行，而不是让整个翻译管线在 DI 解析时崩溃。
+    /// </summary>
+    private static ITranslationL2Cache? TryResolveL2Cache(IServiceProvider sp, ILogger logger)
+    {
+        try
+        {
+            return sp.GetService<ITranslationL2Cache>();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "L2 cache unavailable (construction failed); continuing without it");
+            return null;
+        }
     }
 
     public static IServiceCollection AddSqliteCache(this IServiceCollection services, IConfiguration? config = null)

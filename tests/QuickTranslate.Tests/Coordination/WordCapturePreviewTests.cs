@@ -130,9 +130,11 @@ public class WordCapturePreviewTests
                 NoTextFound: false);
         };
 
-        // OCR 结果含光标所在行（行高 30），供重抓尺寸计算
+        // OCR 结果含光标所在行（行高 30），供重抓尺寸计算。
+        // 行框必须在截图区域内（真实 OCR 输出总是如此），且四面距边缘 ≥10px
+        // 以免触发“光标附近行触边”的额外重抓信号
         var frame = new PhysicalRect(0, 0, 186, 80);
-        var ocrResult = CreateOcrResult(frame, MakeLine(20, 88, 150, 30));
+        var ocrResult = CreateOcrResult(frame, MakeLine(20, 40, 150, 30));
 
         broker.RaiseHotkeyFired(HotkeyEventType.Word);
         await Task.Delay(30);
@@ -223,6 +225,59 @@ public class WordCapturePreviewTests
         {
             SetAutoHideMs(5000);
         }
+    }
+
+    [Fact]
+    public async Task OffCursorSelection_WithEdgeClippedLine_Retries()
+    {
+        // 选框明显偏离光标（段落首尾常见：光标下的词贴截图边缘被截断/漏检，
+        // 选择器退而选了邻近词）且光标附近行触碰截图边缘 → 应扩大宽度重抓
+        var coord = CoordinatorTestHelpers.CreateCoordinator(
+            out _, out var broker, out _, out _,
+            out var capture, out var ocr, out var selector,
+            out var overlay, out var translator, out var popup);
+
+        int selectCall = 0;
+        selector.SelectFunc = (_, _, _) =>
+        {
+            selectCall++;
+            // 第一次：选框在光标右侧远处（光标 100,100），且自身未触边；
+            // 第二次：返回包含光标的词框 → 不再重抓
+            var box = selectCall == 1
+                ? new PhysicalRect(150, 50, 20, 20)
+                : new PhysicalRect(90, 95, 30, 20);
+            return new SelectionResult(
+                Text: "hello",
+                ContextLine: "hello world",
+                Box: box,
+                Kind: SelectionKind.Word,
+                Confidence: 0.95f,
+                OperationId: Guid.NewGuid(),
+                NoTextFound: false);
+        };
+
+        // 光标所在行触碰截图左边缘（行高 30）
+        var frame = new PhysicalRect(0, 0, 186, 160);
+        var ocrResult = CreateOcrResult(frame, MakeLine(0, 90, 186, 30));
+
+        broker.RaiseHotkeyFired(HotkeyEventType.Word);
+        await Task.Delay(30);
+        capture.CaptureAroundTcs.SetResult(FakeScreenCapture.CreateFrame(frame, Mid));
+        await Task.Delay(30);
+        ocr.RecognizeTcs.SetResult(ocrResult);
+        await Task.Delay(60);
+
+        // 横向触边（光标附近行贴左缘）→ 宽翻倍 max(186×2, 15×0.62×30=279) = 372；
+        // 纵向无触边信号 → 高保持 max(160, 4×30=120) = 160
+        Assert.Equal(2, capture.CaptureAroundCount);
+        Assert.Equal(372, capture.CaptureAroundSizes[1].Width);
+        Assert.Equal(160, capture.CaptureAroundSizes[1].Height);
+
+        translator.TranslateWordTcs.SetResult(FakeTranslationRouter.CreateResult("hello", "zh-CN"));
+        await Task.Delay(400);
+
+        Assert.Equal(AppState.Displaying, coord.State);
+        Assert.Equal(1, overlay.SelectionShowCount);
     }
 
     [Fact]

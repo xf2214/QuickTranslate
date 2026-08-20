@@ -22,6 +22,27 @@ public class SelectionOptions
     public int BlockEdgeRetryThreshold { get; set; } = 20;
     public int BlockMaxLinesPerBlock { get; set; } = 30;
 
+    // 自适应行距护栏：行间距上限在固定比例（BlockMaxVerticalGapFactor × 行高）之外，
+    // 再取“中位行间距 × 该因子”的更严值。紧凑排版下段落间距可能小于 0.5×行高，
+    // 固定比例会让块跨段落生长；用实测行间距做基线能区分“段内行距”与“段间空隙”。
+    public float BlockParagraphGapVsMedianFactor { get; set; } = 1.8f;
+
+    // 自适应行距下限（像素）：行间距极小时 OCR 框边缘抖动可达数像素，
+    // 防止把正常的行距抖动误判为段落边界。
+    public int BlockParagraphGapMinPx { get; set; } = 4;
+
+    // 段末短行判定：行右缘距中位右缘超过 中位行宽 × 该因子 → 视为段末短行。
+    // 正文段落最后一行通常明显短于正文行，是天然的段落边界信号。
+    public float BlockShortTailRightMarginFactor { get; set; } = 0.2f;
+
+    // 全宽行判定：行右缘距中位右缘不超过 中位行宽 × 该因子 → 视为全宽正文行。
+    // 短行护栏仅在块内已存在全宽行时生效，避免误伤全是短行的题注/列表块。
+    public float BlockFullWidthRightMarginFactor { get; set; } = 0.12f;
+
+    // 首行缩进判定（向上生长）：候选行左缘比块左缘右移超过 行高 × 该因子，
+    // 视为当前段落的首行（缩进起始），纳入后停止向上生长，不跨入上一段落。
+    public float BlockFirstLineIndentFactor { get; set; } = 1.0f;
+
     // 候选行宽上限 = max(锚点行宽, 中位行宽) × 该因子：
     // 防止把紧邻段落的全宽 UI 栏/标题栏（宽度远超正文行）吸入块。
     public float BlockMaxWidthVsMedianFactor { get; set; } = 2.5f;

@@ -72,6 +72,55 @@ public static class ProjectionWordSegmenter
         if (!TryPrepare(lineBitmap, recognizedText, out var tokens, out var profile))
             return false;
 
+        return TrySegmentFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex, out words, out detail);
+    }
+
+    /// <summary>
+    /// 先精确对齐（TrySegment）、失败再受约束切分的组合入口，但墨水投影
+    /// （位图全像素遍历，回退场景下的主要开销）只计算一次。
+    /// detail 为 direct/retry=…/merge/constrained。
+    /// </summary>
+    public static bool TrySegmentOrConstrained(
+        Bitmap lineBitmap,
+        string recognizedText,
+        PhysicalRect localBox,
+        PhysicalRect frameRegion,
+        bool rotated180,
+        int lineIndex,
+        out IReadOnlyList<OcrWord> words,
+        out string detail)
+    {
+        words = Array.Empty<OcrWord>();
+        detail = string.Empty;
+
+        if (!TryPrepare(lineBitmap, recognizedText, out var tokens, out var profile))
+            return false;
+
+        if (TrySegmentFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex, out words, out detail))
+            return true;
+
+        if (TrySegmentConstrainedFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex, out words))
+        {
+            detail = "constrained";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TrySegmentFromProfile(
+        InkProfile profile,
+        string[] tokens,
+        PhysicalRect localBox,
+        PhysicalRect frameRegion,
+        bool rotated180,
+        int lineIndex,
+        out IReadOnlyList<OcrWord> words,
+        out string detail)
+    {
+        words = Array.Empty<OcrWord>();
+        detail = string.Empty;
+
         int n = tokens.Length;
         int noiseFloor = ComputeNoiseFloor(profile.Height);
 
@@ -125,6 +174,20 @@ public static class ProjectionWordSegmenter
 
         if (!TryPrepare(lineBitmap, recognizedText, out var tokens, out var profile))
             return false;
+
+        return TrySegmentConstrainedFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex, out words);
+    }
+
+    private static bool TrySegmentConstrainedFromProfile(
+        InkProfile profile,
+        string[] tokens,
+        PhysicalRect localBox,
+        PhysicalRect frameRegion,
+        bool rotated180,
+        int lineIndex,
+        out IReadOnlyList<OcrWord> words)
+    {
+        words = Array.Empty<OcrWord>();
 
         int n = tokens.Length;
         var colInk = profile.ColInk;

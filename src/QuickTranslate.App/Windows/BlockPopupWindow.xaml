@@ -10,8 +10,8 @@
         SizeToContent="Manual"
         WindowStartupLocation="Manual"
         Title="QuickTranslate Block Popup"
-        Width="440"
-        MinHeight="120"
+        Width="340"
+        MinHeight="110"
         MaxHeight="600"
         Left="0"
         Top="0">
@@ -24,13 +24,14 @@
             BorderBrush="#1A000000"
             BorderThickness="1"
             CornerRadius="12"
-            Padding="12"
+            Padding="11"
             SnapsToDevicePixels="True"
+            UseLayoutRounding="True"
             TextElement.FontFamily="Segoe UI Variable Display, Segoe UI, Microsoft YaHei UI">
         <Border.Effect>
-            <DropShadowEffect BlurRadius="28"
-                              ShadowDepth="4"
-                              Opacity="0.16"
+            <DropShadowEffect BlurRadius="18"
+                              ShadowDepth="3"
+                              Opacity="0.18"
                               Color="Black"/>
         </Border.Effect>
         <Grid>
@@ -69,6 +70,7 @@
                 <TextBlock x:Name="TranslationText"
                            FontSize="14"
                            Foreground="#1C1C1E"
+                           LineHeight="22"
                            TextWrapping="Wrap"
                            Text=""/>
             </ScrollViewer>

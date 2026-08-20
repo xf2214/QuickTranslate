@@ -18,7 +18,7 @@ public interface IFadeOutHideable
 /// 苹果风格弹窗进出场动效（共享组件）。
 /// 安全铁律（历史 Bug 防线：窗口级 Opacity 动画曾导致选框卡在 0 永久隐形）：
 /// 1. 只动画内容元素（RootBorder），绝不动画 Window 自身 Opacity；
-/// 2. 进场前同步把 Opacity/缩放复位到可见终态，动画被中断时元素依然可见；
+/// 2. 进场前同步把 Opacity/缩放/位移复位到可见终态，动画被中断时元素依然可见；
 /// 3. 退场完成后立即 Hide() 并复位 Opacity=1，保证下一次显示不会卡在透明态；
 /// 4. 所有动画 ≤ 200ms。
 /// </summary>
@@ -32,10 +32,16 @@ public static class PopupTransition
 
     private static readonly ConditionalWeakTable<FrameworkElement, TransitionState> States = new();
 
+    // 共享时长：进场 180ms / 退场 140ms，均 ≤ 200ms。
+    // 注意：缓动函数（EasingFunctionBase）是 DispatcherObject 而非 Freezable，
+    // 不可跨线程静态共享（测试在多个 STA 线程各自建窗，会触发线程归属冲突），每次新建
+    private static readonly TimeSpan EntryDuration = TimeSpan.FromMilliseconds(180);
+    private static readonly TimeSpan ExitDuration = TimeSpan.FromMilliseconds(140);
+
     private static TransitionState GetState(FrameworkElement root) => States.GetValue(root, _ => new TransitionState());
 
     /// <summary>
-    /// 进场：轻微缩放 0.97→1 + 淡入，160ms EaseOut，中心为变换原点。
+    /// 进场：缩放 0.97→1 + 上移滑入（+8→0）+ 淡入，180ms EaseOut。
     /// 同时取消任何进行中的退场动画（窗口在退场途中被复用时不残留）。
     /// </summary>
     public static void PlayEntry(FrameworkElement root)
@@ -48,29 +54,36 @@ public static class PopupTransition
         root.BeginAnimation(UIElement.OpacityProperty, null);
         root.Opacity = 1;
 
+        var group = new TransformGroup();
         var scale = new ScaleTransform(1, 1);
+        var translate = new TranslateTransform(0, 8);
+        group.Children.Add(scale);
+        group.Children.Add(translate);
         root.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
-        root.RenderTransform = scale;
+        root.RenderTransform = group;
 
-        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
-
-        var fade = new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(160))
+        var fade = new DoubleAnimation(0.0, 1.0, EntryDuration)
         {
-            EasingFunction = ease
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
         };
-        var grow = new DoubleAnimation(0.97, 1.0, TimeSpan.FromMilliseconds(160))
+        var grow = new DoubleAnimation(0.97, 1.0, EntryDuration)
         {
-            EasingFunction = ease
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+        var slideUp = new DoubleAnimation(8.0, 0.0, EntryDuration)
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
         };
         grow.Completed += (_, _) => root.RenderTransform = null;
 
         scale.BeginAnimation(ScaleTransform.ScaleXProperty, grow);
         scale.BeginAnimation(ScaleTransform.ScaleYProperty, grow);
+        translate.BeginAnimation(TranslateTransform.YProperty, slideUp);
         root.BeginAnimation(UIElement.OpacityProperty, fade);
     }
 
     /// <summary>
-    /// 退场：140ms 淡出后 Hide() 并复位 Opacity=1。
+    /// 退场：140ms 淡出 + 轻微缩小（1→0.98）+ 下移 2px，完成后 Hide() 并复位 Opacity=1。
     /// 窗口不可见时直接 Hide()；重复调用只生效一次。
     /// </summary>
     public static void PlayExit(Window window, FrameworkElement root)
@@ -85,7 +98,23 @@ public static class PopupTransition
         if (state.Exiting) return;
         state.Exiting = true;
 
-        var fade = new DoubleAnimation(root.Opacity, 0.0, TimeSpan.FromMilliseconds(140))
+        var group = new TransformGroup();
+        var scale = new ScaleTransform(1, 1);
+        var translate = new TranslateTransform(0, 0);
+        group.Children.Add(scale);
+        group.Children.Add(translate);
+        root.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
+        root.RenderTransform = group;
+
+        var fade = new DoubleAnimation(root.Opacity, 0.0, ExitDuration)
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn }
+        };
+        var shrink = new DoubleAnimation(1.0, 0.98, ExitDuration)
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn }
+        };
+        var slideDown = new DoubleAnimation(0.0, 2.0, ExitDuration)
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn }
         };
@@ -110,6 +139,9 @@ public static class PopupTransition
             root.RenderTransform = null;
         };
 
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty, shrink);
+        scale.BeginAnimation(ScaleTransform.ScaleYProperty, shrink);
+        translate.BeginAnimation(TranslateTransform.YProperty, slideDown);
         root.BeginAnimation(UIElement.OpacityProperty, fade);
     }
 }

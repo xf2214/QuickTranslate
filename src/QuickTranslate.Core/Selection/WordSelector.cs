@@ -88,10 +88,22 @@ public class WordSelector : IWordSelector
 
         if (h1.Count > 0)
         {
-            var best = h1
-                .OrderBy(x => x.Candidate.Box.Width * x.Candidate.Box.Height)
-                .ThenBy(x => ComputeDistanceToCenter(anchor, x.Candidate.Box))
-                .First();
+            // 排序分两级：
+            // 1) 光标真正落在词框内（含少量 padding）的候选优先，按面积取小
+            //    （嵌套框场景选更精确的内框），平局取中心更近者；
+            // 2) 仅靠行容差命中的候选（光标在两行容差重叠区等）不再按面积取小——
+            //    那样会选中另一行的小词导致选框偏离鼠标，改按到词框距离取近，
+            //    平局取中心更近者。
+            var insideHits = h1.Where(x => BoxContainsPadded(x.Candidate.Box, anchor)).ToList();
+            var best = insideHits.Count > 0
+                ? insideHits
+                    .OrderBy(x => x.Candidate.Box.Width * x.Candidate.Box.Height)
+                    .ThenBy(x => ComputeDistanceToCenter(anchor, x.Candidate.Box))
+                    .First()
+                : h1
+                    .OrderBy(x => ComputeDistance(anchor, x.Candidate.Box))
+                    .ThenBy(x => ComputeDistanceToCenter(anchor, x.Candidate.Box))
+                    .First();
 
             return new SelectionResult(
                 Text: best.Candidate.Text,
@@ -104,9 +116,10 @@ public class WordSelector : IWordSelector
 
         if (h2.Count > 0)
         {
+            // 平局时取中心更近者（而非面积更小），避免等距时选偏词
             var best = h2
                 .OrderBy(x => x.Distance)
-                .ThenBy(x => x.Candidate.Box.Width * x.Candidate.Box.Height)
+                .ThenBy(x => ComputeDistanceToCenter(anchor, x.Candidate.Box))
                 .First();
 
             return new SelectionResult(
@@ -126,6 +139,14 @@ public class WordSelector : IWordSelector
             Confidence: null,
             OperationId: Guid.NewGuid(),
             NoTextFound: true);
+    }
+
+    /// <summary>光标是否落在词框内（四周各留 2px 容差），用于区分“真命中”与“行容差命中”。</summary>
+    private static bool BoxContainsPadded(PhysicalRect box, PhysicalPoint anchor)
+    {
+        const int pad = 2;
+        return anchor.X >= box.Left - pad && anchor.X < box.Right + pad &&
+               anchor.Y >= box.Top - pad && anchor.Y < box.Bottom + pad;
     }
 
     /// <summary>

@@ -181,4 +181,39 @@ public class TranslationRouterTests
 
         Assert.False(dict.TryLookup("supercalifragilistic", "zh-CN", out _));
     }
+
+    [Fact]
+    public async Task Case6_OnlineReturnsEmpty_ThrowsInvalidResponse_AndDoesNotCache()
+    {
+        var cache = Substitute.For<ITranslationCache>();
+        var dict = Substitute.For<ILocalDictionary>();
+        var provider = Substitute.For<ITranslationProvider>();
+
+        cache.TryGet(Arg.Any<string>(), out Arg.Any<TranslationResult>()!)
+            .Returns(x =>
+            {
+                x[1] = default!;
+                return false;
+            });
+
+        dict.TryLookup(Arg.Any<string>(), Arg.Any<string>(), out Arg.Any<TranslationResult>()!)
+            .Returns(x =>
+            {
+                x[2] = default!;
+                return false;
+            });
+
+        // 在线提供方返回空译文（Final 帧 FullTranslation 为空）
+        provider.TranslateAsync(Arg.Any<TranslationRequest>(), Arg.Any<CancellationToken>())
+            .Returns(SingleChunkStream(""));
+
+        var router = BuildRouter(cache, dict, provider);
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => router.TranslateWordAsync("someunknownword", "zh-CN"));
+        Assert.Equal(TranslationErrorCode.InvalidResponse, ex.ErrorCode);
+
+        // 空结果不得写入缓存，否则同一词后续永远命中空译文
+        cache.DidNotReceiveWithAnyArgs().Add(default!, default!);
+    }
 }

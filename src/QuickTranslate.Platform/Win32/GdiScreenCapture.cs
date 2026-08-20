@@ -151,11 +151,23 @@ public sealed class GdiScreenCapture : IScreenCapture
             Gdi32.SelectObject(hdcMem, oldBitmap);
             oldBitmap = IntPtr.Zero;
 
-            using var temp = Image.FromHbitmap(hBitmap);
-            var bitmap = new Bitmap(region.Width, region.Height, PixelFormat.Format32bppArgb);
-            using (var g = Graphics.FromImage(bitmap))
+            // FromHbitmap 对桌面 DDB 通常返回 Format32bppRgb，而 ScreenFrame 契约
+            // 强制 Format32bppArgb，因此只有已是 Argb 时才能直接包装；否则必须转换
+            // （DrawImage 会把无 alpha 的源视为不透明，alpha 归一为 255，与历史行为一致）。
+            var captured = Bitmap.FromHbitmap(hBitmap);
+            Bitmap bitmap;
+            if (captured.PixelFormat == PixelFormat.Format32bppArgb)
             {
-                g.DrawImage(temp, 0, 0, region.Width, region.Height);
+                bitmap = captured;
+            }
+            else
+            {
+                using (captured)
+                {
+                    bitmap = new Bitmap(region.Width, region.Height, PixelFormat.Format32bppArgb);
+                    using var g = Graphics.FromImage(bitmap);
+                    g.DrawImage(captured, 0, 0, region.Width, region.Height);
+                }
             }
 
             return new ScreenFrame(bitmap, region, monitor.Id);

@@ -17,7 +17,6 @@ public class QwenCancelPropagationTests
         {
             MockMode = false,
             ApiKey = "sk-test-valid-key",
-            UseStreaming = false,
             Timeout = TimeSpan.FromSeconds(5),
             BaseAddress = "https://mock.test.local/"
         };

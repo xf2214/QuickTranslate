@@ -1,9 +1,12 @@
+using System.Text;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using QuickTranslate.Core.Geometry;
+using QuickTranslate.Core.Translation;
 using QuickTranslate.Platform.Win32;
 using QuickTranslate.TextToSpeech;
 
@@ -11,17 +14,27 @@ namespace QuickTranslate.App.Windows;
 
 public partial class BlockPopupWindow : Window, IFadeOutHideable
 {
-    // Apple 风格配色（与 XAML 保持一致）
-    private static readonly SolidColorBrush PrimaryTextBrush = new(System.Windows.Media.Color.FromRgb(0x1C, 0x1C, 0x1E));
-    private static readonly SolidColorBrush ErrorTextBrush = new(System.Windows.Media.Color.FromRgb(0xFF, 0x3B, 0x30));
-    private static readonly SolidColorBrush CopiedFeedbackBrush = new(System.Windows.Media.Color.FromRgb(0x34, 0xC7, 0x59));
+    // Apple 风格配色（与 XAML 保持一致）；Freeze 后免去变更跟踪与跨线程检查开销
+    private static readonly SolidColorBrush PrimaryTextBrush = Frozen(System.Windows.Media.Color.FromRgb(0x1C, 0x1C, 0x1E));
+    private static readonly SolidColorBrush ErrorTextBrush = Frozen(System.Windows.Media.Color.FromRgb(0xFF, 0x3B, 0x30));
+    private static readonly SolidColorBrush CopiedFeedbackBrush = Frozen(System.Windows.Media.Color.FromRgb(0x34, 0xC7, 0x59));
+
+    private static SolidColorBrush Frozen(System.Windows.Media.Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
+    }
 
     private bool _interactive;
     private ITextToSpeechService? _textToSpeech;
     private string? _speechLanguage;
     private DispatcherTimer? _copyFeedbackTimer;
 
-    public string FullText { get; private set; } = "";
+    // StringBuilder 累积流式译文：避免 FullText += delta 的 O(n²) 拷贝
+    private readonly StringBuilder _fullText = new();
+
+    public string FullText => _fullText.ToString();
 
     public BlockPopupWindow()
     {
@@ -65,15 +78,26 @@ public partial class BlockPopupWindow : Window, IFadeOutHideable
     public void AppendChunk(string delta)
     {
         ResetStyle();
-        FullText += delta;
-        TranslationText.Text = FullText;
-        ScrollViewer1.ScrollToEnd();
+        _fullText.Append(delta);
+        // 展示层统一格式化（去首尾空白/多余空行、规范换行）；_fullText 保留原文供复制
+        TranslationText.Text = TranslationDisplayFormatter.ForBlock(_fullText.ToString());
+        AutoScrollToEnd();
+    }
+
+    /// <summary>仅在滚动条已贴近底部时自动跟随（距底 ≤ 24px），避免用户回看时被强制拉回。</summary>
+    private void AutoScrollToEnd()
+    {
+        var sv = ScrollViewer1;
+        if (sv.ScrollableHeight - sv.VerticalOffset <= 24)
+        {
+            sv.ScrollToEnd();
+        }
     }
 
     /// <summary>新一轮展示前清空旧内容（窗口复用时避免上次译文残留/累积）。</summary>
     public void ResetContent(string? sourceText = null)
     {
-        FullText = "";
+        _fullText.Clear();
         TranslationText.Text = "";
         if (string.IsNullOrWhiteSpace(sourceText))
         {
@@ -95,7 +119,7 @@ public partial class BlockPopupWindow : Window, IFadeOutHideable
 
     public void ShowError(string shortMessage)
     {
-        FullText = "";
+        _fullText.Clear();
         TranslationText.Foreground = ErrorTextBrush;
         TranslationText.Text = shortMessage;
         BlockHeader.Visibility = Visibility.Collapsed;
@@ -131,13 +155,14 @@ public partial class BlockPopupWindow : Window, IFadeOutHideable
         }
     }
 
-    /// <summary>复制成功微反馈：按钮变绿勾 1.2 秒后还原。</summary>
+    /// <summary>复制成功微反馈：按钮变绿勾 1.2 秒后还原，内容切换带 100ms 淡入。</summary>
     private void ShowCopyFeedback()
     {
         _copyFeedbackTimer?.Stop();
 
         CopyButton.Content = "已复制 ✓";
         CopyButton.Foreground = CopiedFeedbackBrush;
+        PlayFeedbackFade(CopyButton);
 
         _copyFeedbackTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.2) };
         _copyFeedbackTimer.Tick += (_, _) =>
@@ -145,8 +170,19 @@ public partial class BlockPopupWindow : Window, IFadeOutHideable
             _copyFeedbackTimer!.Stop();
             CopyButton.Content = "复制";
             CopyButton.ClearValue(ForegroundProperty);
+            PlayFeedbackFade(CopyButton);
         };
         _copyFeedbackTimer.Start();
+    }
+
+    /// <summary>反馈内容切换的 100ms 淡入微动效（只动画按钮元素，不碰窗口 Opacity）。</summary>
+    private static void PlayFeedbackFade(UIElement element)
+    {
+        var fade = new DoubleAnimation(0.4, 1.0, TimeSpan.FromMilliseconds(100))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+        element.BeginAnimation(OpacityProperty, fade);
     }
 
     private void OnDismissButtonClick(object sender, RoutedEventArgs e)
@@ -156,8 +192,8 @@ public partial class BlockPopupWindow : Window, IFadeOutHideable
 
     public PhysicalSize GetPreferredPhysicalSize(uint dpiX, uint dpiY)
     {
-        int w = (int)Math.Round(440.0 * dpiX / 96.0);
-        int h = (int)Math.Round(480.0 * dpiY / 96.0);
+        int w = (int)Math.Round(340.0 * dpiX / 96.0);
+        int h = (int)Math.Round(360.0 * dpiY / 96.0);
         return new PhysicalSize(w, h);
     }
 

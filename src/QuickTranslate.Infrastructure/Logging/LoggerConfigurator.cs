@@ -16,6 +16,21 @@ public static class LoggerConfigurator
         Directory.CreateDirectory(logDirectory);
         var logPath = Path.Combine(logDirectory, "QuickTranslate-.log");
 
+        // Serilog 内部错误（如文件被占用无法写入）默认静默吞掉，
+        // 导致应用看似正常但日志完全丢失、故障无从排查；开启 SelfLog 落盘暴露。
+        Serilog.Debugging.SelfLog.Enable(msg =>
+        {
+            try
+            {
+                var selfLogPath = Path.Combine(Path.GetTempPath(), "QuickTranslate-serilog-selflog.txt");
+                File.AppendAllText(selfLogPath, $"[{DateTime.Now:O}] {msg}{Environment.NewLine}");
+            }
+            catch
+            {
+                // SelfLog 自身失败不能反过来影响应用
+            }
+        });
+
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Is(logLevel)
             .Enrich.WithProcessId()
@@ -27,6 +42,7 @@ public static class LoggerConfigurator
                 retainedFileCountLimit: 31,
                 fileSizeLimitBytes: 10 * 1024 * 1024,
                 rollOnFileSizeLimit: true,
+                shared: true,
                 restrictedToMinimumLevel: logLevel,
                 formatProvider: CultureInfo.InvariantCulture,
                 outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz}] [{Level:u3}] [{ProcessId}/{ThreadId}] {Message:lj}{NewLine}{Exception}")

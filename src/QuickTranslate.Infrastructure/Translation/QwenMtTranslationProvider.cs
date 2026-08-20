@@ -14,7 +14,8 @@ namespace QuickTranslate.Infrastructure.Translation;
 
 public class QwenMtOptions
 {
-    public string BaseAddress { get; set; } = "https://dashscope.aliyuncs.com/";
+    /// <summary>Qwen-MT OpenAI 兼容端点基地址，真实请求 POST {BaseAddress}/chat/completions。</summary>
+    public string BaseAddress { get; set; } = "https://dashscope.aliyuncs.com/compatible-mode/v1";
     public string ApiKey { get; set; } = "";
     public Dictionary<TranslationQuality, string> ModelMap { get; set; } = new()
     {
@@ -23,64 +24,46 @@ public class QwenMtOptions
         [TranslationQuality.Best] = "qwen-mt-plus",
     };
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
-    public bool UseStreaming { get; set; } = true;
-    public bool MockMode { get; set; } = true;
+
+    // 默认 false：配置了 API Key 就走真实 API；仅测试/演示显式打开。
+    // 未配置 Key 时 provider 内部仍自动降级 Mock，不依赖此开关。
+    public bool MockMode { get; set; } = false;
     public int MockChunkCount { get; set; } = 4;
     public int MockChunkIntervalMs { get; set; } = 80;
 }
 
-internal class DashscopeOutput
+internal class QwenMtMessage
 {
-    [JsonPropertyName("output_text")]
-    public string? OutputText { get; set; }
+    [JsonPropertyName("role")]
+    public string Role { get; set; } = "user";
+
+    [JsonPropertyName("content")]
+    public string Content { get; set; } = "";
 }
 
-internal class DashscopeUsage
+internal class QwenMtTranslationOptions
 {
-    [JsonPropertyName("input_tokens")]
-    public int InputTokens { get; set; }
+    [JsonPropertyName("source_lang")]
+    public string SourceLang { get; set; } = "auto";
 
-    [JsonPropertyName("output_tokens")]
-    public int OutputTokens { get; set; }
+    [JsonPropertyName("target_lang")]
+    public string TargetLang { get; set; } = "";
 }
 
-internal class DashscopeSseFrame
-{
-    [JsonPropertyName("output")]
-    public DashscopeOutput? Output { get; set; }
-
-    [JsonPropertyName("usage")]
-    public DashscopeUsage? Usage { get; set; }
-
-    [JsonPropertyName("code")]
-    public string? Code { get; set; }
-
-    [JsonPropertyName("message")]
-    public string? Message { get; set; }
-}
-
-internal class DashscopeTranslateBody
+/// <summary>
+/// Qwen-MT 官方请求体：messages 有且仅有一条 user 消息（content 为待翻译文本），
+/// 语种通过 translation_options 传递（非 OpenAI 标准参数，HTTP 调用时作顶层参数）。
+/// </summary>
+internal class QwenMtRequestBody
 {
     [JsonPropertyName("model")]
     public string Model { get; set; } = "";
 
-    [JsonPropertyName("input")]
-    public DashscopeTranslateInput Input { get; set; } = new();
+    [JsonPropertyName("messages")]
+    public List<QwenMtMessage> Messages { get; set; } = new();
 
-    [JsonPropertyName("parameters")]
-    public Dictionary<string, object> Parameters { get; set; } = new();
-}
-
-internal class DashscopeTranslateInput
-{
-    [JsonPropertyName("text")]
-    public string Text { get; set; } = "";
-
-    [JsonPropertyName("source_lang")]
-    public string SourceLang { get; set; } = "";
-
-    [JsonPropertyName("target_lang")]
-    public string TargetLang { get; set; } = "";
+    [JsonPropertyName("translation_options")]
+    public QwenMtTranslationOptions TranslationOptions { get; set; } = new();
 }
 
 public class QwenMtTranslationProvider : ITranslationProvider
@@ -209,28 +192,31 @@ public class QwenMtTranslationProvider : ITranslationProvider
     {
         var opts = _opts.Value;
 
-        HttpResponseMessage? response;
+        HttpResponseMessage response;
         try
         {
             var modelName = opts.ModelMap.TryGetValue(req.Quality, out var m) ? m : opts.ModelMap[TranslationQuality.Fast];
-            var uri = BuildTranslateUrl(opts);
 
-            var body = new DashscopeTranslateBody
+            // 官方协议：messages 仅一条 user 消息 + translation_options 指定语种；
+            // source_lang/target_lang 要求英文全称（Chinese/English 等），把 zh-CN/en 等映射过去。
+            var body = new QwenMtRequestBody
             {
                 Model = modelName,
-                Input = new DashscopeTranslateInput
+                Messages = new List<QwenMtMessage> { new() { Role = "user", Content = req.Text } },
+                TranslationOptions = new QwenMtTranslationOptions
                 {
-                    Text = req.Text,
-                    SourceLang = req.SourceLanguage,
-                    TargetLang = req.TargetLanguage,
+                    SourceLang = MapToApiLanguage(req.SourceLanguage),
+                    TargetLang = MapToApiLanguage(req.TargetLanguage),
                 },
-                Parameters = new Dictionary<string, object>(),
             };
 
+            // 统一非流式：qwen-mt-plus/turbo 的流式每帧返回“截至目前的全文”（非增量），
+            // 按增量拼接会重复成倍膨胀；且 Word/Block 协调器都等完整结果再弹窗，
+            // 流式无体验收益，非流式更简单且对所有模型都正确。
             var json = JsonSerializer.Serialize(body);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, uri);
+            using var request = new HttpRequestMessage(HttpMethod.Post, BuildTranslateUrl(opts));
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", EffectiveApiKey);
             request.Content = content;
 
@@ -253,9 +239,34 @@ public class QwenMtTranslationProvider : ITranslationProvider
             throw new TranslationException(TranslationErrorCode.Unknown, ex.Message, ex);
         }
 
-        await foreach (var c in ConsumeResponseStreamAsync(response, opts, ct))
+        try
         {
-            yield return c;
+            var raw = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            OpenAiChatResponse? frame;
+            try
+            {
+                frame = JsonSerializer.Deserialize<OpenAiChatResponse>(raw);
+            }
+            catch (JsonException je)
+            {
+                throw TranslationException.InvalidResponse("非 JSON 响应: " + Truncate(raw, 200), je);
+            }
+
+            if (frame == null)
+                throw TranslationException.InvalidResponse("响应为空");
+
+            if (frame.Error?.Message is { } errMsg)
+                throw TranslationException.InvalidResponse(errMsg);
+
+            var text = frame.Choices?.FirstOrDefault()?.Message?.Content;
+            if (string.IsNullOrWhiteSpace(text))
+                throw TranslationException.InvalidResponse("翻译结果为空");
+
+            yield return new TranslationChunk(TextDelta: text, IsFinal: true, FullTranslation: text);
+        }
+        finally
+        {
+            response.Dispose();
         }
     }
 
@@ -283,7 +294,7 @@ public class QwenMtTranslationProvider : ITranslationProvider
                 catch { }
 
                 response.Dispose();
-                throw TranslationException.FromHttpStatus((int)response.StatusCode, errorBody);
+                throw TranslationException.FromHttpStatus((int)response.StatusCode, Truncate(errorBody, 300));
             }
 
             return response;
@@ -292,7 +303,7 @@ public class QwenMtTranslationProvider : ITranslationProvider
         {
             throw TranslationException.Timeout(inner: oce);
         }
-        catch (HttpRequestException hre) when (hre.InnerException is SocketException se)
+        catch (HttpRequestException hre) when (hre.InnerException is SocketException)
         {
             throw TranslationException.NetworkUnavailable(inner: hre);
         }
@@ -302,112 +313,40 @@ public class QwenMtTranslationProvider : ITranslationProvider
         }
     }
 
-    private static async IAsyncEnumerable<TranslationChunk> ConsumeResponseStreamAsync(
-        HttpResponseMessage response,
-        QwenMtOptions opts,
-        [EnumeratorCancellation] CancellationToken linkedToken)
-    {
-        try
-        {
-            var fullSb = new StringBuilder();
-            if (opts.UseStreaming)
-            {
-                await foreach (var frame in ParseSseStreamAsync(response, linkedToken))
-                {
-                    if (!string.IsNullOrEmpty(frame.Code) && frame.Code != "200")
-                    {
-                        var msg = frame.Message ?? "服务返回错误码";
-                        if (frame.Code == "401" || frame.Code == "403")
-                            throw TranslationException.AuthFailed(msg);
-                        if (frame.Code == "429")
-                            throw TranslationException.Throttled(msg);
-                        if (frame.Code == "400")
-                            throw TranslationException.BadRequest(msg);
-                        throw TranslationException.InvalidResponse($"{frame.Code}: {msg}");
-                    }
-
-                    var delta = frame.Output?.OutputText;
-                    if (!string.IsNullOrEmpty(delta))
-                    {
-                        fullSb.Append(delta);
-                        yield return new TranslationChunk(TextDelta: delta, IsFinal: false);
-                    }
-                }
-            }
-            else
-            {
-                var raw = await response.Content.ReadAsStringAsync(linkedToken).ConfigureAwait(false);
-                DashscopeSseFrame? frame;
-                try
-                {
-                    frame = JsonSerializer.Deserialize<DashscopeSseFrame>(raw);
-                }
-                catch (JsonException je)
-                {
-                    throw TranslationException.InvalidResponse("非 JSON 响应", je);
-                }
-
-                if (frame == null)
-                    throw TranslationException.InvalidResponse("响应为空");
-
-                if (!string.IsNullOrEmpty(frame.Code) && frame.Code != "200")
-                    throw TranslationException.BadRequest($"{frame.Code}: {frame.Message}");
-
-                var delta = frame.Output?.OutputText;
-                if (string.IsNullOrEmpty(delta))
-                    throw TranslationException.InvalidResponse("output_text 缺失");
-
-                fullSb.Append(delta);
-                yield return new TranslationChunk(TextDelta: delta, IsFinal: false);
-            }
-
-            yield return new TranslationChunk(TextDelta: "", IsFinal: true, FullTranslation: fullSb.ToString());
-        }
-        finally
-        {
-            response.Dispose();
-        }
-    }
-
     private static Uri BuildTranslateUrl(QwenMtOptions opts)
     {
         var baseUri = opts.BaseAddress.EndsWith('/') ? opts.BaseAddress : opts.BaseAddress + "/";
-        return new Uri(new Uri(baseUri), "api/v1/services/aigc/text-generation/generation");
+        return new Uri(new Uri(baseUri), "chat/completions");
     }
 
-    private static async IAsyncEnumerable<DashscopeSseFrame> ParseSseStreamAsync(
-        HttpResponseMessage response,
-        [EnumeratorCancellation] CancellationToken ct)
+    /// <summary>
+    /// 把 BCP-47 语种代码映射为 Qwen-MT translation_options 要求的英文全称
+    /// （如 zh-CN→Chinese、en→English）；auto/未知值原样透传。
+    /// 不复用 CustomOpenAi.LanguageName：那里 zh→“Simplified Chinese”是为提示词设计，
+    /// 与官方 translation_options 的语种名不一致。
+    /// </summary>
+    internal static string MapToApiLanguage(string? lang)
     {
-        var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-
-        string? line;
-        while ((line = await reader.ReadLineAsync(ct).ConfigureAwait(false)) != null)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (string.IsNullOrWhiteSpace(line))
-                continue;
-
-            if (line.StartsWith("data: ", StringComparison.Ordinal))
-            {
-                var payload = line.Substring("data: ".Length).Trim();
-                if (payload == "[DONE]" || payload.Length == 0)
-                    continue;
-
-                DashscopeSseFrame? frame = null;
-                try
-                {
-                    frame = JsonSerializer.Deserialize<DashscopeSseFrame>(payload);
-                }
-                catch (JsonException)
-                {
-                    continue;
-                }
-
-                if (frame != null)
-                    yield return frame;
-            }
-        }
+        if (string.IsNullOrWhiteSpace(lang)) return "auto";
+        var l = lang.Trim().ToLowerInvariant();
+        if (l == "auto") return "auto";
+        if (l.StartsWith("zh", StringComparison.Ordinal)) return "Chinese";
+        if (l.StartsWith("en", StringComparison.Ordinal)) return "English";
+        if (l.StartsWith("ja", StringComparison.Ordinal)) return "Japanese";
+        if (l.StartsWith("ko", StringComparison.Ordinal)) return "Korean";
+        if (l.StartsWith("fr", StringComparison.Ordinal)) return "French";
+        if (l.StartsWith("de", StringComparison.Ordinal)) return "German";
+        if (l.StartsWith("es", StringComparison.Ordinal)) return "Spanish";
+        if (l.StartsWith("ru", StringComparison.Ordinal)) return "Russian";
+        if (l.StartsWith("pt", StringComparison.Ordinal)) return "Portuguese";
+        if (l.StartsWith("it", StringComparison.Ordinal)) return "Italian";
+        if (l.StartsWith("th", StringComparison.Ordinal)) return "Thai";
+        if (l.StartsWith("vi", StringComparison.Ordinal)) return "Vietnamese";
+        if (l.StartsWith("ar", StringComparison.Ordinal)) return "Arabic";
+        if (l.StartsWith("id", StringComparison.Ordinal)) return "Indonesian";
+        return lang; // 已是英文全称（如 "Chinese"）或未知语种，原样传递
     }
+
+    private static string Truncate(string s, int max) =>
+        string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s.Substring(0, max) + "…");
 }

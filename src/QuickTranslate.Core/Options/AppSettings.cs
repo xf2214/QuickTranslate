@@ -40,6 +40,9 @@ public class AppSettings
     public bool StartWithWindows { get; set; } = false;
     public bool CloseOnOutsideClick { get; set; } = true;
     public bool DebugLogging { get; set; } = false;
+
+    /// <summary>调试模式：开启后选中区域以实线框显示（便于排查选词/OCR 定位），关闭时显示扫描式动画。</summary>
+    public bool DebugOverlayMode { get; set; } = false;
     public bool EnableTextToSpeech { get; set; } = false;
 
     // ===== 自定义大模型接入（OpenAI 兼容）=====

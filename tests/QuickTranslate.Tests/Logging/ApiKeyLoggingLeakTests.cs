@@ -47,7 +47,7 @@ public class ApiKeyLoggingLeakTests
         logger.LogInformation("Provider options: {@Options}", new
         {
             options.Value.MockMode,
-            options.Value.UseStreaming,
+            Timeout = options.Value.Timeout,
             BaseAddress = options.Value.BaseAddress,
             HasApiKey = !string.IsNullOrWhiteSpace(options.Value.ApiKey)
         });

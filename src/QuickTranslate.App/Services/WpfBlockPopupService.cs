@@ -88,9 +88,10 @@ public class WpfBlockPopupService : IBlockPopupService
                              new PhysicalRect(0, 0, 1920, 1080),
                              dpiX, dpiY, true);
 
-        // 尺寸按原文/译文行数自适应（360~720 宽），替代旧固定 440x480
+        // 尺寸按原文/译文行数自适应（340~640 宽），替代旧固定 440x480；
+        // 译文用与展示一致的格式化文本估算（去多余空行），避免尺寸与实际内容不符
         var (estW, estH) = PopupSizeEstimator.EstimateBlockPopupSize(
-            blockSelection.BlockText, translation.FullTranslation,
+            blockSelection.BlockText, TranslationDisplayFormatter.ForBlock(translation.FullTranslation),
             monitorInfo.WorkArea.Width * 96.0 / dpiX,
             monitorInfo.WorkArea.Height * 96.0 / dpiY);
 

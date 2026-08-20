@@ -1,7 +1,9 @@
 using System.Windows.Interop;
 using System.Windows.Threading;
+using Microsoft.Extensions.Options;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Geometry;
+using QuickTranslate.Core.Options;
 using QuickTranslate.App.Windows;
 using QuickTranslate.Platform.UnmanagedMethods;
 using QuickTranslate.Platform.Win32;
@@ -12,11 +14,13 @@ namespace QuickTranslate.App.Services;
 public class WpfSelectionOverlayService : ISelectionOverlayService
 {
     private readonly IDpiMapper _dpiMapper;
+    private readonly IOptions<AppSettings>? _appSettings;
     private readonly Dictionary<MonitorId, (SelectionOverlayWindow window, uint dpiX, uint dpiY)> _windows = new();
 
-    public WpfSelectionOverlayService(IDpiMapper dpiMapper)
+    public WpfSelectionOverlayService(IDpiMapper dpiMapper, IOptions<AppSettings>? appSettings = null)
     {
         _dpiMapper = dpiMapper;
+        _appSettings = appSettings;
     }
 
     private static void RunOnUi(Action a)
@@ -71,6 +75,7 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
             _windows[monitorId] = (window, dpiX, dpiY);
         }
 
+        window.SetDebugBoxMode(_appSettings?.Value.DebugOverlayMode == true);
         window.SetPreviewMode(preview);
         window.ApplyPhysicalLayout(physicalBox, dpiX, dpiY);
 

@@ -434,19 +434,15 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                         // 1) 垂直投影精确切分（含自适应阈值重试 + 多余段合并修复）；
                         // 2) 受约束最优切分（DP 在墨水最少处下刀，处理粘连/噪声）；
                         // 3) 加权比例法兜底（字符区间估计，置信度最低）。
+                        // 1/2 由 TrySegmentOrConstrained 串联：位图墨水投影只做一次，
+                        // 回退到受约束切分时不再重复全像素遍历。
                         IReadOnlyList<OcrWord> words;
                         string wordStrategy;
-                        if (ProjectionWordSegmenter.TrySegment(
-                                recSource, recText, box, frame.Region, clsNeedRotate, lineIdx, out var projWords, out var projDetail))
+                        if (ProjectionWordSegmenter.TrySegmentOrConstrained(
+                                recSource, recText, box, frame.Region, clsNeedRotate, lineIdx, out var segWords, out var segDetail))
                         {
-                            words = projWords;
-                            wordStrategy = $"projection({projDetail})";
-                        }
-                        else if (ProjectionWordSegmenter.TrySegmentConstrained(
-                                recSource, recText, box, frame.Region, clsNeedRotate, lineIdx, out var constrainedWords))
-                        {
-                            words = constrainedWords;
-                            wordStrategy = "constrained";
+                            words = segWords;
+                            wordStrategy = segDetail == "constrained" ? "constrained" : $"projection({segDetail})";
                         }
                         else
                         {

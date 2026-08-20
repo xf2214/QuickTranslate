@@ -71,7 +71,9 @@ public partial class App : WpfApplication
             var settings = sp.GetRequiredService<IOptions<AppSettings>>().Value;
             _hotkeyBroker = sp.GetRequiredService<IHotkeyBroker>();
             _hotkeyBroker.RegisterDefaultsFromSettings(settings);
-            _logger.LogInformation("Hotkeys registered: Alt+D1 (Word), Alt+D2 (Block), Esc (Cancel)");
+            _logger.LogInformation("Hotkeys registered: {WordHotkey} (Word), {BlockHotkey} (Block), Esc (Cancel)",
+                $"{settings.WordHotkey.Modifiers}+{settings.WordHotkey.Key}",
+                $"{settings.BlockHotkey.Modifiers}+{settings.BlockHotkey.Key}");
         }
         catch (Exception ex)
         {

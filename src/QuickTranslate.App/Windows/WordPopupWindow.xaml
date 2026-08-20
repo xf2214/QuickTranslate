@@ -10,8 +10,8 @@
         SizeToContent="Manual"
         WindowStartupLocation="Manual"
         Title="QuickTranslate Popup"
-        Width="320"
-        MinHeight="120"
+        Width="280"
+        MinHeight="110"
         Left="0"
         Top="0">
     <!-- 自包含按钮样式：测试会脱离 App 资源直接实例化本窗口 -->
@@ -23,13 +23,14 @@
             BorderBrush="#1A000000"
             BorderThickness="1"
             CornerRadius="12"
-            Padding="14"
+            Padding="12"
             SnapsToDevicePixels="True"
+            UseLayoutRounding="True"
             TextElement.FontFamily="Segoe UI Variable Display, Segoe UI, Microsoft YaHei UI">
         <Border.Effect>
-            <DropShadowEffect BlurRadius="28"
-                              ShadowDepth="4"
-                              Opacity="0.16"
+            <DropShadowEffect BlurRadius="18"
+                              ShadowDepth="3"
+                              Opacity="0.18"
                               Color="Black"/>
         </Border.Effect>
         <Grid>
@@ -78,8 +79,9 @@
                 <TextBlock x:Name="TranslationText"
                            FontSize="14"
                            Foreground="#1C1C1E"
+                           LineHeight="22"
                            TextWrapping="Wrap"
-                           Margin="0 8 0 8"
+                           Margin="0 8 0 10"
                            Text=""/>
             </ScrollViewer>
 

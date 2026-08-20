@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using QuickTranslate.Core.Options;
@@ -20,7 +21,6 @@ public class QwenMtProviderHttpStubTests
         {
             MockMode = false,
             ApiKey = "sk-test-valid-key",
-            UseStreaming = true,
             Timeout = TimeSpan.FromSeconds(5),
             BaseAddress = "https://mock.test.local/"
         };
@@ -132,16 +132,10 @@ public class QwenMtProviderHttpStubTests
     }
 
     [Fact]
-    public async Task Case_OK_200_Streaming_YieldsDeltas_AndFinal()
+    public async Task Case_OK_200_Json_YieldsFinalTranslation()
     {
-        var sse = new StringBuilder();
-        sse.Append("data: {\"output\":{\"output_text\":\"H\"}}\n\n");
-        sse.Append("data: {\"output\":{\"output_text\":\"e\"}}\n\n");
-        sse.Append("data: {\"output\":{\"output_text\":\"ll\"}}\n\n");
-        sse.Append("data: {\"output\":{\"output_text\":\"o world\"}}\n\n");
-        sse.Append("data: [DONE]\n\n");
-
-        var content = new StringContent(sse.ToString(), Encoding.UTF8, "text/event-stream");
+        var json = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"Hello world\"},\"finish_reason\":\"stop\"}]}";
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
         var handler = new LambdaHandler((_, _) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content }));
 
@@ -163,16 +157,76 @@ public class QwenMtProviderHttpStubTests
     }
 
     [Fact]
+    public async Task Request_Body_MatchesQwenMtContract_AndMapsLanguageNames()
+    {
+        string? capturedUrl = null;
+        string? capturedBody = null;
+        var handler = new LambdaHandler(async (req, _) =>
+        {
+            capturedUrl = req.RequestUri?.ToString();
+            capturedBody = req.Content != null ? await req.Content.ReadAsStringAsync() : null;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"choices\":[{\"message\":{\"content\":\"你好\"}}]}", Encoding.UTF8, "application/json")
+            };
+        });
+
+        var provider = CreateProviderWithHandler(handler);
+        // target 传 zh-CN：官方 translation_options 要求英文全称 Chinese
+        var req = new TranslationRequest("Hello", null, "auto", "zh-CN",
+            TranslationMode.Word, Guid.NewGuid(), TranslationQuality.Balanced);
+        await foreach (var _ in provider.TranslateAsync(req, CancellationToken.None)) { }
+
+        Assert.NotNull(capturedUrl);
+        Assert.EndsWith("/chat/completions", capturedUrl);
+
+        Assert.NotNull(capturedBody);
+        using var doc = JsonDocument.Parse(capturedBody);
+        var root = doc.RootElement;
+        // Balanced 档 → qwen-mt-flash
+        Assert.Equal("qwen-mt-flash", root.GetProperty("model").GetString());
+        // messages 仅一条 user 消息，content 为待翻译文本
+        var messages = root.GetProperty("messages");
+        Assert.Equal(1, messages.GetArrayLength());
+        Assert.Equal("user", messages[0].GetProperty("role").GetString());
+        Assert.Equal("Hello", messages[0].GetProperty("content").GetString());
+        // 语种映射：auto 透传，zh-CN → Chinese
+        var to = root.GetProperty("translation_options");
+        Assert.Equal("auto", to.GetProperty("source_lang").GetString());
+        Assert.Equal("Chinese", to.GetProperty("target_lang").GetString());
+    }
+
+    [Fact]
+    public async Task Case_OK_ButEmptyContent_ThrowsInvalidResponse()
+    {
+        var handler = new LambdaHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"choices\":[{\"message\":{\"content\":\"\"}}]}", Encoding.UTF8, "application/json")
+            }));
+
+        var provider = CreateProviderWithHandler(handler);
+        var action = async () =>
+        {
+            await foreach (var _ in provider.TranslateAsync(MakeRequest("x"), CancellationToken.None)) { }
+        };
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(action);
+        Assert.Equal(TranslationErrorCode.InvalidResponse, ex.ErrorCode);
+    }
+
+    [Fact]
     public async Task ApiKey_ChangedInAppSettings_TakesEffectWithoutRestart()
     {
-        var sse = "data: {\"output\":{\"output_text\":\"ok\"}}\n\ndata: [DONE]\n\n";
+        var json = "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}";
         var capturedKeys = new List<string?>();
         var handler = new LambdaHandler((req, _) =>
         {
             capturedKeys.Add(req.Headers.Authorization?.Parameter);
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
             });
         });
 
@@ -182,7 +236,6 @@ public class QwenMtProviderHttpStubTests
         {
             MockMode = false,
             ApiKey = "key-before",
-            UseStreaming = true,
             Timeout = TimeSpan.FromSeconds(5),
             BaseAddress = "https://mock.test.local/"
         };

@@ -147,6 +147,7 @@ public class DefaultTranslationRouter : ITranslationRouter
     private async Task<string> ConsumeFullTranslationAsync(TranslationRequest request, CancellationToken ct)
     {
         var sb = new StringBuilder();
+        string? finalText = null;
         await foreach (var chunk in _provider.TranslateAsync(request, ct))
         {
             if (!string.IsNullOrEmpty(chunk.TextDelta))
@@ -154,13 +155,22 @@ public class DefaultTranslationRouter : ITranslationRouter
                 sb.Append(chunk.TextDelta);
             }
 
-            if (chunk.IsFinal && !string.IsNullOrEmpty(chunk.FullTranslation))
+            if (chunk.IsFinal && !string.IsNullOrWhiteSpace(chunk.FullTranslation))
             {
-                return chunk.FullTranslation;
+                finalText = chunk.FullTranslation;
+                break;
             }
         }
 
-        return sb.ToString();
+        var full = finalText ?? sb.ToString();
+        // 空/纯空白在线结果视为响应异常：若不拦截，空译文会写入 L1/L2 缓存，
+        // 导致同一 key 后续永远命中空结果、弹窗长期空白。
+        if (string.IsNullOrWhiteSpace(full))
+        {
+            throw TranslationException.InvalidResponse("翻译服务返回内容为空");
+        }
+
+        return full;
     }
 
     private static string NormalizeKey(string text, string lang)

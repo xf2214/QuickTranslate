@@ -349,4 +349,43 @@ public class WordSelectorTests
         Assert.False(result.NoTextFound);
         Assert.Equal("ProjectionWordSegmenter", result.Text);
     }
+
+    [Fact]
+    public void Case18_TolerantHitsOnTwoLines_PicksNearestWord_NotSmallestArea()
+    {
+        // 光标落在两行容差重叠区、且不在任何词框内：
+        // 旧逻辑按面积取小会选中更远一行的小词（选框偏离鼠标），
+        // 新逻辑按到词框距离取近。
+        var line1 = new OcrLine(
+            new PhysicalRect(0, 0, 300, 26),
+            new[] { new OcrWord(new PhysicalRect(0, 0, 100, 6), "upper", 0.9f, 0) });
+        var line2 = new OcrLine(
+            new PhysicalRect(0, 18, 300, 26),
+            new[] { new OcrWord(new PhysicalRect(0, 36, 160, 8), "lower", 0.9f, 1) });
+        var ocr = CreateOcr(line1, line2);
+
+        // (80,29)：两行容差都命中；upper 面积更小但距离 24px，lower 距离 7px
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(80, 29));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("lower", result.Text);
+    }
+
+    [Fact]
+    public void Case19_NestedBoxesInsideHit_StillPicksSmallerArea()
+    {
+        // 光标真正落在多个嵌套词框内时保留面积优先（选更精确的内框）
+        var words = new[]
+        {
+            new OcrWord(new PhysicalRect(0, 0, 200, 40), "Outer", 0.9f, 0),
+            new OcrWord(new PhysicalRect(60, 10, 60, 20), "Inner", 0.9f, 0)
+        };
+        var line = new OcrLine(new PhysicalRect(0, 0, 200, 40), words);
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(85, 20));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("Inner", result.Text);
+    }
 }

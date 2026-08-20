@@ -18,6 +18,9 @@ public partial class SelectionOverlayWindow : Window
     public uint LastDpiY { get; private set; } = 96;
     public bool IsPreviewMode { get; private set; }
 
+    /// <summary>调试模式：true 时选定区域显示为实线框；false 时显示扫描式动画。</summary>
+    public bool IsDebugBoxMode { get; private set; }
+
     public SelectionOverlayWindow()
     {
         InitializeComponent();
@@ -25,26 +28,100 @@ public partial class SelectionOverlayWindow : Window
         IsVisibleChanged += OnIsVisibleChanged;
     }
 
-    /// <summary>切换预览（虚线截图范围框）/ 选定（实线词框）样式。</summary>
+    /// <summary>切换预览（虚线截图范围框）/ 选定（扫描动画或调试框）样式。</summary>
     public void SetPreviewMode(bool preview)
     {
         if (IsPreviewMode == preview) return;
         IsPreviewMode = preview;
-        PreviewBorder.Visibility = preview ? Visibility.Visible : Visibility.Collapsed;
-        SelectionBorder.Visibility = preview ? Visibility.Collapsed : Visibility.Visible;
+        ApplyElementVisibility();
+    }
+
+    /// <summary>切换调试模式：开启后选定区域回退为实线框，便于排查选词/OCR 定位。</summary>
+    public void SetDebugBoxMode(bool debug)
+    {
+        if (IsDebugBoxMode == debug) return;
+        IsDebugBoxMode = debug;
+        ApplyElementVisibility();
+    }
+
+    private void ApplyElementVisibility()
+    {
+        PreviewBorder.Visibility = IsPreviewMode ? Visibility.Visible : Visibility.Collapsed;
+        SelectionBorder.Visibility = (!IsPreviewMode && IsDebugBoxMode) ? Visibility.Visible : Visibility.Collapsed;
+        ScanPanel.Visibility = (!IsPreviewMode && !IsDebugBoxMode) ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
-        if (!IsVisible) return;
+        if (!IsVisible)
+        {
+            // 隐藏时停掉扫描动画，避免后台持续消耗
+            ScanTranslate.BeginAnimation(TranslateTransform.XProperty, null);
+            return;
+        }
         if (IsPreviewMode)
         {
             BeginPreviewEntryAnimation();
         }
-        else
+        else if (IsDebugBoxMode)
         {
             BeginEntryAnimation();
         }
+        else
+        {
+            BeginScanEntryAnimation();
+        }
+    }
+
+    private void BeginScanEntryAnimation()
+    {
+        // 与预览框同样的安全策略：窗口 Opacity 先兜底为 1，只对元素做 100ms 淡入，
+        // 并加 200ms 保护定时器强制复位到可见终态，避免动画未推进导致隐形。
+        this.Opacity = 1;
+        ScanPanel.BeginAnimation(UIElement.OpacityProperty, null);
+        ScanPanel.Opacity = 1;
+
+        ScanPanel.BeginAnimation(
+            UIElement.OpacityProperty,
+            new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(100))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            });
+
+        var guard = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        guard.Tick += (_, _) =>
+        {
+            guard.Stop();
+            ScanPanel.BeginAnimation(UIElement.OpacityProperty, null);
+            ScanPanel.Opacity = 1;
+        };
+        guard.Start();
+
+        BeginScanSweep();
+    }
+
+    private void BeginScanSweep()
+    {
+        // 苹果风格：扫描线从左外侧单次扫到右外侧（缓入缓出），扫完即停；
+        // 结束后清除动画并把扫描线停靠在右外侧，避免残留在可见区域。
+        double regionWidth = ScanPanel.ActualWidth > 0
+            ? ScanPanel.ActualWidth
+            : Math.Max(0, LastLayoutRect.Width);
+        double lineWidth = ScanLine.Width;
+
+        var sweep = new DoubleAnimation(
+            -lineWidth,
+            regionWidth,
+            TimeSpan.FromMilliseconds(700))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut }
+        };
+        sweep.Completed += (_, _) =>
+        {
+            ScanTranslate.BeginAnimation(TranslateTransform.XProperty, null);
+            ScanTranslate.X = regionWidth;
+        };
+        ScanTranslate.BeginAnimation(TranslateTransform.XProperty, sweep);
     }
 
     private void BeginEntryAnimation()
@@ -116,6 +193,13 @@ public partial class SelectionOverlayWindow : Window
         SelectionBorder.Height = dipRect.Height;
         SelectionBorder.HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch;
         SelectionBorder.VerticalAlignment = System.Windows.VerticalAlignment.Stretch;
+
+        // 窗口已可见时（如预览→选定切换）不会触发 IsVisibleChanged，
+        // 在这里补播一次单次扫描，并与新宽度对齐
+        if (!IsPreviewMode && !IsDebugBoxMode && IsVisible)
+        {
+            BeginScanSweep();
+        }
     }
 
     public void ApplyPhysicalLayout(PhysicalRect physicalBox, uint dpiX, uint dpiY)

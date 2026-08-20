@@ -399,6 +399,8 @@ public partial class SettingsWindow : Window
                 StartWithWindows = StartOnBootBox.IsChecked == true,
                 CloseOnOutsideClick = CloseOutsideBox.IsChecked == true,
                 DebugLogging = debugEnabled,
+                // 调试模式由托盘菜单控制，保存设置时保留当前值
+                DebugOverlayMode = _appSettings.DebugOverlayMode,
                 EnableTextToSpeech = EnableReadAloudBox.IsChecked == true,
                 TranslationProvider = providerKind,
                 CustomLlmBaseUrl = CustomLlmBaseUrlBox.Text.Trim(),

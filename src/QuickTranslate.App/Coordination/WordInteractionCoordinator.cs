@@ -183,16 +183,22 @@ public class WordInteractionCoordinator : IInteractionCoordinator
 
                 // 重抓触发条件：
                 //   1) 选词框触碰截图边缘 —— 词被截断（日志实测：长标识符被截成 'tions.cs' 等后缀片段）；
-                //   2) 未识别到任何文字 —— 范围可能太小错过文本。
+                //   2) 未识别到任何文字 —— 范围可能太小错过文本；
+                //   3) 选框明显偏离光标且光标附近的行触碰截图边缘 —— 光标下的词被截断/漏检，
+                //      选择器退而选了邻近词（段落首尾常见：首词/末词贴截图边缘），扩大后重抓。
                 // 扩大策略：触边方向尺寸翻倍（未识别到则双向翻倍），并以实际行高重算尺寸为下限，
                 // 保证重抓范围只增不减（旧实现小字号时重算尺寸反而更小，截断永远修不好）。
+                int anchorLineHeight = GetLineHeightAtAnchor(ocr, cursor) ?? EstimatedLineHeight;
                 bool clipped = !sel.NoTextFound && TouchesCaptureEdge(sel.Box, captureRegion.Value);
-                if (clipped || sel.NoTextFound)
+                bool offCursor = !sel.NoTextFound && CursorOffSelection(sel.Box, cursor, anchorLineHeight);
+                bool nearLineTouchesH = !sel.NoTextFound && LineNearCursorTouchesEdge(ocr, cursor, captureRegion.Value, horizontal: true);
+                bool nearLineTouchesV = !sel.NoTextFound && LineNearCursorTouchesEdge(ocr, cursor, captureRegion.Value, horizontal: false);
+                bool offCursorWithClippedAnchorLine = offCursor && (nearLineTouchesH || nearLineTouchesV);
+                if (clipped || sel.NoTextFound || offCursorWithClippedAnchorLine)
                 {
-                    int lineHeight = GetLineHeightAtAnchor(ocr, cursor) ?? EstimatedLineHeight;
-                    var computed = WordCaptureSize(lineHeight);
-                    bool expandW = sel.NoTextFound || TouchesHorizontalEdge(sel.Box, captureRegion.Value);
-                    bool expandH = sel.NoTextFound || TouchesVerticalEdge(sel.Box, captureRegion.Value);
+                    var computed = WordCaptureSize(anchorLineHeight);
+                    bool expandW = sel.NoTextFound || TouchesHorizontalEdge(sel.Box, captureRegion.Value) || (offCursor && nearLineTouchesH);
+                    bool expandH = sel.NoTextFound || TouchesVerticalEdge(sel.Box, captureRegion.Value) || (offCursor && nearLineTouchesV);
                     var retrySize = new PhysicalSize(
                         Math.Max(expandW ? captureRegion.Value.Width * 2 : captureRegion.Value.Width, computed.Width),
                         Math.Max(expandH ? captureRegion.Value.Height * 2 : captureRegion.Value.Height, computed.Height));
@@ -382,6 +388,56 @@ public class WordInteractionCoordinator : IInteractionCoordinator
     {
         return box.Top - region.Top < EdgeClipMargin ||
                region.Bottom - box.Bottom < EdgeClipMargin;
+    }
+
+    /// <summary>
+    /// 选框是否明显偏离光标：水平容差按行高缩放（行首/行尾指向常略出词框），
+    /// 垂直容差给足一行（词框垂直收紧只贴墨水，光标在同行内垂直偏离属正常）。
+    /// </summary>
+    private static bool CursorOffSelection(PhysicalRect box, PhysicalPoint cursor, int lineHeight)
+    {
+        int tolX = Math.Max(4, lineHeight / 3);
+        int tolY = Math.Max(6, lineHeight);
+        bool offX = cursor.X < box.Left - tolX || cursor.X > box.Right + tolX;
+        bool offY = cursor.Y < box.Top - tolY || cursor.Y > box.Bottom + tolY;
+        return offX || offY;
+    }
+
+    /// <summary>
+    /// 离光标最近的 OCR 行是否触碰截图边缘：是则说明光标所在行被截断，
+    /// 光标下的词可能漏检/框偏，值得扩大截图重抓（段落首尾失败的典型特征）。
+    /// </summary>
+    private static bool LineNearCursorTouchesEdge(Core.Ocr.OcrLayoutResult ocr, PhysicalPoint cursor, PhysicalRect region, bool horizontal)
+    {
+        Core.Ocr.OcrLine? nearest = null;
+        double best = double.MaxValue;
+        foreach (var line in ocr.Lines)
+        {
+            double dist = RectDistance(cursor, line.Box);
+            if (dist < best)
+            {
+                best = dist;
+                nearest = line;
+            }
+        }
+        if (nearest == null) return false;
+
+        return horizontal
+            ? TouchesHorizontalEdge(nearest.Box, region)
+            : TouchesVerticalEdge(nearest.Box, region);
+    }
+
+    private static double RectDistance(PhysicalPoint p, PhysicalRect box)
+    {
+        int dx = 0;
+        if (p.X < box.Left) dx = box.Left - p.X;
+        else if (p.X >= box.Right) dx = p.X - (box.Right - 1);
+
+        int dy = 0;
+        if (p.Y < box.Top) dy = box.Top - p.Y;
+        else if (p.Y >= box.Bottom) dy = p.Y - (box.Bottom - 1);
+
+        return Math.Sqrt(dx * dx + dy * dy);
     }
 
     private static PhysicalRect ClampToRegion(PhysicalRect box, PhysicalRect region)

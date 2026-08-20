@@ -84,9 +84,11 @@ public class WpfWordPopupService : IWordPopupService
                              dpiX, dpiY, true);
 
         // 尺寸随内容自适应（区分 CJK/ASCII 字宽），替代旧固定 320x150：
-        // 短译文不再有大片空白，长译文自动换行增高并受工作区钳制
+        // 短译文不再有大片空白，长译文自动换行增高并受工作区钳制。
+        // 用与弹窗展示一致的格式化文本估算（词典释义含多行），避免高度估小
+        var displayText = TranslationDisplayFormatter.ForWord(translation.TargetText, translation.FromDictionary);
         var (estW, estH) = PopupSizeEstimator.EstimateWordPopupSize(
-            selection.Text, translation.TargetText,
+            selection.Text, displayText,
             monitorInfo.WorkArea.Width * 96.0 / dpiX,
             monitorInfo.WorkArea.Height * 96.0 / dpiY);
 

@@ -262,6 +262,10 @@ public class CustomOpenAiTranslationProvider : ITranslationProvider
                 }
             }
 
+            // SSE 正常结束但无任何内容：视为响应异常，避免空译文被上层缓存/展示
+            if (full.Length == 0)
+                throw TranslationException.InvalidResponse("模型返回内容为空");
+
             yield return new TranslationChunk(TextDelta: "", IsFinal: true, FullTranslation: full.ToString());
         }
         finally

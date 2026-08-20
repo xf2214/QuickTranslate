@@ -58,6 +58,19 @@ public class DefaultBlockSelector : IBlockSelector
         int widthBaseline = Math.Max(anchorLine.Box.Width, ComputeMedianLineWidth(ocr.Lines));
         int maxCandidateWidth = (int)Math.Round(widthBaseline * opts.BlockMaxWidthVsMedianFactor);
 
+        // 自适应行间距上限：取“固定比例×行高”与“实测中位行间距×因子”的更严值，
+        // 紧凑排版下段落间距小于 0.5×行高时也能停在段落边界。
+        double gapLimit = opts.BlockMaxVerticalGapFactor * medianLineHeight;
+        if (TryComputeMedianLineGap(ocr.Lines, out int medianLineGap))
+        {
+            double adaptive = Math.Max(opts.BlockParagraphGapMinPx, opts.BlockParagraphGapVsMedianFactor * medianLineGap);
+            gapLimit = Math.Min(gapLimit, adaptive);
+        }
+
+        // 段落几何基线：中位右缘/中位行宽用于段末短行判定
+        int medianRight = ComputeMedianRight(ocr.Lines);
+        int medianLineWidth = ComputeMedianLineWidth(ocr.Lines);
+
         PhysicalRect union = anchorLine.Box;
         List<OcrLine> selected = new() { anchorLine };
 
@@ -65,16 +78,29 @@ public class DefaultBlockSelector : IBlockSelector
         {
             if (selected.Count >= opts.BlockMaxLinesPerBlock) break;
             OcrLine candidate = ocr.Lines[i];
-            if (!CheckCandidate(candidate, union, medianLineHeight, maxCandidateWidth, opts)) break;
+            // 上方候选是段末短行（且块内已有全宽行）：它是上一段落的结尾 → 停在边界前，不纳入
+            if (IsShortTail(candidate, medianRight, medianLineWidth, opts) && HasFullWidthLine(selected, medianRight, medianLineWidth, opts))
+                break;
+            if (!CheckCandidate(candidate, union, medianLineHeight, maxCandidateWidth, gapLimit, opts)) break;
+
+            // 候选行左缘明显右移（首行缩进）：它是当前段落的首行 → 纳入后停止，不跨入上一段落
+            bool indentedFirstLine = candidate.Box.Left - union.Left > opts.BlockFirstLineIndentFactor * medianLineHeight;
             union = UnionRect(union, candidate.Box);
             selected.Insert(0, candidate);
+            if (indentedFirstLine) break;
         }
 
         for (int i = anchorLineIndex + 1; i < ocr.Lines.Count; i++)
         {
             if (selected.Count >= opts.BlockMaxLinesPerBlock) break;
             OcrLine candidate = ocr.Lines[i];
-            if (!CheckCandidate(candidate, union, medianLineHeight, maxCandidateWidth, opts)) break;
+            // 块当前末行是段末短行（且块内已有全宽行）：段落已结束 → 不再吸入下一段落
+            if (IsShortTail(selected[^1], medianRight, medianLineWidth, opts) && HasFullWidthLine(selected, medianRight, medianLineWidth, opts))
+                break;
+            // 候选行左缘明显右移（下一段落的首行缩进）→ 停在段落边界前
+            if (candidate.Box.Left - union.Left > opts.BlockMaxLeftEdgeDeltaFactor * medianLineHeight)
+                break;
+            if (!CheckCandidate(candidate, union, medianLineHeight, maxCandidateWidth, gapLimit, opts)) break;
             union = UnionRect(union, candidate.Box);
             selected.Add(candidate);
         }
@@ -146,7 +172,7 @@ public class DefaultBlockSelector : IBlockSelector
         return widths[widths.Count / 2];
     }
 
-    private static bool CheckCandidate(OcrLine candidate, PhysicalRect union, int medianHeight, int maxCandidateWidth, SelectionOptions opts)
+    private static bool CheckCandidate(OcrLine candidate, PhysicalRect union, int medianHeight, int maxCandidateWidth, double gapLimit, SelectionOptions opts)
     {
         double heightRatio = candidate.Box.Height / (double)medianHeight;
         if (heightRatio < opts.BlockMinHeightRatio || heightRatio > opts.BlockMaxHeightRatio)
@@ -166,7 +192,7 @@ public class DefaultBlockSelector : IBlockSelector
             verticalGap = union.Top - candidate.Box.Bottom;
         else
             verticalGap = candidate.Box.Top - union.Bottom;
-        if (verticalGap > opts.BlockMaxVerticalGapFactor * medianHeight)
+        if (verticalGap > gapLimit)
             return false;
 
         double xOverlapRatio = ComputeOverlapRatio(candidate.Box, union);
@@ -175,6 +201,54 @@ public class DefaultBlockSelector : IBlockSelector
             return false;
 
         return true;
+    }
+
+    /// <summary>
+    /// 相邻行垂直间距的中位数（按 Top 排序，取低位中位数使护栏更严）。
+    /// 只统计水平相交的行对：多栏布局中不同栏的行在 Y 序上相邻但水平分离，
+    /// 其间距（常为 0/负）会污染基线导致护栏过严。至少 2 个样本才返回 true。
+    /// </summary>
+    private static bool TryComputeMedianLineGap(IReadOnlyList<OcrLine> lines, out int medianGap)
+    {
+        medianGap = 0;
+        if (lines.Count < 3) return false;
+
+        var sorted = lines.OrderBy(l => l.Box.Top).ToList();
+        var gaps = new List<int>(sorted.Count - 1);
+        for (int i = 1; i < sorted.Count; i++)
+        {
+            var prev = sorted[i - 1].Box;
+            var cur = sorted[i].Box;
+            if (cur.Right <= prev.Left || cur.Left >= prev.Right)
+                continue; // 水平分离（另一栏）的行对不计入行距基线
+            gaps.Add(Math.Max(0, cur.Top - prev.Bottom));
+        }
+
+        if (gaps.Count < 2) return false;
+        gaps.Sort();
+        medianGap = gaps[(gaps.Count - 1) / 2];
+        return true;
+    }
+
+    private static int ComputeMedianRight(IReadOnlyList<OcrLine> lines)
+    {
+        if (lines.Count == 0) return 0;
+        var rights = lines.Select(l => l.Box.Right).OrderBy(r => r).ToList();
+        return rights[(rights.Count - 1) / 2];
+    }
+
+    /// <summary>段末短行：右缘距中位右缘超过 中位行宽×因子。正文段末行通常明显短，是段落边界信号。</summary>
+    private static bool IsShortTail(OcrLine line, int medianRight, int medianLineWidth, SelectionOptions opts)
+    {
+        if (medianLineWidth <= 0) return false;
+        return medianRight - line.Box.Right > opts.BlockShortTailRightMarginFactor * medianLineWidth;
+    }
+
+    /// <summary>块内是否已有全宽正文行：短行护栏仅在此基础上生效，避免误伤全是短行的题注/列表块。</summary>
+    private static bool HasFullWidthLine(IReadOnlyList<OcrLine> lines, int medianRight, int medianLineWidth, SelectionOptions opts)
+    {
+        if (medianLineWidth <= 0) return false;
+        return lines.Any(l => medianRight - l.Box.Right <= opts.BlockFullWidthRightMarginFactor * medianLineWidth);
     }
 
     private static double ComputeOverlapRatio(PhysicalRect a, PhysicalRect b)

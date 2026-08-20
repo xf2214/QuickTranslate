@@ -342,4 +342,98 @@ public class BlockSelectorTests
         Assert.Single(result.SelectedLines);
         Assert.Equal("left column", result.BlockText);
     }
+
+    [Fact]
+    public void Case23_TightParagraphGap_AdaptiveGapStops()
+    {
+        // 紧凑排版：段落间距 18px < 固定上限 0.5×行高(20px)，
+        // 但明显大于段内行距 6px → 自适应行距护栏应停在段落边界
+        var a1 = MakeLine(100, 100, 800, 40, "A line 1");
+        var a2 = MakeLine(100, 146, 800, 40, "A line 2");
+        var a3 = MakeLine(100, 192, 800, 40, "A line 3");
+        var b1 = MakeLine(100, 250, 800, 40, "B line 1");
+        var ocr = CreateOcr(a1, a2, a3, b1);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(500, 160));
+
+        Assert.Equal(3, result.SelectedLines.Count);
+        Assert.DoesNotContain(result.SelectedLines, l => l.Text == "B line 1");
+    }
+
+    [Fact]
+    public void Case24_ShortTailLine_StopsDownwardGrowth()
+    {
+        // 段末短行是段落边界：即使下一段紧贴（行距与段内一致），也不跨段吸入
+        var p1l1 = MakeLine(100, 100, 800, 30, "P1 line 1");
+        var p1l2 = MakeLine(100, 140, 800, 30, "P1 line 2");
+        var tail = MakeLine(100, 180, 300, 30, "P1 tail");
+        var p2l1 = MakeLine(100, 218, 800, 30, "P2 line 1");
+        var ocr = CreateOcr(p1l1, p1l2, tail, p2l1);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(500, 115));
+
+        Assert.Equal(3, result.SelectedLines.Count);
+        Assert.DoesNotContain(result.SelectedLines, l => l.Text == "P2 line 1");
+    }
+
+    [Fact]
+    public void Case25_ShortTailAboveAnchor_RejectedUpward()
+    {
+        // 光标在下一段时，上一段的段末短行不应被向上吸入
+        var p1l1 = MakeLine(100, 100, 800, 30, "P1 line 1");
+        var p1l2 = MakeLine(100, 140, 800, 30, "P1 line 2");
+        var tail = MakeLine(100, 180, 300, 30, "P1 tail");
+        var p2l1 = MakeLine(100, 218, 800, 30, "P2 line 1");
+        var ocr = CreateOcr(p1l1, p1l2, tail, p2l1);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(500, 230));
+
+        Assert.Single(result.SelectedLines);
+        Assert.Equal("P2 line 1", result.BlockText);
+    }
+
+    [Fact]
+    public void Case26_DownwardIndentedFirstLine_Stops()
+    {
+        // 向下生长遇到明显右移的首行缩进（下一段落起始）→ 停在边界前
+        var l1 = MakeLine(100, 100, 800, 30, "para line 1");
+        var l2 = MakeLine(100, 145, 800, 30, "para line 2");
+        var indented = MakeLine(160, 190, 740, 30, "next para indented");
+        var ocr = CreateOcr(l1, l2, indented);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(500, 115));
+
+        Assert.Equal(2, result.SelectedLines.Count);
+        Assert.DoesNotContain(result.SelectedLines, l => l.Text == "next para indented");
+    }
+
+    [Fact]
+    public void Case27_UpwardIndentedFirstLine_IncludedThenStops()
+    {
+        // 向上生长遇到首行缩进：它是当前段落的首行 → 纳入后停止，不跨入上一段落
+        var prev = MakeLine(100, 100, 800, 30, "prev para");
+        var bFirst = MakeLine(150, 145, 750, 30, "B first indented");
+        var bSecond = MakeLine(100, 190, 800, 30, "B second");
+        var bThird = MakeLine(100, 235, 800, 30, "B third");
+        var ocr = CreateOcr(prev, bFirst, bSecond, bThird);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(500, 250));
+
+        Assert.Equal(3, result.SelectedLines.Count);
+        Assert.Contains(result.SelectedLines, l => l.Text == "B first indented");
+        Assert.DoesNotContain(result.SelectedLines, l => l.Text == "prev para");
+    }
+
+    [Fact]
+    public void Case28_AllShortCaptionLines_StillMerged()
+    {
+        // 全是短行的题注块：短行护栏仅在块内有全宽行时生效，不误伤纯短行块
+        var c1 = MakeLine(100, 100, 300, 30, "caption one");
+        var c2 = MakeLine(100, 145, 280, 30, "caption two");
+        var ocr = CreateOcr(c1, c2);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(200, 115));
+
+        Assert.Equal(2, result.SelectedLines.Count);
+    }
 }
