@@ -88,7 +88,7 @@
 | OCR | PP-OCRv6 + ONNX Runtime（CPU，Session 常驻并启动后后台预热） |
 | 截图 | GDI BitBlt，内存 Bitmap Buffer，默认不落盘 |
 | 缓存 | 内存 LRU (1000 项) + SQLite L2 (SHA-256 索引 + hit 统计) |
-| 词典 | ECDICT-lite（packed 二进制 → 用户自定义 overlay → 59 词 stub 兜底） |
+| 词典 | ECDICT-lite（用户自定义 overlay → packed 高频词二进制） |
 | 翻译 | `ITranslationProvider` 抽象 + Dispatcher：默认自定义 OpenAI SSE 流式 / 可选 Qwen-MT |
 | 密钥 | Windows DPAPI CurrentUser + entropy.dat |
 | 日志 | Serilog + 分级过滤（默认不含原文，Debug 开关可临时开启） |

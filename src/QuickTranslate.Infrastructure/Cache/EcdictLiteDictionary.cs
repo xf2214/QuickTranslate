@@ -9,10 +9,10 @@ namespace QuickTranslate.Infrastructure.Cache;
 
 /// <summary>
 /// ECDICT-lite 本地英汉词典实现。
-/// 查找顺序（fallback chain）：
-///   1. 内置压缩二进制 ecdict-lite.packed（高频 3~5 万词，按词频精选）
-///   2. 用户自定义 overlay 词典（AppData 目录下 custom-dictionary.txt，优先级最高，缺词时用户自行追加）
-///   3. 兜底 59 词 StubMiniDictionary（保证极端情况下无 packed 也能用）
+/// 查找顺序（override chain）：
+///   1. 用户自定义 overlay 词典（AppData 目录下 custom-dictionary.txt，优先级最高，缺词时用户自行追加）
+///   2. 内置压缩二进制 ecdict-lite.packed（高频 3~5 万词，按词频精选）
+/// 无任何内置兜底词表：packed 缺失时本地词典即为空，未命中词交给在线 Provider。
 /// 仅当 targetLang 为中文（zh / zh-CN / zh-CN 变体）时才返回 true；反向 zh→en 不处理，走在线 Provider。
 /// </summary>
 public class EcdictLiteDictionary : ILocalDictionary
@@ -61,14 +61,6 @@ public class EcdictLiteDictionary : ILocalDictionary
         if (snap.Main.TryGetValue(key, out var mainEntry))
         {
             result = BuildResult(word, targetLang, mainEntry.Translation, mainEntry.Phonetic,
-                fromDictionary: true, fromOverlay: false);
-            return true;
-        }
-
-        // 3) 兜底 stub
-        if (StubMiniDictionarySource.Entries.TryGetValue(key, out var stubTrans))
-        {
-            result = BuildResult(word, targetLang, stubTrans, phonetic: null,
                 fromDictionary: true, fromOverlay: false);
             return true;
         }
@@ -134,7 +126,7 @@ public class EcdictLiteDictionary : ILocalDictionary
         }
         else
         {
-            _logger.LogInformation("ECDICT-lite packed 文件未找到，仅使用 stub 59 词兜底");
+            _logger.LogInformation("ECDICT-lite packed 文件未找到，本地词典为空（仅剩用户 overlay）");
         }
 
         // --- 用户 overlay：AppData/custom-dictionary.txt  ---
@@ -146,8 +138,7 @@ public class EcdictLiteDictionary : ILocalDictionary
 
         return new DictionarySnapshot(
             main.ToFrozenDictionary(StringComparer.Ordinal),
-            overlay.ToFrozenDictionary(StringComparer.Ordinal),
-            StubMiniDictionarySource.Entries.Count);
+            overlay.ToFrozenDictionary(StringComparer.Ordinal));
     }
 
     private string? ResolvePackedPath()
@@ -322,78 +313,14 @@ public class EcdictLiteDictionary : ILocalDictionary
     {
         public FrozenDictionary<string, Entry> Main { get; }
         public FrozenDictionary<string, Entry> Overlay { get; }
-        public int StubCount { get; }
-        public int TotalCount => Main.Count + Overlay.Count + StubCount;
+        public int TotalCount => Main.Count + Overlay.Count;
 
         public DictionarySnapshot(
             FrozenDictionary<string, Entry> main,
-            FrozenDictionary<string, Entry> overlay,
-            int stubCount)
+            FrozenDictionary<string, Entry> overlay)
         {
             Main = main;
             Overlay = overlay;
-            StubCount = stubCount;
         }
     }
-}
-
-/// <summary>
-/// 59 词兜底 stub，集中在独立的 source 类，避免和 EcdictLiteDictionary 耦合。
-/// 内容与旧 StubMiniDictionary 完全一致，保证行为不回归。
-/// </summary>
-file static class StubMiniDictionarySource
-{
-    public static readonly IReadOnlyDictionary<string, string> Entries = new Dictionary<string, string>(StringComparer.Ordinal)
-    {
-        ["quick"] = "快速的",
-        ["translate"] = "翻译",
-        ["hello"] = "你好",
-        ["world"] = "世界",
-        ["focus"] = "焦点",
-        ["book"] = "书",
-        ["computer"] = "电脑",
-        ["language"] = "语言",
-        ["window"] = "窗户",
-        ["mouse"] = "鼠标",
-        ["keyboard"] = "键盘",
-        ["screen"] = "屏幕",
-        ["memory"] = "记忆",
-        ["cache"] = "缓存",
-        ["result"] = "结果",
-        ["source"] = "来源",
-        ["target"] = "目标",
-        ["button"] = "按钮",
-        ["click"] = "点击",
-        ["open"] = "打开",
-        ["close"] = "关闭",
-        ["copy"] = "复制",
-        ["paste"] = "粘贴",
-        ["cut"] = "剪切",
-        ["save"] = "保存",
-        ["delete"] = "删除",
-        ["search"] = "搜索",
-        ["find"] = "找到",
-        ["replace"] = "替换",
-        ["file"] = "文件",
-        ["folder"] = "文件夹",
-        ["document"] = "文档",
-        ["application"] = "应用程序",
-        ["system"] = "系统",
-        ["network"] = "网络",
-        ["server"] = "服务器",
-        ["client"] = "客户端",
-        ["database"] = "数据库",
-        ["image"] = "图片",
-        ["video"] = "视频",
-        ["audio"] = "音频",
-        ["text"] = "文本",
-        ["number"] = "数字",
-        ["word"] = "单词",
-        ["sentence"] = "句子",
-        ["paragraph"] = "段落",
-        ["page"] = "页面",
-        ["line"] = "线条",
-        ["point"] = "点",
-        ["area"] = "区域"
-    };
 }

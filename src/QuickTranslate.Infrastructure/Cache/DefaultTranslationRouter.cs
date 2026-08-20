@@ -57,11 +57,9 @@ public class DefaultTranslationRouter : ITranslationRouter
         if (_dictionary.TryLookup(word, targetLang, out var dictResult))
         {
             _logger.LogDebug("Dictionary hit for {Word}", word);
+            // 本地词典是确定性、O(1) 内存查找：只写 L1 内存热缓存（重复词直接命中），
+            // 不必持久化到 SQLite L2，避免多余写盘并挤占在线译文的缓存容量。
             _cache.Add(normalizedKey, dictResult);
-            if (_l2Cache != null)
-            {
-                await _l2Cache.AddAsync(normalizedKey, dictResult, ct);
-            }
             return dictResult with { NormalizedKey = normalizedKey };
         }
 

@@ -29,22 +29,26 @@ public class EcdictLiteDictionaryTests : IDisposable
     }
 
     // ============================================================
-    //  1. 无 packed 文件 → 自动回退到 stub 59 词
+    //  1. 缺词不再有 stub 兜底（命中与否只取决于 packed/overlay）
     // ============================================================
     [Fact]
-    public void NoPackedFile_FallsBackToStubEntries()
+    public void MissingWord_NoStubFallback_ReturnsFalse()
     {
         var appData = MakeAppData(out _);
+        // 用只含 hello 的 mini-packed 屏蔽仓库真实 packed（AppData 优先级最高），
+        // 验证缺词时不再有 59 词 stub 兜底。
+        var packedPath = Path.Combine(appData.GetAppDataDirectory(), "ecdict-lite.packed");
+        WriteMiniPacked(packedPath, new (string W, string? P, string T)[]
+        {
+            ("hello", null, "你好"),
+        });
+
         var dict = new EcdictLiteDictionary(appData, NullLogger<EcdictLiteDictionary>.Instance);
 
-        // stub 内有 computer → 电脑
-        var ok = dict.TryLookup("computer", "zh-CN", out var result);
-
-        Assert.True(ok, "stub computer should hit");
-        Assert.Contains("电脑", result.TargetText);
-        Assert.True(result.FromDictionary);
-        Assert.False(result.NeedsOnline);
-        _out.WriteLine("computer -> {0}", result.TargetText);
+        // 旧 stub 词 computer/translate 不再命中；仅在 mini-packed 中的 hello 能命中
+        Assert.True(dict.TryLookup("hello", "zh-CN", out _));
+        Assert.False(dict.TryLookup("computer", "zh-CN", out _));
+        Assert.False(dict.TryLookup("translate", "zh-CN", out _));
     }
 
     [Fact]
@@ -62,6 +66,11 @@ public class EcdictLiteDictionaryTests : IDisposable
     public void Lookup_CaseAndWhitespaceInsensitive()
     {
         var appData = MakeAppData(out _);
+        var packedPath = Path.Combine(appData.GetAppDataDirectory(), "ecdict-lite.packed");
+        WriteMiniPacked(packedPath, new (string W, string? P, string T)[]
+        {
+            ("Computer", "kəmˈpjuːtə", "n. 计算机；电脑"),
+        });
         var dict = new EcdictLiteDictionary(appData, NullLogger<EcdictLiteDictionary>.Instance);
 
         var ok1 = dict.TryLookup("  COMPUTER  ", "zh", out var r1);
@@ -72,19 +81,19 @@ public class EcdictLiteDictionaryTests : IDisposable
     }
 
     // ============================================================
-    //  2. 用户自定义 overlay 能覆盖主词典 / stub
+    //  2. 用户自定义 overlay 能覆盖主词典 / 补充缺词
     // ============================================================
     [Fact]
     public void CustomOverlay_HigherPriority_And_AddsMissing()
     {
         var appData = MakeAppData(out var appDataDir);
 
-        // 1) 写 overlay：保留 computer 原 stub；新增 stayover（stub 里没有）
+        // 1) 写 overlay：computer/stayover/hello 三词全部来自用户 overlay（无 packed）
         File.WriteAllText(
             Path.Combine(appDataDir, "custom-dictionary.txt"),
             "# 我的自定义补丁词典，支持 Tab 或逗号分隔\n" +
-            "computer\t\t计算机；n. 计算机（自定义）\n" +       // 用空 phonetic 的 tab 格式，覆盖 stub "电脑"
-            "stayover,（机场）中转住宿；中途停留\n" +           // 逗号格式，新增
+            "computer\t\t计算机；n. 计算机（自定义）\n" +       // 空 phonetic 的 tab 格式
+            "stayover,（机场）中转住宿；中途停留\n" +           // 逗号格式
             "hello\t həˈləʊ \t你好呀！\n"
         );
 
@@ -145,16 +154,15 @@ public class EcdictLiteDictionaryTests : IDisposable
         // 未命中词条
         Assert.False(dict.TryLookup("nonexistent-word-xyz", "zh", out _));
 
-        // 验证：packed 后 stub 依然可用（双重 fallback）
-        Assert.True(dict.TryLookup("mouse", "zh", out var r3));
-        Assert.Contains("鼠标", r3.TargetText);
+        // 验证：无 stub 兜底后，packed 之外的词（旧 stub 词 mouse）不再被照顾
+        Assert.False(dict.TryLookup("mouse", "zh", out _));
     }
 
     // ============================================================
-    //  4. packed magic / version / count 异常时回退到 stub（不 throw，保证应用可用）
+    //  4. packed magic / version / count 异常时被跳过（不 throw，保证应用可用）
     // ============================================================
     [Fact]
-    public void CorruptedPacked_GracefulFallback_ToStub()
+    public void CorruptedPacked_GracefulSkip_NoEntries()
     {
         var appData = MakeAppData(out _);
         var packedPath = Path.Combine(appData.GetAppDataDirectory(), "ecdict-lite.packed");
@@ -162,13 +170,14 @@ public class EcdictLiteDictionaryTests : IDisposable
 
         var dict = new EcdictLiteDictionary(appData, NullLogger<EcdictLiteDictionary>.Instance);
 
-        // stub 应该依然工作
-        Assert.True(dict.TryLookup("translate", "zh", out var r));
-        Assert.Contains("翻译", r.TargetText);
+        // 损坏的 packed 被跳过（不抛异常），无 overlay、无 stub → 词典为空、查不到
+        _ = dict.Count;
+        Assert.Equal(0, dict.Count);
+        Assert.False(dict.TryLookup("translate", "zh", out _));
     }
 
     [Fact]
-    public void Count_Reflects_MainPlusOverlayPlusStub()
+    public void Count_Reflects_MainPlusOverlay()
     {
         var appData = MakeAppData(out var appDataDir);
         var packedPath = Path.Combine(appDataDir, "ecdict-lite.packed");
@@ -183,10 +192,9 @@ public class EcdictLiteDictionaryTests : IDisposable
             "epsilon,艾普西隆\n");
 
         var dict = new EcdictLiteDictionary(appData, NullLogger<EcdictLiteDictionary>.Instance);
-        // packed 3 + overlay 2 + stub（至少 50），所以总数应 >= 55
-        // （不把 stub 精确值 59 写死在这里：避免未来 stub 增删导致维护成本）
-        Assert.True(dict.Count >= 3 + 2 + 50, $"Count={dict.Count} too small (expected >= 55)");
-        // 确保 packed 和 overlay 的每个词都能查到（它们不会被重复扣减）
+        // 无 stub 后总数 = packed 3 + overlay 2
+        Assert.Equal(5, dict.Count);
+        // 确保 packed 和 overlay 的每个词都能查到
         Assert.True(dict.TryLookup("alpha", "zh", out _));
         Assert.True(dict.TryLookup("beta", "zh", out _));
         Assert.True(dict.TryLookup("delta", "zh", out _));

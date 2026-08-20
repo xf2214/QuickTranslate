@@ -84,7 +84,7 @@ Hotkey (Alt+1 / Alt+2)
 | OCR | PP-OCRv6 + ONNX Runtime (CPU; session kept warm post-startup) |
 | Screenshot | GDI BitBlt, in-memory Bitmap buffer — by default **never persisted** |
 | Cache | LRU memory (1000 entries) + SQLite L2 (SHA-256 indexed, with hit tracking) |
-| Dictionary | ECDICT-lite (packed binary → user overlay → 59-word stub fallback) |
+| Dictionary | ECDICT-lite (user custom overlay → packed high-frequency binary) |
 | Translation | `ITranslationProvider` abstraction with dispatch: default custom OpenAI SSE streamer / optional Qwen-MT |
 | Key storage | Windows DPAPI `CurrentUser` + entropy file |
 | Logging | Serilog with leveled filtering (source text excluded by default; opt-in Debug switch) |

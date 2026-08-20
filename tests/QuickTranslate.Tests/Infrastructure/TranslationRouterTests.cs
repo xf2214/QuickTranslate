@@ -167,22 +167,6 @@ public class TranslationRouterTests
     }
 
     [Fact]
-    public void Case5_StubMiniDictionary_KnownWords()
-    {
-        var dict = new StubMiniDictionary();
-        Assert.True(dict.Count >= 50);
-
-        Assert.True(dict.TryLookup("Hello", "zh-CN", out var r1));
-        Assert.Equal("你好", r1.TargetText);
-        Assert.True(r1.FromDictionary);
-
-        Assert.True(dict.TryLookup("translate", "zh-CN", out var r2));
-        Assert.Equal("翻译", r2.TargetText);
-
-        Assert.False(dict.TryLookup("supercalifragilistic", "zh-CN", out _));
-    }
-
-    [Fact]
     public async Task Case6_OnlineReturnsEmpty_ThrowsInvalidResponse_AndDoesNotCache()
     {
         var cache = Substitute.For<ITranslationCache>();
