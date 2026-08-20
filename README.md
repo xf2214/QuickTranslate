@@ -12,9 +12,7 @@
   └─────────────────────────────────────┘
 ```
 
-[![词模式演示](./assets/screenshots/word-mode-demo.jpg)](./assets/screenshots/word-mode-demo.jpg)
-
-<sub>↑ 把鼠标指向 "significantly"，按 **Alt+1** — OCR 在本地完成，青色框标出所选单词，弹窗即时显示音标、词性与中文释义，完全不打断当前工作流。</sub>
+> 🎯 **典型流程示意**：把鼠标指向 "significantly"，按 **Alt + 1** → 程序在本地完成 OCR → 青色选择框标出目标单词 → 弹出小卡片显示音标 / 词性 / 中文释义，整个过程不抢走当前应用焦点。
 
 ---
 
@@ -41,8 +39,6 @@
 
 优先顺序：内存 LRU 缓存 → SQLite L2 → ECDICT-lite 本地词典 → 在线大模型。常用词几乎零网络。
 
-[![单词模式演示](./assets/screenshots/word-mode-demo.jpg)](./assets/screenshots/word-mode-demo.jpg)
-
 ---
 
 ### 2 · 文本块模式 Alt+2
@@ -54,8 +50,6 @@
 - 弹窗按文本量自动估算尺寸、支持滚动
 - 复制译文、朗读、关闭按钮
 
-[![文本块模式演示](./assets/screenshots/block-mode-demo.jpg)](./assets/screenshots/block-mode-demo.jpg)
-
 ---
 
 ### 3 · 设置窗口
@@ -66,8 +60,6 @@
 - **全局热键**：可重新录制；保存前自动检测与系统/自身冲突；绿色徽标「✔ 无冲突」。
 - **其他设置**：开机自启（HKCU Run，用户级，无需管理员）、点击外部关闭弹窗、Debug 日志开关。
 - **系统状态**：OCR 引擎（PP-OCRv6 就绪 / Mock 回退）、API Key 是否已配置的实时徽标。
-
-[![设置窗口演示](./assets/screenshots/settings-window-demo.jpg)](./assets/screenshots/settings-window-demo.jpg)
 
 ---
 
@@ -216,4 +208,3 @@ dotnet publish src/QuickTranslate.App -c Release -r win-x64 --self-contained tru
 
 - 本仓库代码按 [MIT License](LICENSE) 开源。
 - 第三方组件许可清单见 [LICENSES.txt](LICENSES.txt)，涵盖：PP-OCRv6 模型权重 (Apache-2.0)、ONNX Runtime (MIT)、ECDICT 词典、.NET Runtime、xUnit 等。
-- 演示图片为产品效果示意（AI 生成风格化截图），实际界面以运行为准。
