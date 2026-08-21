@@ -57,6 +57,7 @@ public class DefaultBlockSelector : IBlockSelector
         // 仍允许吸入同段落的全宽正文行，只拦远超正文宽度的 UI 栏。
         int widthBaseline = Math.Max(anchorLine.Box.Width, ComputeMedianLineWidth(ocr.Lines));
         int maxCandidateWidth = (int)Math.Round(widthBaseline * opts.BlockMaxWidthVsMedianFactor);
+        int coreWidthLimit = (int)Math.Round(widthBaseline * opts.BlockCoreWidthFactor);
 
         // 自适应行间距上限：取“固定比例×行高”与“实测中位行间距×因子”的更严值，
         // 紧凑排版下段落间距小于 0.5×行高时也能停在段落边界。
@@ -72,6 +73,11 @@ public class DefaultBlockSelector : IBlockSelector
         int medianLineWidth = ComputeMedianLineWidth(ocr.Lines);
 
         PhysicalRect union = anchorLine.Box;
+        // 核心列并集：只由正文宽度行（≤ coreWidthLimit）累积。水平连通性判定基于它，
+        // 防止超宽行把 union 撑宽后将水平不连续的附近文本（另一栏/隔开的文本）桥接进来。
+        // 锚点行宽 ≤ widthBaseline ≤ coreWidthLimit，初始必为核心行。
+        PhysicalRect coreUnion = anchorLine.Box;
+        int coreCount = 1;
         List<OcrLine> selected = new() { anchorLine };
 
         for (int i = anchorLineIndex - 1; i >= 0; i--)
@@ -81,11 +87,17 @@ public class DefaultBlockSelector : IBlockSelector
             // 上方候选是段末短行（且块内已有全宽行）：它是上一段落的结尾 → 停在边界前，不纳入
             if (IsShortTail(candidate, medianRight, medianLineWidth, opts) && HasFullWidthLine(selected, medianRight, medianLineWidth, opts))
                 break;
-            if (!CheckCandidate(candidate, union, medianLineHeight, maxCandidateWidth, gapLimit, opts)) break;
+            if (!CheckCandidate(candidate, union, coreUnion, medianLineHeight, maxCandidateWidth, gapLimit, opts)) break;
+            if (ExceedsCoreRightGrowth(candidate, coreUnion, coreCount, coreWidthLimit, medianLineHeight, opts)) break;
 
             // 候选行左缘明显右移（首行缩进）：它是当前段落的首行 → 纳入后停止，不跨入上一段落
-            bool indentedFirstLine = candidate.Box.Left - union.Left > opts.BlockFirstLineIndentFactor * medianLineHeight;
+            bool indentedFirstLine = candidate.Box.Left - coreUnion.Left > opts.BlockFirstLineIndentFactor * medianLineHeight;
             union = UnionRect(union, candidate.Box);
+            if (candidate.Box.Width <= coreWidthLimit)
+            {
+                coreUnion = UnionRect(coreUnion, candidate.Box);
+                coreCount++;
+            }
             selected.Insert(0, candidate);
             if (indentedFirstLine) break;
         }
@@ -98,10 +110,16 @@ public class DefaultBlockSelector : IBlockSelector
             if (IsShortTail(selected[^1], medianRight, medianLineWidth, opts) && HasFullWidthLine(selected, medianRight, medianLineWidth, opts))
                 break;
             // 候选行左缘明显右移（下一段落的首行缩进）→ 停在段落边界前
-            if (candidate.Box.Left - union.Left > opts.BlockMaxLeftEdgeDeltaFactor * medianLineHeight)
+            if (candidate.Box.Left - coreUnion.Left > opts.BlockMaxLeftEdgeDeltaFactor * medianLineHeight)
                 break;
-            if (!CheckCandidate(candidate, union, medianLineHeight, maxCandidateWidth, gapLimit, opts)) break;
+            if (!CheckCandidate(candidate, union, coreUnion, medianLineHeight, maxCandidateWidth, gapLimit, opts)) break;
+            if (ExceedsCoreRightGrowth(candidate, coreUnion, coreCount, coreWidthLimit, medianLineHeight, opts)) break;
             union = UnionRect(union, candidate.Box);
+            if (candidate.Box.Width <= coreWidthLimit)
+            {
+                coreUnion = UnionRect(coreUnion, candidate.Box);
+                coreCount++;
+            }
             selected.Add(candidate);
         }
 
@@ -172,7 +190,21 @@ public class DefaultBlockSelector : IBlockSelector
         return widths[widths.Count / 2];
     }
 
-    private static bool CheckCandidate(OcrLine candidate, PhysicalRect union, int medianHeight, int maxCandidateWidth, double gapLimit, SelectionOptions opts)
+    /// <summary>
+    /// 核心列右缘增长护栏：核心列已建立（≥2 核心行）后，候选行使核心列右缘
+    /// 增长超过 行高×因子 → 选区正横向侵入另一文本区域（跨区域连通）→ 停在边界前。
+    /// 只限右缘：左缘外伸（悬挂缩进/项目符号换行）不产生跨区域连通，且由 leftDelta 护栏兼顾；
+    /// 只在核心列建立后生效：锚点落在段末短行时仍需允许吸入同段落的全宽行（Case20）。
+    /// </summary>
+    private static bool ExceedsCoreRightGrowth(OcrLine candidate, PhysicalRect coreUnion, int coreCount, int coreWidthLimit, int medianLineHeight, SelectionOptions opts)
+    {
+        if (coreCount < 2) return false;
+        if (candidate.Box.Width > coreWidthLimit) return false; // 非核心行不累积核心列，不触发护栏
+        int rightGrowth = candidate.Box.Right - coreUnion.Right;
+        return rightGrowth > opts.BlockMaxCoreGrowthFactor * medianLineHeight;
+    }
+
+    private static bool CheckCandidate(OcrLine candidate, PhysicalRect union, PhysicalRect coreUnion, int medianHeight, int maxCandidateWidth, double gapLimit, SelectionOptions opts)
     {
         double heightRatio = candidate.Box.Height / (double)medianHeight;
         if (heightRatio < opts.BlockMinHeightRatio || heightRatio > opts.BlockMaxHeightRatio)
@@ -182,9 +214,11 @@ public class DefaultBlockSelector : IBlockSelector
         if (candidate.Box.Width > maxCandidateWidth)
             return false;
 
-        // 候选行必须与块并集水平相交：垂直方向重叠但水平完全分离的行
-        // （如同一高度的另一栏文字）不能因 verticalGap 为负而被误连。
-        if (candidate.Box.Right <= union.Left || candidate.Box.Left >= union.Right)
+        // 候选行必须与核心列并集水平相交：垂直方向重叠但水平分离的行
+        // （另一栏/被空白隔开的文本）不能因 verticalGap 为负而被误连。
+        // 用核心列而非全块 union：超宽行撑宽 union 后，不相干的行也会在
+        // 其水平范围内“相交”，导致选区跨越断开处连通到附近其他文本。
+        if (candidate.Box.Right <= coreUnion.Left || candidate.Box.Left >= coreUnion.Right)
             return false;
 
         int verticalGap;
@@ -195,8 +229,8 @@ public class DefaultBlockSelector : IBlockSelector
         if (verticalGap > gapLimit)
             return false;
 
-        double xOverlapRatio = ComputeOverlapRatio(candidate.Box, union);
-        int leftDelta = Math.Abs(candidate.Box.Left - union.Left);
+        double xOverlapRatio = ComputeOverlapRatio(candidate.Box, coreUnion);
+        int leftDelta = Math.Abs(candidate.Box.Left - coreUnion.Left);
         if (!(xOverlapRatio >= opts.BlockMinXOverlap || leftDelta <= opts.BlockMaxLeftEdgeDeltaFactor * medianHeight))
             return false;
 

@@ -76,4 +76,19 @@ public class PopupSizeEstimatorTests
         Assert.Equal(PopupSizeEstimator.EstimateTextWidth("abcd", 14),
                      PopupSizeEstimator.EstimateTextWidth(withNewline, 14), 3);
     }
+
+    [Fact]
+    public void WordPopup_LongSentenceHeader_WrapsAndGrowsHeight()
+    {
+        // 选中文本是一整句：标题换行后高度应大于单词标题（上限 3 行，不无限增长）
+        var sentence = "this is a rather long selected sentence for translation";
+        var (_, hSentence) = PopupSizeEstimator.EstimateWordPopupSize(sentence, "这是一个很长的句子译文", 1920, 1080);
+        var (_, hWord) = PopupSizeEstimator.EstimateWordPopupSize("word", "这是一个很长的句子译文", 1920, 1080);
+
+        Assert.True(hSentence > hWord, $"长句标题应更高: {hSentence} vs {hWord}");
+
+        var veryLong = string.Join(" ", Enumerable.Repeat(sentence, 4));
+        var (_, hVeryLong) = PopupSizeEstimator.EstimateWordPopupSize(veryLong, "译文", 1920, 1080);
+        Assert.True(hVeryLong <= hSentence + 1, "标题最多补算 3 行，不应无限增高");
+    }
 }

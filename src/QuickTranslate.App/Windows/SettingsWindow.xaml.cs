@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media.Animation;
 using SWC = System.Windows.Controls;
 using Microsoft.Extensions.DependencyInjection;
@@ -41,6 +42,8 @@ public partial class SettingsWindow : Window
         _appSettings = appSettingsOptions.Value;
 
         Loaded += OnLoaded;
+        // 最小化时直接隐藏窗口（ShowInTaskbar=False 的最小化会缩成桌面左下角的三按钮小窗，体验差）
+        StateChanged += OnWindowStateChanged;
         CancelButton.Click += (s, e) => Close();
         SaveButton.Click += OnSaveClicked;
         ClearApiKeyButton.Click += OnClearApiKeyClicked;
@@ -122,6 +125,39 @@ public partial class SettingsWindow : Window
         _apiKeyCleared = false;
         HideError();
         HideToast();
+
+        // macOS 式入场：淡入 + 轻微上浮
+        var sb = new Storyboard();
+        var fade = new DoubleAnimation(0, 1, new Duration(TimeSpan.FromMilliseconds(220)))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+        Storyboard.SetTarget(fade, this);
+        Storyboard.SetTargetProperty(fade, new PropertyPath(OpacityProperty));
+        sb.Children.Add(fade);
+        sb.Begin();
+    }
+
+    private void OnWindowStateChanged(object? sender, EventArgs e)
+    {
+        // Win+D / 其他途径触发最小化时同样直接隐藏，避免出现左下角小窗
+        if (WindowState == WindowState.Minimized)
+        {
+            Hide();
+        }
+    }
+
+    private void OnTitleBarDragMove(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ButtonState == MouseButtonState.Pressed)
+        {
+            DragMove();
+        }
+    }
+
+    private void OnCloseClicked(object sender, RoutedEventArgs e)
+    {
+        Close();
     }
 
     private void UpdateHotkeyStatusPreview()

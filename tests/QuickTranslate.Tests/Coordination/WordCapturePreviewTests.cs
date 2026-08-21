@@ -79,6 +79,36 @@ public class WordCapturePreviewTests
     }
 
     [Fact]
+    public async Task Recognize_PassesFocusBand_CenteredOnCursor()
+    {
+        var coord = CoordinatorTestHelpers.CreateCoordinator(
+            out _, out var broker, out var cursor, out _,
+            out var capture, out var ocr, out _,
+            out _, out _, out _);
+
+        cursor.CursorPos = new PhysicalPoint(500, 400);
+        broker.RaiseHotkeyFired(HotkeyEventType.Word);
+        await Task.Delay(30);
+
+        capture.CaptureAroundTcs.SetResult(FakeScreenCapture.CreateFrame(
+            new PhysicalRect(300, 300, 400, 200), Mid));
+        await Task.Delay(30);
+
+        ocr.RecognizeTcs.SetResult(CreateOcrResult(new PhysicalRect(300, 300, 400, 200)));
+        await Task.Delay(40);
+
+        // Word 模式每次识别（含触边重抓）都必须携带焦点带：光标 ±1.5 估值行高
+        // （20px → ±30px），带外行不跑 rec（扩抓后行多时避免无效识别）。
+        Assert.NotEmpty(ocr.FocusBands);
+        Assert.All(ocr.FocusBands, band =>
+        {
+            Assert.NotNull(band);
+            Assert.Equal(400 - 30, band!.Value.Top);
+            Assert.Equal(400 + 30, band.Value.Bottom);
+        });
+    }
+
+    [Fact]
     public async Task InitialCaptureSize_Is15WordsBy4Lines()
     {
         var coord = CoordinatorTestHelpers.CreateCoordinator(

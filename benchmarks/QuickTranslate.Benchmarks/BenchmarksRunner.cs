@@ -472,7 +472,7 @@ public class BenchmarksRunner
             P50 = Percentile(samples, 50),
             P95 = Percentile(samples, 95),
             SampleCount = samples.Count,
-            Notes = $"WordInteractionCoordinator pipeline (Mock OCR=100ms Task.Delay), Start→Overlay.Show increment, {warmupCount} warmup + {runCount} measured",
+            Notes = $"WordInteractionCoordinator pipeline, Hotkey→first Overlay.Show (即时反馈路径：选区覆盖层/扫描动画在 OCR 前展示，不含 OCR/翻译耗时), {warmupCount} warmup + {runCount} measured",
             Samples = samples
         };
     }

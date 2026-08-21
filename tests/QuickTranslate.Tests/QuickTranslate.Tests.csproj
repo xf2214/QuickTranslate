@@ -23,4 +23,17 @@
     <ProjectReference Include="..\..\src\QuickTranslate.App\QuickTranslate.App.csproj" />
     <ProjectReference Include="..\..\src\QuickTranslate.TextToSpeech\QuickTranslate.TextToSpeech.csproj" />
   </ItemGroup>
+  <!-- OCR 模型（det/rec/cls.onnx、ppocr_keys.txt）会经 ProjectReference 从 App 传递到测试输出目录，
+       导致 OcrEngineFallbackTests 的"模型缺失"场景在开发机上误命中真实模型而失败。
+       这里在复制到输出目录前移除这些项，并清理历史构建残留；version.json 保留
+       （ModelValidationTests/RealOcrRecognitionTests 已考虑仅含 version.json 的空壳目录）。 -->
+  <Target Name="ExcludeOcrModelFilesFromTestOutput"
+          BeforeTargets="_CopyOutOfDateSourceItemsToOutputDirectory;_CopySourceItemsToOutputDirectory">
+    <ItemGroup>
+      <_SourceItemsToCopyToOutputDirectory
+          Remove="@(_SourceItemsToCopyToOutputDirectory)"
+          Condition="'%(TargetPath)' != '' and ($([System.String]::Copy('%(TargetPath)').Contains('assets\models\')) or $([System.String]::Copy('%(TargetPath)').Contains('assets/models/'))) and !$([System.String]::Copy('%(TargetPath)').EndsWith('version.json'))" />
+    </ItemGroup>
+    <Delete Files="$(OutDir)assets\models\det.onnx;$(OutDir)assets\models\rec.onnx;$(OutDir)assets\models\cls.onnx;$(OutDir)assets\models\ppocr_keys.txt" />
+  </Target>
 </Project>

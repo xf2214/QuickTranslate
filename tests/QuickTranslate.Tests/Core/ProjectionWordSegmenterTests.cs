@@ -402,4 +402,194 @@ public class ProjectionWordSegmenterTests : IDisposable
         Assert.Equal("a", words[0].Text);
         Assert.Equal(";", words[1].Text);
     }
+
+    [Fact]
+    public void Case16_FusedToken_DroppedSpace_SplitIntoTwoWords()
+    // 粘连词修复：rec 丢空格时 "voidMain" 是一个 token，投影段横跨两词。
+    // 段内存在达到词间距级别的单一缝隙（5px ≥ minGap）→ 拆成两个词框，
+    // 选框不再横跨两词，翻译拿到真实单词。
+    {
+        var bmp = new Bitmap(200, 44, PixelFormat.Format32bppArgb);
+        _bitmaps.Add(bmp);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            using var brush = new SolidBrush(Color.Black);
+            g.FillRectangle(brush, 20, 10, 40, 24);   // "void" 列 20..59
+            g.FillRectangle(brush, 65, 10, 40, 24);   // "Main" 列 65..104，中间 5px 缝隙
+        }
+        var frameRegion = new PhysicalRect(0, 0, 200, 44);
+        var localBox = new PhysicalRect(0, 0, 200, 44);
+
+        bool ok = ProjectionWordSegmenter.TrySegment(bmp, "voidMain", localBox, frameRegion, false, 0, out var words, out var detail);
+
+        Assert.True(ok);
+        Assert.Equal(2, words.Count);
+        Assert.Equal("void", words[0].Text);
+        Assert.Equal("Main", words[1].Text);
+        // 两个词框各自贴合自己的墨块，不再横跨
+        Assert.True(words[0].Box.Right <= 62, $"void 框右缘 {words[0].Box.Right} 应贴左墨块");
+        Assert.True(words[1].Box.X >= 63, $"Main 框左缘 {words[1].Box.X} 应贴右墨块");
+        Assert.Contains("unfuse", detail);
+    }
+
+    [Fact]
+    public void Case17_FusedToken_RealisticRendering_SplitAtWordGap()
+    // 真实渲染："void"/"Main" 用 5px 词间距绘制（低于投影 gap 阈值 7px，
+    // 模拟 rec 丢空格），字母间距只有 0-2px → 只在词间隙处拆分。
+    {
+        var (bmp, spans) = DrawWords(new[] { "void", "Main" }, height: 44, gap: 5);
+        var frameRegion = new PhysicalRect(0, 0, bmp.Width, bmp.Height);
+        var localBox = new PhysicalRect(0, 0, bmp.Width, bmp.Height);
+
+        bool ok = ProjectionWordSegmenter.TrySegment(bmp, "voidMain", localBox, frameRegion, false, 0, out var words);
+
+        Assert.True(ok);
+        Assert.Equal(2, words.Count);
+        Assert.Equal("void", words[0].Text);
+        Assert.Equal("Main", words[1].Text);
+        // 词框中心应贴合各自实测渲染位置（误差 ≤ 6px）
+        int c0 = (spans[0].Left + spans[0].Right) / 2;
+        int c1 = (spans[1].Left + spans[1].Right) / 2;
+        Assert.True(Math.Abs(words[0].Box.X + words[0].Box.Width / 2 - c0) <= 6);
+        Assert.True(Math.Abs(words[1].Box.X + words[1].Box.Width / 2 - c1) <= 6);
+    }
+
+    [Fact]
+    public void Case18_JustifiedWideLetterGaps_NotSplit()
+    // 两端对齐排版：单词 "word" 内部字母缝隘普遍拉宽到 4px（均等、无突出大缝）
+    // → 不能把正常单词拦腰切断，仍输出整词。
+    {
+        var bmp = new Bitmap(120, 44, PixelFormat.Format32bppArgb);
+        _bitmaps.Add(bmp);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            using var brush = new SolidBrush(Color.Black);
+            g.FillRectangle(brush, 20, 10, 10, 24);   // w 列 20..29
+            g.FillRectangle(brush, 34, 10, 10, 24);   // o 列 34..43（4px 缝）
+            g.FillRectangle(brush, 48, 10, 10, 24);   // r 列 48..57（4px 缝）
+            g.FillRectangle(brush, 62, 10, 10, 24);   // d 列 62..71（4px 缝）
+        }
+        var frameRegion = new PhysicalRect(0, 0, 120, 44);
+        var localBox = new PhysicalRect(0, 0, 120, 44);
+
+        bool ok = ProjectionWordSegmenter.TrySegment(bmp, "word", localBox, frameRegion, false, 0, out var words);
+
+        Assert.True(ok);
+        Assert.Single(words);
+        Assert.Equal("word", words[0].Text);
+    }
+
+    [Fact]
+    public void Case19_ConstrainedDP_CutsAtWidestZeroGap()
+    // 受约束切分平局择优：三个等宽墨块、两条零墨缝隙（1px / 3px），
+    // 两个 token → DP 只能合并两个墨块，切点应落在更宽的缝隙（真实词间隙），
+    // 而不是仅靠宽度启发式落在窄缝。
+    {
+        var bmp = new Bitmap(200, 44, PixelFormat.Format32bppArgb);
+        _bitmaps.Add(bmp);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            using var brush = new SolidBrush(Color.Black);
+            g.FillRectangle(brush, 20, 10, 40, 24);   // A 列 20..59
+            g.FillRectangle(brush, 61, 10, 40, 24);   // B 列 61..100（1px 窄缝）
+            g.FillRectangle(brush, 104, 10, 40, 24);  // C 列 104..143（3px 宽缝）
+        }
+        var frameRegion = new PhysicalRect(0, 0, 200, 44);
+        var localBox = new PhysicalRect(0, 0, 200, 44);
+
+        bool ok = ProjectionWordSegmenter.TrySegmentOrConstrained(bmp, "aa bb", localBox, frameRegion, false, 0, out var words, out _);
+
+        Assert.True(ok);
+        Assert.Equal(2, words.Count);
+        // 切点在宽缝（列 101..103）：第二个词框左缘应 ≥101，而非窄缝的 60
+        Assert.True(words[1].Box.X >= 101,
+            $"第二个词框 [{words[1].Box.X}..{words[1].Box.Right}] text='{words[1].Text}'，第一个 [{words[0].Box.X}..{words[0].Box.Right}] text='{words[0].Text}'，应落在宽缝处（≥101）");
+    }
+
+    [Fact]
+    public void Case20_VerticalTighten_NeighborBandExcluded()
+    // det 框被高度归一化撑大后，邻行墨水渗入裁剪图（上边缘小墨带）：
+    // 垂直收紧应只保留墨量最大的主墨水带，词框不连带上边缘的邻行内容。
+    {
+        var bmp = new Bitmap(120, 44, PixelFormat.Format32bppArgb);
+        _bitmaps.Add(bmp);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            using var brush = new SolidBrush(Color.Black);
+            g.FillRectangle(brush, 20, 2, 20, 4);   // 邻行渗漏带 行 2..5（墨量小）
+            g.FillRectangle(brush, 20, 12, 60, 14); // 主墨块行 12..25（含）
+        }
+        var frameRegion = new PhysicalRect(10, 50, 120, 44);
+        var localBox = new PhysicalRect(0, 0, 120, 44);
+
+        bool ok = ProjectionWordSegmenter.TrySegment(bmp, "Hi", localBox, frameRegion, false, 0, out var words);
+
+        Assert.True(ok);
+        Assert.Single(words);
+        Assert.Equal(frameRegion.Y + 11, words[0].Box.Y);   // 主带 inkTop(12) - 1，不含邻行带
+        Assert.Equal(16, words[0].Box.Height);              // 只覆盖主带 + 上下各 1px padding
+    }
+
+    [Fact]
+    public void Case21_OverSplit_MergesByAlignment_NotSmallestGap()
+    // 过度分裂修复："aa" 被宽字距（10px）分成两块，而与 "bb" 的词间空隙更窄（7px）。
+    // 旧最小空隙合并会在词间隙合并 → "bb" 的框吸入 "aa" 后半墨水
+    // （选框连通到前面的内容且偏离光标）。宽度感知合并应在词内宽缝合并。
+    {
+        var bmp = new Bitmap(130, 44, PixelFormat.Format32bppArgb);
+        _bitmaps.Add(bmp);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            using var brush = new SolidBrush(Color.Black);
+            g.FillRectangle(brush, 10, 12, 20, 14); // "aa" 前半 10..29
+            g.FillRectangle(brush, 40, 12, 20, 14); // "aa" 后半 40..59（字距空隙 10px）
+            g.FillRectangle(brush, 67, 12, 40, 14); // "bb" 67..106（词间空隙 7px）
+        }
+        var frameRegion = new PhysicalRect(0, 0, 130, 44);
+        var localBox = new PhysicalRect(0, 0, 130, 44);
+
+        bool ok = ProjectionWordSegmenter.TrySegment(bmp, "aa bb", localBox, frameRegion, false, 0, out var words);
+
+        Assert.True(ok);
+        Assert.Equal(2, words.Count);
+        Assert.Equal("aa", words[0].Text);
+        Assert.Equal("bb", words[1].Text);
+        // "aa" 框覆盖自身两块墨水；"bb" 框不吸入 "aa" 后半（左缘 ≥ 67，旧行为会给出 40）
+        Assert.True(words[0].Box.Right >= 60, $"aa 框右缘 {words[0].Box.Right} 应覆盖到 60");
+        Assert.True(words[1].Box.X >= 67, $"bb 框左缘 {words[1].Box.X} 不应吸入前词墨水");
+    }
+
+    [Fact]
+    public void Case22_WrongGapDirectAlignment_RejectedAndRetried()
+    // 阈值恰在错误空隙切开且段数恰好等于 token 数时（"aa" 后半与 "bb" 被并入同段），
+    // 旧逻辑直接返回错位框；宽度对齐校验应拒绝并经放宽阈值重试后正确对齐。
+    {
+        var bmp = new Bitmap(130, 44, PixelFormat.Format32bppArgb);
+        _bitmaps.Add(bmp);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            using var brush = new SolidBrush(Color.Black);
+            g.FillRectangle(brush, 10, 12, 20, 14); // "aa" 前半 10..29
+            g.FillRectangle(brush, 38, 12, 20, 14); // "aa" 后半 38..57（字距空隙 8px，首选阈值会切开）
+            g.FillRectangle(brush, 64, 12, 55, 14); // "bb" 64..118（词间空隙 6px，首选阈值不切）
+        }
+        var frameRegion = new PhysicalRect(0, 0, 130, 44);
+        var localBox = new PhysicalRect(0, 0, 130, 44);
+
+        bool ok = ProjectionWordSegmenter.TrySegment(bmp, "aa bb", localBox, frameRegion, false, 0, out var words);
+
+        Assert.True(ok);
+        Assert.Equal(2, words.Count);
+        Assert.Equal("aa", words[0].Text);
+        Assert.Equal("bb", words[1].Text);
+        // "aa" 框覆盖到后半墨水；"bb" 框左缘 ≥ 64（旧行为会给出 38，连通到前面的内容）
+        Assert.True(words[0].Box.Right >= 58, $"aa 框右缘 {words[0].Box.Right} 应覆盖到 58");
+        Assert.True(words[1].Box.X >= 64, $"bb 框左缘 {words[1].Box.X} 不应吸入前词墨水");
+    }
 }

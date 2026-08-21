@@ -23,7 +23,9 @@
     <Content Include="..\..\assets\models\version.json" Link="assets\models\version.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <!-- OCR 模型随包发布（存在才复制；新装机无模型时由 ModelDownloader 下载，不阻断构建） -->
+    <!-- OCR 模型随包发布（存在才复制；新装机无模型时由 ModelDownloader 下载，不阻断构建）。
+         注意：测试工程引用本项目时 Content 会传递到测试输出目录，测试侧已在
+         QuickTranslate.Tests.csproj 中拦截模型文件，避免"模型缺失"测试误命中真实模型。 -->
     <Content Include="..\..\assets\models\det.onnx" Link="assets\models\det.onnx"
              Condition="Exists('..\..\assets\models\det.onnx')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

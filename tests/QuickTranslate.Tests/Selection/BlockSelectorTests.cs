@@ -436,4 +436,65 @@ public class BlockSelectorTests
 
         Assert.Equal(2, result.SelectedLines.Count);
     }
+
+    [Fact]
+    public void Case29_WideBridgeLine_DoesNotPullInDisjointColumn()
+    {
+        // 超宽行（横幅/跨栏标题，未达宽度上限可纳入）不应把水平不连续的
+        // 另一栏文本桥接进块：水平连通性判定基于核心列并集而非被撑宽的全块 union
+        var body = MakeLine(100, 100, 800, 30, "para one");
+        var bridge = MakeLine(100, 138, 1900, 30, "WIDE BANNER");
+        var otherCol = MakeLine(1000, 176, 400, 30, "other column text");
+        var ocr = CreateOcr(body, bridge, otherCol);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(500, 115));
+
+        Assert.DoesNotContain(result.SelectedLines, l => l.Text == "other column text");
+    }
+
+    [Fact]
+    public void Case30_WideBridgeLine_CoreColumnStillGrows()
+    {
+        // 超宽行之后，核心列内的正文行仍应继续被吸入（核心列护栏不能过度拦截）
+        var body1 = MakeLine(100, 100, 800, 30, "para one");
+        var bridge = MakeLine(100, 138, 1900, 30, "WIDE BANNER");
+        var body2 = MakeLine(100, 176, 800, 30, "para two");
+        var ocr = CreateOcr(body1, bridge, body2);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(500, 115));
+
+        Assert.Equal(3, result.SelectedLines.Count);
+        Assert.Contains(result.SelectedLines, l => l.Text == "para two");
+    }
+
+    [Fact]
+    public void Case31_CoreRightIntrusion_StopsBeforeCrossRegion()
+    {
+        // 核心列建立后，候选行右缘外伸超过 1×行高（横向侵入相邻区域）：
+        // 选区应停在核心列边界前，不把跨区域文本连通进来
+        var line1 = MakeLine(100, 100, 800, 30, "para one");
+        var line2 = MakeLine(100, 138, 800, 30, "para two");
+        var intruder = MakeLine(100, 176, 850, 30, "cross region");
+        var ocr = CreateOcr(line1, line2, intruder);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(500, 115));
+
+        Assert.Equal(2, result.SelectedLines.Count);
+        Assert.DoesNotContain(result.SelectedLines, l => l.Text == "cross region");
+    }
+
+    [Fact]
+    public void Case32_ModestRightGrowth_StillIncluded()
+    {
+        // 右缘小幅外伸（≤ 1×行高）是正常排版参差，仍应纳入
+        var line1 = MakeLine(100, 100, 800, 30, "para one");
+        var line2 = MakeLine(100, 138, 800, 30, "para two");
+        var line3 = MakeLine(100, 176, 810, 30, "para three");
+        var ocr = CreateOcr(line1, line2, line3);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(500, 115));
+
+        Assert.Equal(3, result.SelectedLines.Count);
+        Assert.Contains(result.SelectedLines, l => l.Text == "para three");
+    }
 }

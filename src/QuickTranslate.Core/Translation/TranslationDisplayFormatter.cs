@@ -17,6 +17,20 @@ public static class TranslationDisplayFormatter
     private static readonly Regex PhoneticPrefix = new(
         @"^\[[^\[\]\n]+\]\s{2,}", RegexOptions.Compiled);
 
+    // 模型偶发输出的前缀标签（提示词要求只输出译文，但小模型不一定遵守）
+    private static readonly Regex LeadingLabel = new(
+        @"^(?:翻译结果|译文|翻译|Translation|Translate)\s*[:：]\s*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // 行内连续空白压成单个空格（清理 OCR/模型输出的多余空格）
+    private static readonly Regex MultipleSpaces = new(" {2,}", RegexOptions.Compiled);
+
+    // 包裹引号对：整段被包裹时才剥离
+    private static readonly (string Open, string Close)[] QuotePairs =
+    {
+        ("“", "”"), ("\"", "\""), ("‘", "’"), ("'", "'"), ("「", "」"), ("『", "』"),
+    };
+
     // 词弹窗释义行数上限：多义词（如 set/run）释义很长，超出部分省略，弹窗内保持紧凑
     private const int MaxWordDefinitionLines = 8;
 
@@ -30,7 +44,7 @@ public static class TranslationDisplayFormatter
 
         if (!fromDictionary)
         {
-            return string.Join('\n', SplitCleanLines(text));
+            return CleanOnlineTranslation(text);
         }
 
         string? phonetic = null;
@@ -61,13 +75,67 @@ public static class TranslationDisplayFormatter
     }
 
     /// <summary>
-    /// 句子/块译文展示：规范换行、逐行裁剪、去掉空行，得到紧凑整洁的多行文本。
+    /// 句子/块译文展示：规范换行、逐行裁剪、去掉空行，并清理模型常见装饰
+    /// （“译文：”前缀、整段包裹引号、Markdown 加粗标记、多余空格）。
     /// </summary>
     public static string ForBlock(string? text)
     {
         var normalized = NormalizeNewlines(text);
-        return normalized.Length == 0 ? string.Empty : string.Join('\n', SplitCleanLines(normalized));
+        return normalized.Length == 0 ? string.Empty : CleanOnlineTranslation(normalized);
     }
+
+    /// <summary>
+    /// OCR 原文预览展示：保留换行（便于对照识别范围），逐行裁剪并压缩多余空格。
+    /// </summary>
+    public static string ForSourcePreview(string? blockText)
+    {
+        var normalized = NormalizeNewlines(blockText);
+        if (normalized.Length == 0) return string.Empty;
+
+        var lines = new List<string>();
+        foreach (var raw in normalized.Split('\n'))
+        {
+            var line = CollapseSpaces(raw.Trim());
+            if (line.Length > 0) lines.Add(line);
+        }
+        return string.Join('\n', lines);
+    }
+
+    /// <summary>在线译文清理：去空行、去前缀标签/加粗标记/多余空格、剥离整段包裹引号。</summary>
+    private static string CleanOnlineTranslation(string normalizedText)
+    {
+        var lines = SplitCleanLines(normalizedText);
+        if (lines.Count == 0) return string.Empty;
+
+        lines[0] = LeadingLabel.Replace(lines[0], string.Empty);
+        if (lines[0].Length == 0) lines.RemoveAt(0);
+        if (lines.Count == 0) return string.Empty;
+
+        for (int i = 0; i < lines.Count; i++)
+        {
+            lines[i] = CollapseSpaces(lines[i].Replace("**", string.Empty).Replace("__", string.Empty));
+        }
+
+        return StripWrappingQuotes(string.Join('\n', lines));
+    }
+
+    /// <summary>整段被成对引号包裹时剥离（如模型把译文包在 “...” 里）；仅包裹时生效，不影响正文引号。</summary>
+    private static string StripWrappingQuotes(string text)
+    {
+        foreach (var (open, close) in QuotePairs)
+        {
+            if (text.Length > open.Length + close.Length &&
+                text.StartsWith(open, StringComparison.Ordinal) &&
+                text.EndsWith(close, StringComparison.Ordinal))
+            {
+                return text[open.Length..^close.Length].Trim();
+            }
+        }
+        return text;
+    }
+
+    private static string CollapseSpaces(string line) =>
+        MultipleSpaces.Replace(line.Replace('\t', ' '), " ");
 
     /// <summary>\r\n / \r 统一为 \n；词典存储的字面量转义 \n、\r（两个字符）还原为真实换行。</summary>
     private static string NormalizeNewlines(string? text)

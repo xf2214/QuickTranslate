@@ -31,6 +31,16 @@ public static class ProjectionWordSegmenter
     private const float ProjectionConfidence = 0.9f;
     private const float ConstrainedConfidence = 0.8f;
 
+    // 粘连词修复：rec 丢空格时多个词融成一个 token（如 "voidMain"），段横跨多词
+    // → 选框过大且翻译拿到融合串。段内存在 ≥ max(3px, 行高×0.10) 的干净空列缝隙
+    // （明显大于字母间距、接近词间距）时按缝隙拆分，文本按子段宽度比例分配。
+    private const float FusedGapHeightFactor = 0.10f;
+    private const int FusedGapMinPx = 3;
+
+    // DP 切点零墨缝隙奖励：切在空列代价都是 0 时，按所在零墨缝隙宽度给小幅奖励，
+    // 使平局优先落在最宽的缝隙（真正的词间隙），而非仅靠宽度启发式盲选。
+    private const double ZeroRunBonusFactor = 0.05;
+
     // 垂直收紧的上下 padding（像素）
     private const int VerticalPadding = 1;
 
@@ -99,9 +109,9 @@ public static class ProjectionWordSegmenter
         if (TrySegmentFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex, out words, out detail))
             return true;
 
-        if (TrySegmentConstrainedFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex, out words))
+        if (TrySegmentConstrainedFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex, out words, out var unfused))
         {
-            detail = "constrained";
+            detail = WithUnfuse("constrained", unfused);
             return true;
         }
 
@@ -133,20 +143,20 @@ public static class ProjectionWordSegmenter
 
             string retryNote = level == 0 ? string.Empty : $"retry={GapHeightFactors[level]:0.00}";
 
-            if (segments.Count == n)
+            if (segments.Count == n && WidthsAligned(segments, tokens))
             {
-                words = BuildWordsFromSegments(segments, tokens, profile, rotated180, localBox, frameRegion, lineIndex, ProjectionConfidence);
-                detail = string.IsNullOrEmpty(retryNote) ? "direct" : retryNote;
+                words = BuildWordsFromSegments(segments, tokens, profile, rotated180, localBox, frameRegion, lineIndex, ProjectionConfidence, out var unfused);
+                detail = WithUnfuse(string.IsNullOrEmpty(retryNote) ? "direct" : retryNote, unfused);
                 return true;
             }
 
             if (segments.Count > n)
             {
-                // 伪分裂（噪声/标点粘连）：按相邻段间隔从小到大合并，直到段数一致
-                if (MergeSmallestGaps(segments, n))
+                // 伪分裂（噪声/标点粘连）：按宽度对齐择优合并，直到段数一致
+                if (MergeSmallestGaps(segments, n, tokens))
                 {
-                    words = BuildWordsFromSegments(segments, tokens, profile, rotated180, localBox, frameRegion, lineIndex, ProjectionConfidence);
-                    detail = string.IsNullOrEmpty(retryNote) ? "merge" : $"{retryNote}+merge";
+                    words = BuildWordsFromSegments(segments, tokens, profile, rotated180, localBox, frameRegion, lineIndex, ProjectionConfidence, out var unfused2);
+                    detail = WithUnfuse(string.IsNullOrEmpty(retryNote) ? "merge" : $"{retryNote}+merge", unfused2);
                     return true;
                 }
             }
@@ -175,7 +185,7 @@ public static class ProjectionWordSegmenter
         if (!TryPrepare(lineBitmap, recognizedText, out var tokens, out var profile))
             return false;
 
-        return TrySegmentConstrainedFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex, out words);
+        return TrySegmentConstrainedFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex, out words, out _);
     }
 
     private static bool TrySegmentConstrainedFromProfile(
@@ -185,9 +195,11 @@ public static class ProjectionWordSegmenter
         PhysicalRect frameRegion,
         bool rotated180,
         int lineIndex,
-        out IReadOnlyList<OcrWord> words)
+        out IReadOnlyList<OcrWord> words,
+        out int unfused)
     {
         words = Array.Empty<OcrWord>();
+        unfused = 0;
 
         int n = tokens.Length;
         var colInk = profile.ColInk;
@@ -211,7 +223,7 @@ public static class ProjectionWordSegmenter
         {
             words = BuildWordsFromSegments(
                 new List<(int, int)> { (firstInk, lastInk + 1) }, tokens, profile,
-                rotated180, localBox, frameRegion, lineIndex, ConstrainedConfidence);
+                rotated180, localBox, frameRegion, lineIndex, ConstrainedConfidence, out unfused);
             return true;
         }
         if (span < n * MinSegmentWidth)
@@ -223,6 +235,7 @@ public static class ProjectionWordSegmenter
         double[] expWidths = units.Select(u => (double)span * u / totalUnits).ToArray();
         int maxSegWidth = Math.Max(MinSegmentWidth + 1, (int)Math.Ceiling((double)span / n * 3));
         int[] inkPrefix = BuildPrefix(colInk);
+        int[] zeroRun = ComputeZeroRunLengths(colInk, noiseFloor);
 
         double INF = double.MaxValue / 4;
         int cols = w + 1; // 列索引范围 [0, w]（段右端可取到 lastInk+1 == w）
@@ -247,8 +260,11 @@ public static class ProjectionWordSegmenter
                     double prev = dp[(j - 1) * cols + k];
                     if (prev >= INF) continue;
                     if (InkInRange(inkPrefix, k, i) == 0) continue; // 段内必须含墨水
+                    // 切点代价 = 切点列墨水 + 宽度偏离惩罚 − 零墨缝隙奖励：
+                    // 零墨水切点之间按所在缝隙宽度择优（宽缝隙 = 真实词间隙）。
+                    double cutCost = (j == 1 ? 0 : colInk[k]) - ZeroRunBonusFactor * ZeroRunAt(zeroRun, k);
                     double cost = prev
-                        + (j == 1 ? 0 : colInk[k])
+                        + cutCost
                         + WidthDeviationPenalty * Math.Abs(i - k - expWidths[j - 1]);
                     int idx = j * cols + i;
                     if (cost < dp[idx])
@@ -275,7 +291,7 @@ public static class ProjectionWordSegmenter
         }
         bounds.Reverse();
 
-        words = BuildWordsFromSegments(bounds, tokens, profile, rotated180, localBox, frameRegion, lineIndex, ConstrainedConfidence);
+        words = BuildWordsFromSegments(bounds, tokens, profile, rotated180, localBox, frameRegion, lineIndex, ConstrainedConfidence, out unfused);
         return true;
     }
 
@@ -304,6 +320,11 @@ public static class ProjectionWordSegmenter
         return Math.Max(1, (int)Math.Round(height * InkNoiseFactor));
     }
 
+    private static string WithUnfuse(string detail, int unfused)
+    {
+        return unfused > 0 ? $"{detail}+unfuse{unfused}" : detail;
+    }
+
     private static IReadOnlyList<OcrWord> BuildWordsFromSegments(
         IReadOnlyList<(int StartX, int EndX)> segments,
         string[] tokens,
@@ -312,10 +333,13 @@ public static class ProjectionWordSegmenter
         PhysicalRect localBox,
         PhysicalRect frameRegion,
         int lineIndex,
-        float confidence)
+        float confidence,
+        out int unfused)
     {
+        unfused = 0;
         int lineY = frameRegion.Y + localBox.Y;
         int bmpW = profile.Width;
+        int noiseFloor = ComputeNoiseFloor(profile.Height);
         var (tightTop, tightBottom) = ComputeVerticalTighten(profile);
 
         var result = new List<OcrWord>(segments.Count);
@@ -347,8 +371,8 @@ public static class ProjectionWordSegmenter
                 var runs = TextRunSplitter.Split(token);
                 if (runs.Count <= 1)
                 {
-                    result.Add(BuildWord(startX, endX, token, rotated180, bmpW,
-                        localBox, frameRegion, lineY, tightTop, tightBottom, confidence, lineIndex));
+                    unfused += AddUnfusedWords(result, token, startX, endX, profile, noiseFloor,
+                        rotated180, bmpW, localBox, frameRegion, lineY, tightTop, tightBottom, confidence, lineIndex);
                     continue;
                 }
                 {
@@ -366,8 +390,8 @@ public static class ProjectionWordSegmenter
                     for (int ri = 0; ri < runs.Count; ri++)
                     {
                         var (rx1, rx2) = bounds[ri];
-                        result.Add(BuildWord(rx1, rx2, runs[ri].Slice(token), rotated180, bmpW,
-                            localBox, frameRegion, lineY, tightTop, tightBottom, confidence, lineIndex));
+                        unfused += AddUnfusedWords(result, runs[ri].Slice(token), rx1, rx2, profile, noiseFloor,
+                            rotated180, bmpW, localBox, frameRegion, lineY, tightTop, tightBottom, confidence, lineIndex);
                     }
                 }
             }
@@ -394,6 +418,213 @@ public static class ProjectionWordSegmenter
         // 垂直收紧：框高贴合墨水范围（上下各留 VerticalPadding），避免框压邻行
         var box = new PhysicalRect(screenX1, lineY + tightTop, wBox, tightBottom - tightTop);
         return new OcrWord(box, text, confidence, lineIndex);
+    }
+
+    /// <summary>
+    /// 粘连词修复：若 token 段内存在达到词间距级别的干净空列缝隙（rec 丢空格时
+    /// 多个词会融成一个 token，段横跨多词 → 选框过大且翻译拿到融合串），
+    /// 按缝隙拆成多个词框，文本按子段宽度比例分配；否则整体作为一个词输出。
+    /// 返回实际拆分出的额外词数（0 = 未拆分）。
+    /// </summary>
+    private static int AddUnfusedWords(
+        List<OcrWord> result, string token, int startX, int endX,
+        InkProfile profile, int noiseFloor,
+        bool rotated180, int bmpW,
+        PhysicalRect localBox, PhysicalRect frameRegion, int lineY,
+        int tightTop, int tightBottom, float confidence, int lineIndex)
+    {
+        if (!TrySplitFusedToken(token, startX, endX, profile, noiseFloor, out var parts))
+        {
+            result.Add(BuildWord(startX, endX, token, rotated180, bmpW,
+                localBox, frameRegion, lineY, tightTop, tightBottom, confidence, lineIndex));
+            return 0;
+        }
+
+        foreach (var (text, x1, x2) in parts)
+        {
+            result.Add(BuildWord(x1, x2, text, rotated180, bmpW,
+                localBox, frameRegion, lineY, tightTop, tightBottom, confidence, lineIndex));
+        }
+        return parts.Count - 1;
+    }
+
+    /// <summary>
+    /// 判定 token 段内是否存在“丢空格”级别的缝隙并按其拆分。
+    /// 仅对纯字母/数字/撇号/连字符且长度 ≥3 的 token 生效（CJK 有逐字切分，
+    /// 短词/标点无拆分价值）；每段拆出文本必须仍含字母，否则放弃拆分。
+    /// </summary>
+    private static bool TrySplitFusedToken(
+        string token, int startX, int endX,
+        InkProfile profile, int noiseFloor,
+        out List<(string Text, int X1, int X2)> parts)
+    {
+        parts = new List<(string, int, int)>();
+        if (token.Length < 3 || !IsPlainWordToken(token))
+            return false;
+
+        var colInk = profile.ColInk;
+        int minGap = Math.Max(FusedGapMinPx, (int)Math.Round(profile.Height * FusedGapHeightFactor));
+
+        // 收集段内（不含首尾）连续空列缝隙
+        var gaps = new List<(int Start, int End)>();
+        int x = startX;
+        while (x < endX && x < colInk.Length)
+        {
+            if (colInk[x] < noiseFloor)
+            {
+                int gs = x;
+                while (x < endX && x < colInk.Length && colInk[x] < noiseFloor) x++;
+                if (gs > startX && x < endX)
+                    gaps.Add((gs, x));
+            }
+            else
+            {
+                x++;
+            }
+        }
+        if (gaps.Count == 0)
+            return false;
+
+        // 只拆“丢空格”级别的缝隙：宽度达到 minGap，且显著大于段内其他字母缝隙
+        // （≥2× 其余缝隙中位数）。两端对齐排版会把字母间距拉宽（所有缝隙普遍偏宽），
+        // 此时最大的缝隙并不显著突出 → 不拆，避免把正常单词拦腰切断。
+        // 段内只有一个缝隙时它就是唯一候选（正常单词内部很少出现达到 minGap 的单一缝隙），
+        // 直接按 minGap 判定。
+        var widthsSorted = gaps.Select(g => g.End - g.Start).OrderBy(v => v).ToList();
+        int splitThreshold;
+        if (widthsSorted.Count == 1)
+        {
+            splitThreshold = minGap;
+        }
+        else
+        {
+            // 基准取除最大缝隙外的中位数，避免最大缝隙自我抬高阈值
+            var rest = widthsSorted.Take(widthsSorted.Count - 1).ToList();
+            int baseline = rest[rest.Count / 2];
+            splitThreshold = Math.Max(minGap, baseline * 2);
+        }
+        var splitGaps = gaps.Where(g => g.End - g.Start >= splitThreshold).ToList();
+        if (splitGaps.Count == 0)
+            return false;
+
+        // 子段边界（贴墨水，不含缝隙本身）
+        var bounds = new List<(int X1, int X2)>(splitGaps.Count + 1);
+        int cur = startX;
+        foreach (var (gs, ge) in splitGaps)
+        {
+            bounds.Add((cur, gs));
+            cur = ge;
+        }
+        bounds.Add((cur, endX));
+
+        // 文本按子段宽度比例分配（最大余数法，每段 ≥1 字符且总和不变）
+        var lens = AllocateTextLengths(token.Length, bounds);
+        if (lens == null)
+            return false;
+
+        int pos = 0;
+        for (int i = 0; i < bounds.Count; i++)
+        {
+            string sub = token.Substring(pos, lens[i]);
+            pos += lens[i];
+            if (!ContainsLetter(sub))
+                return false; // 拆出的片段不像词（纯数字/标点）→ 放弃拆分
+            parts.Add((sub, bounds[i].X1, bounds[i].X2));
+        }
+        return true;
+    }
+
+    /// <summary>纯字母/数字/撇号/连字符且至少含一个字母（CJK/标点 token 不参与粘连拆分）。</summary>
+    private static bool IsPlainWordToken(string token)
+    {
+        bool hasLetter = false;
+        foreach (var c in token)
+        {
+            if (char.IsLetter(c)) { hasLetter = true; continue; }
+            if (char.IsDigit(c) || c == '\'' || c == '-') continue;
+            return false;
+        }
+        return hasLetter;
+    }
+
+    private static bool ContainsLetter(string text)
+    {
+        foreach (var c in text)
+            if (char.IsLetter(c)) return true;
+        return false;
+    }
+
+    /// <summary>按子段宽度比例分配字符数（最大余数法），每段至少 1 字符；无法分配时返回 null。</summary>
+    private static int[]? AllocateTextLengths(int totalChars, List<(int X1, int X2)> bounds)
+    {
+        int n = bounds.Count;
+        if (n > totalChars)
+            return null;
+
+        double totalW = 0;
+        var widths = new double[n];
+        for (int i = 0; i < n; i++)
+        {
+            widths[i] = Math.Max(1, bounds[i].X2 - bounds[i].X1);
+            totalW += widths[i];
+        }
+
+        var lens = new int[n];
+        var fracs = new (double Frac, int Index)[n];
+        int assigned = 0;
+        for (int i = 0; i < n; i++)
+        {
+            double raw = totalChars * widths[i] / totalW;
+            lens[i] = Math.Max(1, (int)Math.Floor(raw));
+            fracs[i] = (raw - lens[i], i);
+            assigned += lens[i];
+        }
+
+        // 每段保底 1 字符可能超额 → 从分配最多的段回收
+        while (assigned > totalChars)
+        {
+            int maxIdx = 0;
+            for (int i = 1; i < n; i++)
+                if (lens[i] > lens[maxIdx]) maxIdx = i;
+            if (lens[maxIdx] <= 1)
+                return null;
+            lens[maxIdx]--;
+            assigned--;
+        }
+        // 剩余字符按小数部分从大到小补齐
+        if (assigned < totalChars)
+        {
+            Array.Sort(fracs, (a, b) => b.Frac.CompareTo(a.Frac));
+            for (int i = 0; assigned < totalChars && i < fracs.Length; i++, assigned++)
+                lens[fracs[i].Index]++;
+        }
+        return lens;
+    }
+
+    /// <summary>每列所在零墨缝隙（colInk 低于噪声阈值的连续列段）的长度，非零墨列为 0。</summary>
+    private static int[] ComputeZeroRunLengths(int[] colInk, int noiseFloor)
+    {
+        var runs = new int[colInk.Length];
+        int x = 0;
+        while (x < colInk.Length)
+        {
+            if (colInk[x] < noiseFloor)
+            {
+                int s = x;
+                while (x < colInk.Length && colInk[x] < noiseFloor) x++;
+                for (int i = s; i < x; i++) runs[i] = x - s;
+            }
+            else
+            {
+                x++;
+            }
+        }
+        return runs;
+    }
+
+    private static int ZeroRunAt(int[] zeroRun, int x)
+    {
+        return x >= 0 && x < zeroRun.Length ? zeroRun[x] : 0;
     }
 
     /// <summary>
@@ -500,18 +731,27 @@ public static class ProjectionWordSegmenter
 
     // ===== 段级修复 =====
 
-    private static bool MergeSmallestGaps(List<(int StartX, int EndX)> segments, int targetCount)
+    private static bool MergeSmallestGaps(List<(int StartX, int EndX)> segments, int targetCount, string[] tokens)
     {
+        double[] units = tokens.Select(t => (double)Math.Max(1, t.Length)).ToArray();
+        double totalUnits = units.Sum();
+
         while (segments.Count > targetCount)
         {
             int bestIdx = -1;
-            int bestGap = int.MaxValue;
+            double bestCost = double.MaxValue;
             for (int i = 0; i < segments.Count - 1; i++)
             {
+                // 代价 = 合并后的宽度对齐偏差（段→token 按位次映射，合并位置决定对齐）：
+                // 紧排版下词间空隙可能小于词内空隙（字距/两端对齐），纯按最小空隙
+                // 会在词间隙合并，使下游 token 的框整体左移、吸入前词墨水
+                // （选框“连通到前面的内容”且偏离光标）。间隙仅作同偏差下的次级偏好。
+                double dev = MergeAlignmentDeviation(segments, i, targetCount, units, totalUnits);
                 int gap = segments[i + 1].StartX - segments[i].EndX;
-                if (gap < bestGap)
+                double cost = dev + gap * 0.001;
+                if (cost < bestCost)
                 {
-                    bestGap = gap;
+                    bestCost = cost;
                     bestIdx = i;
                 }
             }
@@ -519,7 +759,55 @@ public static class ProjectionWordSegmenter
             segments[bestIdx] = (segments[bestIdx].StartX, segments[bestIdx + 1].EndX);
             segments.RemoveAt(bestIdx + 1);
         }
-        return true;
+        return WidthsAligned(segments, tokens);
+    }
+
+    /// <summary>假设合并 segments[mergeIdx] 与后一段后，各段宽相对 token 期望宽的总偏差。</summary>
+    private static double MergeAlignmentDeviation(
+        List<(int StartX, int EndX)> segments, int mergeIdx, int targetCount, double[] units, double totalUnits)
+    {
+        int span = segments[^1].EndX - segments[0].StartX;
+        double dev = 0;
+        int count = Math.Min(targetCount, segments.Count - 1);
+        for (int j = 0; j < count; j++)
+        {
+            (int StartX, int EndX) seg = j < mergeIdx ? segments[j]
+                : j == mergeIdx ? (segments[j].StartX, segments[j + 1].EndX)
+                : segments[j + 1];
+            double exp = span * units[j] / totalUnits;
+            double w = seg.EndX - seg.StartX;
+            dev += Math.Abs(w - exp) / Math.Max(exp, 1.0);
+        }
+        return dev;
+    }
+
+    /// <summary>
+    /// 段宽对齐校验：各段宽相对 token 期望宽（按字符数加权在总墨水跨度上分配）的比值。
+    /// “过小 + 过大”成对出现是错位特征（在错误空隙切分/合并：某 token 只剩半段墨水，
+    /// 相邻段吞并了另一词的墨水）→ 拒绝该结果，交给放宽阈值重试/受约束切分重新对齐。
+    /// 单向偏离不拦（比例字体的宽/窄字符差异只会造成单侧偏差）。
+    /// </summary>
+    private static bool WidthsAligned(IReadOnlyList<(int StartX, int EndX)> segments, string[] tokens)
+    {
+        if (segments.Count != tokens.Length || segments.Count <= 1)
+            return true;
+
+        int span = segments[^1].EndX - segments[0].StartX;
+        if (span <= 0) return true;
+
+        double totalUnits = 0;
+        foreach (var t in tokens) totalUnits += Math.Max(1, t.Length);
+
+        double minRatio = double.MaxValue, maxRatio = 0;
+        for (int i = 0; i < segments.Count; i++)
+        {
+            double exp = span * Math.Max(1, tokens[i].Length) / totalUnits;
+            if (exp <= 0) continue;
+            double ratio = (segments[i].EndX - segments[i].StartX) / exp;
+            if (ratio < minRatio) minRatio = ratio;
+            if (ratio > maxRatio) maxRatio = ratio;
+        }
+        return !(minRatio < 0.55 && maxRatio > 1.45);
     }
 
     // ===== 墨水投影分析 =====
@@ -608,23 +896,59 @@ public static class ProjectionWordSegmenter
         return new InkProfile(colInk, rowInk, w, h);
     }
 
-    /// <summary>垂直收紧：返回行内墨水范围 [top, bottom)，无墨水时退化为整行。</summary>
+    /// <summary>
+    /// 垂直收紧：返回行内主墨水带的 [top, bottom)，无墨水时退化为整行。
+    /// det 框高度归一化会把矮行框垂直撑大（minH ≈ 26px），紧凑行距时邻行墨水
+    /// 会渗入裁剪图；若取全部墨水的首末行，词框会连带上/下边缘的邻行内容。
+    /// 因此选取墨量最大的连续墨水带（本行文字），排除被空行隔开的邻行渗漏。
+    /// </summary>
     private static (int Top, int Bottom) ComputeVerticalTighten(InkProfile profile)
     {
         int noiseFloor = ComputeNoiseFloor(profile.Height);
-        int top = -1, bottom = -1;
+        // 带内允许桥接的连续空行数：字形抗锯齿/细笔画行墨量可能低于噪声阈值，
+        // 完全按空行切带会把同一行文字碎片化；邻行渗漏与本行之间通常隔 ≥2 空行。
+        const int maxBridgeRows = 1;
+
+        int bestStart = -1, bestEnd = -1;
+        long bestInk = 0;
+        int curStart = -1, curEnd = -1;
+        long curInk = 0;
+        int emptyRun = 0;
+
+        void FlushBand()
+        {
+            if (curStart >= 0 && curInk > bestInk)
+            {
+                bestInk = curInk;
+                bestStart = curStart;
+                bestEnd = curEnd;
+            }
+            curStart = -1;
+            curInk = 0;
+        }
+
         for (int y = 0; y < profile.Height; y++)
         {
             if (profile.RowInk[y] >= noiseFloor)
             {
-                if (top < 0) top = y;
-                bottom = y;
+                if (curStart < 0) curStart = y;
+                curEnd = y;
+                curInk += profile.RowInk[y];
+                emptyRun = 0;
+            }
+            else if (curStart >= 0)
+            {
+                emptyRun++;
+                if (emptyRun > maxBridgeRows)
+                    FlushBand();
             }
         }
-        if (top < 0) return (0, profile.Height);
+        FlushBand();
 
-        top = Math.Max(0, top - VerticalPadding);
-        bottom = Math.Min(profile.Height, bottom + 1 + VerticalPadding);
+        if (bestStart < 0) return (0, profile.Height);
+
+        int top = Math.Max(0, bestStart - VerticalPadding);
+        int bottom = Math.Min(profile.Height, bestEnd + 1 + VerticalPadding);
         return (top, bottom);
     }
 

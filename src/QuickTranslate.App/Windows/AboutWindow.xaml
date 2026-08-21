@@ -206,9 +206,19 @@
                                Margin="0 0 0 4"/>
                     <ItemsControl FontSize="11" Foreground="#4B5563">
                         <ItemsControl.Items>
-                            <TextBlock Text="🔒 截图只存在于内存，OCR 完成立即释放，默认不落盘不上传"/>
-                            <TextBlock Text="🔒 云端只接收 OCR 后的纯文本，绝不发送屏幕图像"/>
-                            <TextBlock Text="🔒 API Key 使用 Windows DPAPI CurrentUser 加密，绝不明文写入 JSON/日志"/>
+                            <!-- Segoe Fluent Icons 锁（E72E）替代 emoji，保持单色风格 -->
+                            <StackPanel Orientation="Horizontal" Margin="0 0 0 2">
+                                <TextBlock Text="&#xE72E;" FontFamily="Segoe Fluent Icons" FontSize="10" VerticalAlignment="Top" Margin="0 1 5 0"/>
+                                <TextBlock Text="截图只存在于内存，OCR 完成立即释放，默认不落盘不上传" TextWrapping="Wrap"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0 0 0 2">
+                                <TextBlock Text="&#xE72E;" FontFamily="Segoe Fluent Icons" FontSize="10" VerticalAlignment="Top" Margin="0 1 5 0"/>
+                                <TextBlock Text="云端只接收 OCR 后的纯文本，绝不发送屏幕图像" TextWrapping="Wrap"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0 0 0 2">
+                                <TextBlock Text="&#xE72E;" FontFamily="Segoe Fluent Icons" FontSize="10" VerticalAlignment="Top" Margin="0 1 5 0"/>
+                                <TextBlock Text="API Key 使用 Windows DPAPI CurrentUser 加密，绝不明文写入 JSON/日志" TextWrapping="Wrap"/>
+                            </StackPanel>
                         </ItemsControl.Items>
                     </ItemsControl>
                 </StackPanel>

@@ -35,6 +35,18 @@ public class OcrLayoutResultTests
     }
 
     [Fact]
+    public void OcrLine_Confidence_DefaultsNull_AndRoundTrips()
+    {
+        var words = new[] { new OcrWord(new PhysicalRect(0, 0, 10, 10), "x", 0.9f, 0) };
+
+        var noConf = new OcrLine(new PhysicalRect(0, 0, 10, 10), words);
+        Assert.Null(noConf.Confidence);
+
+        var withConf = new OcrLine(new PhysicalRect(0, 0, 10, 10), words, confidence: 0.82f);
+        Assert.Equal(0.82f, withConf.Confidence);
+    }
+
+    [Fact]
     public void OcrTimings_Total_SumsAllSegments()
     {
         var preprocess = TimeSpan.FromMilliseconds(10);

@@ -124,7 +124,7 @@ public class FakeOcrEngine : IOcrEngine
     public TaskCompletionSource<OcrLayoutResult> RecognizeTcs { get; set; } = new();
     public int RecognizeCount { get; private set; }
     public Func<Exception>? InferenceFailureFactory { get; set; }
-    /// <summary>每次识别调用收到的焦点带（Block 模式非 null，Word 模式为 null）。</summary>
+    /// <summary>每次识别调用收到的焦点带（Block 模式：光标 ±280px；Word 模式：光标 ±1.5 行高）。</summary>
     public List<PhysicalRect?> FocusBands { get; } = new();
     /// <summary>同帧多次识别（如触带扩展）时按序返回的预置结果，空则走 RecognizeTcs。</summary>
     public Queue<OcrLayoutResult> QueuedResults { get; } = new();

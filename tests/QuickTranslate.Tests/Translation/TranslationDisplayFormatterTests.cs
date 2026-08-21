@@ -70,6 +70,68 @@ public class TranslationDisplayFormatterTests
         Assert.Equal("第一行译文。\n第二行译文。", display);
     }
 
+    // ============================================================
+    //  句子译文装饰清理：前缀标签、包裹引号、加粗标记、多余空格
+    // ============================================================
+
+    [Theory]
+    [InlineData("译文：你好，世界。", "你好，世界。")]
+    [InlineData("翻译结果：你好，世界。", "你好，世界。")]
+    [InlineData("Translation: Hello world.", "Hello world.")]
+    public void ForBlock_StripsLeadingLabel(string raw, string expected)
+    {
+        Assert.Equal(expected, TranslationDisplayFormatter.ForBlock(raw));
+    }
+
+    [Fact]
+    public void ForBlock_LabelWithoutColon_IsContent_NotStripped()
+    {
+        // “翻译很有趣。”是正文（无冒号），不应被当前缀剪掉
+        Assert.Equal("翻译很有趣。", TranslationDisplayFormatter.ForBlock("翻译很有趣。"));
+    }
+
+    [Theory]
+    [InlineData("“你好，世界。”", "你好，世界。")]
+    [InlineData("\"Hello world.\"", "Hello world.")]
+    [InlineData("「こんにちは。」", "こんにちは。")]
+    public void ForBlock_StripsWrappingQuotes(string raw, string expected)
+    {
+        Assert.Equal(expected, TranslationDisplayFormatter.ForBlock(raw));
+    }
+
+    [Fact]
+    public void ForBlock_QuotesInsideBody_AreKept()
+    {
+        // 仅整段包裹才剥离；正文内部引号保留
+        var raw = "他说：“你好”。";
+        Assert.Equal(raw, TranslationDisplayFormatter.ForBlock(raw));
+    }
+
+    [Fact]
+    public void ForBlock_RemovesMarkdownBold_AndCollapsesSpaces()
+    {
+        var raw = "**重点**内容，  多余   空格。";
+        Assert.Equal("重点内容， 多余 空格。", TranslationDisplayFormatter.ForBlock(raw));
+    }
+
+    // ============================================================
+    //  OCR 原文预览：保留换行、压缩空格
+    // ============================================================
+
+    [Fact]
+    public void ForSourcePreview_KeepsLines_CollapsesSpaces()
+    {
+        var raw = " 第一行   原文 \n\n第二行  原文\n";
+        Assert.Equal("第一行 原文\n第二行 原文", TranslationDisplayFormatter.ForSourcePreview(raw));
+    }
+
+    [Fact]
+    public void ForSourcePreview_Empty_ReturnsEmpty()
+    {
+        Assert.Equal(string.Empty, TranslationDisplayFormatter.ForSourcePreview(null));
+        Assert.Equal(string.Empty, TranslationDisplayFormatter.ForSourcePreview("  \n "));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

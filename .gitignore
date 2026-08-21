@@ -233,3 +233,7 @@ assets/models/*.pdiparams
 
 # ECDICT intermediate work files (raw CSV / repack intermediates, not tracked)
 assets/dictionaries/_ecdict_work/
+
+# Local tooling & experiment dirs (not tracked)
+.qoder/
+int8/

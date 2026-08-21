@@ -48,7 +48,7 @@ public static class LeadingGlyphCleaner
         int right = rest.Max(w => w.Box.Right);
         int bottom = rest.Max(w => w.Box.Bottom);
         var box = new PhysicalRect(left, top, right - left, bottom - top);
-        return new OcrLine(box, rest, string.Join(" ", rest.Select(w => w.Text)), line.AngleDeg);
+        return new OcrLine(box, rest, string.Join(" ", rest.Select(w => w.Text)), line.AngleDeg, line.Confidence);
     }
 
     private static bool IsCjk(char c) => c >= 0x4E00 && c <= 0x9FFF;

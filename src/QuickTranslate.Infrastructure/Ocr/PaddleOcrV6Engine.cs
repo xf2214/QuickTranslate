@@ -28,16 +28,56 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
     private bool _disposed;
 
     // 同帧 det 结果缓存：触带扩展会对同一截图帧再次调用识别（更宽的焦点带），
-    // det 在全帧上运行、结果与带无关 → 复用可省一次 det（~390ms）。
+    // det 结果与焦点带无关 → 复用可省一次 det（~390ms）。
+    // 缓存以（位图引用, 裁剪区）为键且支持包含式命中：新裁剪区落在已缓存裁剪区内
+    // 时直接复用（盒子存帧局部坐标），带加宽重试无需重跑 det。
     private readonly object _detCacheLock = new();
     private Bitmap? _detCacheBitmap;
+    private PhysicalRect _detCacheCrop;
     private List<PhysicalRect>? _detCacheBoxes;
     private DateTime _detCacheAtUtc;
     private const double DetCacheTtlSeconds = 8;
 
-    // 焦点带内最多识别的行数：rec ~95ms/行是主要耗时，块生长实际只会用到
+    // 同帧 rec 行级缓存：触带扩展/重试对同一帧再次识别时，已识别过的行
+    // 直接复用（文本+词框+置信度），跳过 cls/rec/词框切分，只跑新进行的行。
+    // 同帧命中条件：位图引用 + Region（词框是屏幕绝对坐标，Region 不同不可复用）。
+    // det 在裁剪输入 vs 全帧输入下的盒子可能有数 px 抖动（实测高度差可达 5px，
+    // unclip 扩展随盒高变化），因此行匹配用 IoU ≥ 0.6 而非精确相等：
+    // 同一行 IoU 典型 >0.85，相邻行垂直分离 IoU ≈ 0，既不漏命中也不误认邻行。
+    // 条目数上限就是单帧行数（个位数～十几），线性扫描开销可忽略。
+    private readonly object _recCacheLock = new();
+    private Bitmap? _recCacheBitmap;
+    private PhysicalRect _recCacheRegion;
+    private DateTime _recCacheAtUtc;
+    private List<RecLineCacheEntry>? _recCache;
+    // 最近一次 RecognizeAsync 的行级缓存命中数（供回归测试断言，非线程安全仅作诊断）
+    internal int LastRecCacheHits;
+    private const double RecCacheMinIou = 0.6;
+
+    private sealed record RecLineCacheEntry(
+        PhysicalRect Box,
+        string? Text,
+        IReadOnlyList<OcrWord> Words,
+        string Strategy,
+        float Angle,
+        float Confidence);
+
+    private static double BoxIou(PhysicalRect a, PhysicalRect b)
+    {
+        int ix1 = Math.Max(a.X, b.X);
+        int iy1 = Math.Max(a.Y, b.Y);
+        int ix2 = Math.Min(a.Right, b.Right);
+        int iy2 = Math.Min(a.Bottom, b.Bottom);
+        int iw = ix2 - ix1, ih = iy2 - iy1;
+        if (iw <= 0 || ih <= 0) return 0;
+        long inter = (long)iw * ih;
+        long union = (long)a.Width * a.Height + (long)b.Width * b.Height - inter;
+        return union <= 0 ? 0 : (double)inter / union;
+    }
+
+    // 焦点带内最多识别的行数：rec ~75ms/行是主要耗时，块生长实际只会用到
     // 锚点附近的行，远离光标的行识别了也不会被选中，按到带中心距离取最近 N 行。
-    private const int MaxLinesToRecognize = 12;
+    private const int MaxLinesToRecognize = 8;
 
     public string EngineName => "PP-OCRv6-ONNX";
     public bool IsAvailable => _modelReady;
@@ -59,14 +99,19 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             Path.Combine(AppContext.BaseDirectory, "assets", "models"),
         };
 
-        // 开发辅助：允许从本机仓库固定位置加载模型，避免每次发布时复制。
+        // 开发辅助：从当前进程目录向上定位仓库根（以 QuickTranslate.sln 为标记），
+        // 加载仓库内 assets/models，避免每次发布时复制模型；不再硬编码某台机器的绝对路径。
         // 测试 / CI 等无头环境可设置 QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS=1
-        // 跳过本机硬编码路径，确保 MissingModels 等测试的行为可预测。
+        // 跳过仓库开发路径，确保 MissingModels 等测试的行为可预测。
         const string disableDevEnv = "QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS";
         var skipDevPaths = Environment.GetEnvironmentVariable(disableDevEnv);
         if (!string.Equals(skipDevPaths, "1", StringComparison.Ordinal))
         {
-            candidateDirs.Add(@"E:\翻译\assets\models");
+            var repoModelsDir = TryGetRepoModelsDirectory();
+            if (repoModelsDir != null)
+            {
+                candidateDirs.Add(repoModelsDir);
+            }
         }
 
         foreach (var dir in candidateDirs)
@@ -109,14 +154,33 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         }
     }
 
-    private bool TryGetDetCache(Bitmap bitmap, out List<PhysicalRect>? boxes)
+    // 从 AppContext.BaseDirectory 向上最多 8 层查找仓库根（以 QuickTranslate.sln 为标记），
+    // 命中则返回仓库内 assets/models 目录；未命中（如发布到仓库外的自包含部署）返回 null。
+    private static string? TryGetRepoModelsDirectory()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (var depth = 0; dir != null && depth < 8; depth++)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "QuickTranslate.sln")))
+            {
+                return Path.Combine(dir.FullName, "assets", "models");
+            }
+
+            dir = dir.Parent;
+        }
+
+        return null;
+    }
+
+    private bool TryGetDetCache(Bitmap bitmap, PhysicalRect crop, out List<PhysicalRect>? boxes)
     {
         lock (_detCacheLock)
         {
             if (_detCacheBitmap != null
                 && ReferenceEquals(_detCacheBitmap, bitmap)
                 && _detCacheBoxes != null
-                && (DateTime.UtcNow - _detCacheAtUtc).TotalSeconds <= DetCacheTtlSeconds)
+                && (DateTime.UtcNow - _detCacheAtUtc).TotalSeconds <= DetCacheTtlSeconds
+                && ContainsRect(_detCacheCrop, crop))
             {
                 boxes = _detCacheBoxes;
                 return true;
@@ -126,14 +190,101 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         return false;
     }
 
-    private void SetDetCache(Bitmap bitmap, List<PhysicalRect> boxes)
+    private static bool ContainsRect(PhysicalRect outer, PhysicalRect inner)
+    {
+        return inner.X >= outer.X && inner.Y >= outer.Y
+            && inner.Right <= outer.Right && inner.Bottom <= outer.Bottom;
+    }
+
+    private void SetDetCache(Bitmap bitmap, PhysicalRect crop, List<PhysicalRect> boxes)
     {
         lock (_detCacheLock)
         {
             _detCacheBitmap = bitmap;
+            _detCacheCrop = crop;
             _detCacheBoxes = boxes;
             _detCacheAtUtc = DateTime.UtcNow;
         }
+    }
+
+    private bool TryGetRecLineCache(Bitmap bitmap, PhysicalRect region, PhysicalRect box, out RecLineCacheEntry? entry)
+    {
+        lock (_recCacheLock)
+        {
+            entry = null;
+            if (_recCacheBitmap == null
+                || !ReferenceEquals(_recCacheBitmap, bitmap)
+                || _recCacheRegion != region
+                || _recCache == null
+                || (DateTime.UtcNow - _recCacheAtUtc).TotalSeconds > DetCacheTtlSeconds)
+            {
+                return false;
+            }
+
+            foreach (var e in _recCache)
+            {
+                if (BoxIou(box, e.Box) >= RecCacheMinIou)
+                {
+                    entry = e;
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    private void SetRecLineCache(Bitmap bitmap, PhysicalRect region, PhysicalRect box, RecLineCacheEntry entry)
+    {
+        lock (_recCacheLock)
+        {
+            // 帧换代 → 清空重建（与 det 缓存同生命周期策略）
+            if (!ReferenceEquals(_recCacheBitmap, bitmap) || _recCacheRegion != region)
+            {
+                _recCacheBitmap = bitmap;
+                _recCacheRegion = region;
+                _recCache = new List<RecLineCacheEntry>();
+                _recCacheAtUtc = DateTime.UtcNow;
+            }
+
+            // TTL 过期：不逐条清理，下次帧换代时整体重建
+            if ((DateTime.UtcNow - _recCacheAtUtc).TotalSeconds > DetCacheTtlSeconds)
+            {
+                _recCacheAtUtc = DateTime.UtcNow;
+                _recCache.Clear();
+            }
+
+            // 同行（IoU 容差内）更新而非重复追加
+            for (int i = 0; i < _recCache.Count; i++)
+            {
+                if (BoxIou(box, _recCache[i].Box) >= RecCacheMinIou)
+                {
+                    _recCache[i] = entry;
+                    return;
+                }
+            }
+            _recCache.Add(entry);
+        }
+    }
+
+    /// <summary>
+    /// 计算 det 输入裁剪区（帧局部坐标）：有焦点带时取带 ± 20% 帧高边距，
+    /// 边距覆盖超高行跨界与带的少量偏移；裁剪收益不明显（≥95% 帧高）时直接全帧，
+    /// 避免裁剪本身的拷贝开销。带加宽重试尽量落在首次裁剪区内（配合包含式缓存）。
+    /// </summary>
+    private static PhysicalRect ComputeDetCrop(ScreenFrame frame, PhysicalRect? focusBand)
+    {
+        var full = new PhysicalRect(0, 0, frame.Bitmap.Width, frame.Bitmap.Height);
+        if (!focusBand.HasValue) return full;
+
+        int h = frame.Bitmap.Height;
+        var fb = focusBand.Value;
+        int bandTop = fb.Y - frame.Region.Y;
+        int bandBottom = fb.Bottom - frame.Region.Y;
+        int margin = h / 5;
+        int top = Math.Clamp(bandTop - margin, 0, h);
+        int bottom = Math.Clamp(bandBottom + margin, 0, h);
+        if (bottom - top <= 0 || bottom - top >= h * 0.95) return full;
+        return new PhysicalRect(0, top, frame.Bitmap.Width, bottom - top);
     }
 
     private static bool CheckModelFiles(string dir)
@@ -326,7 +477,10 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             TimeSpan preprocess = TimeSpan.Zero;
             TimeSpan detectorElapsed = TimeSpan.Zero;
             List<PhysicalRect> detBoxes;
-            bool detCacheHit = TryGetDetCache(frame.Bitmap, out var cachedBoxes);
+            // 有焦点带时只在「带 ± 20% 帧高」区域跑 det，降低大帧 det 输入面积；
+            // 盒子统一平移到帧局部坐标，后续管线不感知裁剪。
+            var detCrop = ComputeDetCrop(frame, focusBand);
+            bool detCacheHit = TryGetDetCache(frame.Bitmap, detCrop, out var cachedBoxes);
             if (detCacheHit)
             {
                 detBoxes = cachedBoxes!;
@@ -334,16 +488,38 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             }
             else
             {
-                var (detInput, detScaleW, detScaleH, detInputW, detInputH) = PreprocessDet(frame.Bitmap);
-                preprocess = sw.Elapsed - preprocessStart;
+                bool cropped = detCrop.X != 0 || detCrop.Y != 0 ||
+                               detCrop.Width != frame.Bitmap.Width || detCrop.Height != frame.Bitmap.Height;
+                Bitmap? cropBmp = cropped ? CropBitmap(frame.Bitmap, detCrop) : null;
+                var detSource = cropBmp ?? frame.Bitmap;
+                try
+                {
+                    var (detInput, detScaleW, detScaleH, detInputW, detInputH) = PreprocessDet(detSource);
+                    preprocess = sw.Elapsed - preprocessStart;
 
-                ct.ThrowIfCancellationRequested();
+                    ct.ThrowIfCancellationRequested();
 
-                var detectorStart = sw.Elapsed;
-                detBoxes = RunDetector(holder.DetSession, detInput, detInputW, detInputH, detScaleW, detScaleH,
-                    frame.Region.Width, frame.Region.Height);
-                detectorElapsed = sw.Elapsed - detectorStart;
-                SetDetCache(frame.Bitmap, detBoxes);
+                    var detectorStart = sw.Elapsed;
+                    detBoxes = RunDetector(holder.DetSession, detInput, detInputW, detInputH, detScaleW, detScaleH,
+                        detSource.Width, detSource.Height);
+                    detectorElapsed = sw.Elapsed - detectorStart;
+
+                    // 裁剪区内的盒子平移回帧局部坐标（全帧时起点为 0，等价无操作）
+                    if (cropped)
+                    {
+                        for (int i = 0; i < detBoxes.Count; i++)
+                        {
+                            var b = detBoxes[i];
+                            detBoxes[i] = new PhysicalRect(b.X + detCrop.X, b.Y + detCrop.Y, b.Width, b.Height);
+                        }
+                    }
+
+                    SetDetCache(frame.Bitmap, detCrop, detBoxes);
+                }
+                finally
+                {
+                    cropBmp?.Dispose();
+                }
             }
 
             // 诊断日志：检测框原始尺寸（定位框太扁/偏离问题）
@@ -389,10 +565,22 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             // 提速改由焦点带过滤（减少行数）承担。
             // 裁剪在主线程顺序完成（System.Drawing.Bitmap 非线程安全）。
             var lineBmps = new Bitmap?[detBoxes.Count];
+            var recCacheHits = 0;
             for (int i = 0; i < detBoxes.Count; i++)
+            {
+                // 行级缓存命中 → 跳过该行裁剪，rec 循环里直接取缓存结果
+                if (TryGetRecLineCache(frame.Bitmap, frame.Region, detBoxes[i], out _))
+                {
+                    recCacheHits++;
+                    continue;
+                }
                 lineBmps[i] = CropBitmap(frame.Bitmap, detBoxes[i]);
+            }
+            LastRecCacheHits = recCacheHits;
+            if (recCacheHits > 0)
+                _logger.LogDebug("RecCache: {Hits}/{Total} lines reused from same-frame line cache", recCacheHits, detBoxes.Count);
 
-            var lineResults = new (string? Text, IReadOnlyList<OcrWord> Words, string Strategy, float Angle)[detBoxes.Count];
+            var lineResults = new (string? Text, IReadOnlyList<OcrWord> Words, string Strategy, float Angle, float Confidence)[detBoxes.Count];
             var classifierTotal = TimeSpan.Zero;
             var recognizerTotal = TimeSpan.Zero;
 
@@ -402,8 +590,25 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 {
                     ct.ThrowIfCancellationRequested();
                     var box = detBoxes[lineIdx];
+
+                    // 行级缓存命中：文本/词框/置信度整体复用，跳过 cls+rec+词框切分
+                    if (TryGetRecLineCache(frame.Bitmap, frame.Region, box, out var cachedEntry))
+                    {
+                        var ce = cachedEntry!;
+                        if (ce.Text != null)
+                            lineResults[lineIdx] = (ce.Text, ce.Words, ce.Strategy, ce.Angle, ce.Confidence);
+                        continue;
+                    }
+
                     var lineBmp = lineBmps[lineIdx];
                     if (lineBmp == null) continue;
+
+                    // ===== rec 输入增强：灰度去 ClearType 彩边；深色行（暗色主题）反色 =====
+                    // rec/cls 训练分布以浅底深字为主，白字黑底先反色回训练分布，
+                    // 再统一灰度化消除亚像素渲染的红/蓝边缘伪影。
+                    using var enhancedBmp = EnhanceForRec(lineBmp, out bool darkInverted);
+                    if (darkInverted)
+                        _logger.LogDebug("RecEnhance: dark line inverted (line {Idx})", lineIdx);
 
                     // ===== CLASSIFIER (optional) =====
                     var clsStart = sw.Elapsed;
@@ -411,7 +616,7 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                     bool clsNeedRotate = false;
                     if (holder.ClsSession != null)
                     {
-                        var clsInput = PreprocessCls(lineBmp);
+                        var clsInput = PreprocessCls(enhancedBmp);
                         (clsAngle, clsNeedRotate) = RunClassifier(holder.ClsSession, clsInput);
                     }
                     classifierTotal += sw.Elapsed - clsStart;
@@ -419,16 +624,23 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                     Bitmap? orientedBmp = null;
                     try
                     {
-                        if (clsNeedRotate) orientedBmp = Rotate180(lineBmp);
-                        var recSource = orientedBmp ?? lineBmp;
+                        if (clsNeedRotate) orientedBmp = Rotate180(enhancedBmp);
+                        var recSource = orientedBmp ?? enhancedBmp;
 
                         // ===== RECOGNIZER =====
                         var recStart = sw.Elapsed;
                         var recInput = PreprocessRec(recSource);
-                        var recText = RunRecognizer(holder.RecSession, recInput, holder.CharDictionary);
+                        var (recText, recConfidence) = RunRecognizer(holder.RecSession, recInput, holder.CharDictionary);
                         recognizerTotal += sw.Elapsed - recStart;
 
-                        if (string.IsNullOrWhiteSpace(recText)) continue;
+                        string? cacheText = string.IsNullOrWhiteSpace(recText) ? null : recText;
+                        if (cacheText == null)
+                        {
+                            // 空结果同样入缓存：避免带扩展重试时空行再跑一遍 rec
+                            SetRecLineCache(frame.Bitmap, frame.Region, box,
+                                new RecLineCacheEntry(box, null, Array.Empty<OcrWord>(), "none", clsAngle, recConfidence));
+                            continue;
+                        }
 
                         // 词框解析三级策略（spec 8.3）：
                         // 1) 垂直投影精确切分（含自适应阈值重试 + 多余段合并修复）；
@@ -452,7 +664,9 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                             words = BuildWords(recText, lineScreenBox, lineIdx);
                             wordStrategy = "proportional";
                         }
-                        lineResults[lineIdx] = (recText, words, wordStrategy, clsAngle);
+                        lineResults[lineIdx] = (recText, words, wordStrategy, clsAngle, recConfidence);
+                        SetRecLineCache(frame.Bitmap, frame.Region, box,
+                            new RecLineCacheEntry(box, recText, words, wordStrategy, clsAngle, recConfidence));
                     }
                     finally
                     {
@@ -485,8 +699,9 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                     box.Width,
                     box.Height);
 
-                _logger.LogDebug("WordBox: strategy={Strategy} words={Count} line={Idx}", res.Strategy, res.Words.Count, lineIdx);
-                lines.Add(new OcrLine(screenBox, res.Words, res.Text, res.Angle));
+                _logger.LogDebug("WordBox: strategy={Strategy} words={Count} confidence={Confidence:F3} line={Idx}",
+                    res.Strategy, res.Words.Count, res.Confidence, lineIdx);
+                lines.Add(new OcrLine(screenBox, res.Words, res.Text, res.Angle, res.Confidence));
             }
 
             // det 偶尔把相隔大片空白的两处文字合并成一个检测框（如左右两页中间隔空白），
@@ -557,12 +772,35 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
     private static readonly float[] DetStd = new[] { 0.229f, 0.224f, 0.225f };
     private const int DetMaxSideLen = 960;
 
+    // HWC→CHW 归一化查表：每字节一次浮点乘减与除法预烘焙成 256 项查表，
+    // 转换循环退化为纯内存拷贝，大帧预处理从 ~20ms 降到 ~5ms。
+    private static readonly float[] DetLutB;
+    private static readonly float[] DetLutG;
+    private static readonly float[] DetLutR;
+
+    static PaddleOcrV6Engine()
+    {
+        DetLutB = new float[256];
+        DetLutG = new float[256];
+        DetLutR = new float[256];
+        for (int i = 0; i < 256; i++)
+        {
+            float v = i / 255f;
+            DetLutB[i] = (v - DetMean[0]) / DetStd[0];
+            DetLutG[i] = (v - DetMean[1]) / DetStd[1];
+            DetLutR[i] = (v - DetMean[2]) / DetStd[2];
+        }
+    }
+
     private static (float[] Input, float ScaleW, float ScaleH, int InputW, int InputH) PreprocessDet(Bitmap src)
     {
         int srcW = src.Width, srcH = src.Height;
 
         // Resize so long side <= DetMaxSideLen, keeping aspect ratio
-        float ratio = Math.Min((float)DetMaxSideLen / srcW, (float)DetMaxSideLen / srcH);
+        // 与上游 PaddleOCR 一致：只把大图缩放到边长上限，小帧保持原生分辨率（ratio ≤ 1）。
+        // 旧实现会把小截图放大到长边 960（Word 起捕 300x100 → 960x320，面积约 10 倍），
+        // det 每次多付 ~300ms；放大不带来任何信息量，只会增加计算量。
+        float ratio = Math.Min(1f, Math.Min((float)DetMaxSideLen / srcW, (float)DetMaxSideLen / srcH));
         int resizeW = Math.Max(1, (int)Math.Round(srcW * ratio));
         int resizeH = Math.Max(1, (int)Math.Round(srcH * ratio));
 
@@ -596,19 +834,17 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         // 注意：PaddleOCR 对 BGR 图像直接按 [0.485, 0.456, 0.406] 逐通道归一化，
         // 即 B 通道用 0.485、R 通道用 0.406（历史怪癖，勿“修正”成 RGB 顺序，
         // 否则与模型训练分布不符，检测框召回率明显下降）。
+        // 单遍线性循环 + 查表：字节序与三平面索引同步递增，无乘法索引重算；
+        // 归一化预烘焙为 LUT，内循环仅剩 3 次查表写入。
         var chw = new float[3 * inputH * inputW];
         int hw = inputH * inputW;
-        for (int y = 0; y < inputH; y++)
+        int plane2 = 2 * hw;
+        int srcIdx = 0;
+        for (int chwIdx = 0; chwIdx < hw; chwIdx++, srcIdx += 4)
         {
-            for (int x = 0; x < inputW; x++)
-            {
-                int idx = (y * inputW + x) * 4;
-                byte b = bytes[idx], g = bytes[idx + 1], r = bytes[idx + 2];
-                int chwIdx = y * inputW + x;
-                chw[chwIdx] = ((b / 255f) - DetMean[0]) / DetStd[0];           // B
-                chw[hw + chwIdx] = ((g / 255f) - DetMean[1]) / DetStd[1];      // G
-                chw[2 * hw + chwIdx] = ((r / 255f) - DetMean[2]) / DetStd[2];  // R
-            }
+            chw[chwIdx] = DetLutB[bytes[srcIdx]];
+            chw[hw + chwIdx] = DetLutG[bytes[srcIdx + 1]];
+            chw[plane2 + chwIdx] = DetLutR[bytes[srcIdx + 2]];
         }
 
         return (chw, scaleW, scaleH, inputW, inputH);
@@ -643,7 +879,7 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         return DbPostprocess(predMap, outW, outH, inputW, inputH, scaleW, scaleH, origW, origH);
     }
 
-    private static List<PhysicalRect> DbPostprocess(
+    internal static List<PhysicalRect> DbPostprocess(
         float[] predMap, int outW, int outH,
         int inputW, int inputH,
         float scaleW, float scaleH,
@@ -662,6 +898,11 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         {
             mask[i] = predMap[i] > thresh ? (byte)1 : (byte)0;
         }
+
+        // 形态学闭运算（先膨胀后腐蚀，3×3 一轮）：桥接细体字/小字号在低分辨率
+        // 缩放下的 ≤2px 笔画断缝，避免连通域提取把同一行切成多个碎片。
+        // 闭运算不改变大连通域外轮廓；行间空隙通常 ≥6px（输入尺度），不会粘连相邻行。
+        mask = CloseMask(mask, outW, outH);
 
         // 2. Simple connected components via flood-fill (bounding boxes per component)
         var visited = new bool[outH * outW];
@@ -763,6 +1004,9 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         // Merge vertically-overlapping boxes that belong to the same text line.
         // Flood-fill tends to fragment a single line into multiple thin slivers;
         // merge any two boxes whose vertical ranges overlap significantly.
+        // 水平间距约束：仅限同一行内的分片（词间空隙级别）才允许合并；
+        // 无约束时垂直范围重叠的两处分离文字（分栏/被图隔开的两段文字）会被
+        // 链式合并成横跨大片空白的巨型框，导致选区“中间断开却连通到附近其他文本”。
         boxes.Sort((a, b) =>
         {
             int dx = a.X.CompareTo(b.X);
@@ -780,41 +1024,40 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 // Vertical overlap ratio
                 int vInt = Math.Min(b.Bottom, m.Bottom) - Math.Max(b.Y, m.Y);
                 int vMin = Math.Min(b.Height, m.Height);
-                if (vInt > vMin * 0.3)
-                {
-                    // Same line → union
-                    int nx1 = Math.Min(m.X, b.X);
-                    int ny1 = Math.Min(m.Y, b.Y);
-                    int nx2 = Math.Max(m.Right, b.Right);
-                    int ny2 = Math.Max(m.Bottom, b.Bottom);
-                    merged[i] = new PhysicalRect(nx1, ny1, nx2 - nx1, ny2 - ny1);
-                    absorbed = true;
-                    break;
-                }
+                if (vInt <= vMin * 0.3)
+                    continue;
+
+                // 同行分片水平上必然邻近：允许的水平空隙随行高缩放
+                // （词间空隙约 0.2-0.5 倍行高，0.5 上限留足 unclip 后的余量）。
+                int hGap = b.X - m.Right;
+                int maxMergeGap = Math.Max(6, (int)Math.Round(vMin * 0.5));
+                if (hGap > maxMergeGap)
+                    continue;
+
+                // Same line → union
+                int nx1 = Math.Min(m.X, b.X);
+                int ny1 = Math.Min(m.Y, b.Y);
+                int nx2 = Math.Max(m.Right, b.Right);
+                int ny2 = Math.Max(m.Bottom, b.Bottom);
+                merged[i] = new PhysicalRect(nx1, ny1, nx2 - nx1, ny2 - ny1);
+                absorbed = true;
+                break;
             }
             if (!absorbed) merged.Add(b);
         }
         boxes = merged;
 
-        // Final vertical normalize: DB flood-fill components are tight stroke boxes.
-        // After merge each line's box is still vertically under-sized (e.g. 17px for 30px text).
-        // Normalize each box's height to roughly 0.055x the frame's height (≈30px for 540p
-        // capture), which matches common body text on screen, but cap to a sensible range.
-        const double targetRatio = 0.06; // 6% of frame height ≈ typical line gap
-        double baselineLineH = origH * targetRatio;
-        int minH = Math.Max(18, (int)Math.Round(baselineLineH * 0.6));
-        int maxH = Math.Max(60, (int)Math.Round(baselineLineH * 2.0));
-
+        // Final vertical fine-tune: DB 框贴字形笔画，缺 ascender/descender 余量，
+        // 按盒子自身高度上下比例扩展（并带绝对像素下限）。
+        // 历史教训：旧实现按固定帧高比例强制 clamp 盒高（900px 帧 → 至少 32px），
+        // 小字体（12-14px 代码）被硬撑高后 crop 吃进相邻行污染 rec 输入，
+        // 大标题又被上限压扣；比例扩展两头不失真。
         for (int i = 0; i < boxes.Count; i++)
         {
             var b = boxes[i];
-            if (b.Height >= minH && b.Height <= maxH) continue;
-            int h = Math.Clamp(b.Height, minH, maxH);
-            int cy = b.Y + b.Height / 2;
-            int ny1 = cy - h / 2;
-            int ny2 = ny1 + h;
-            ny1 = Math.Max(0, ny1);
-            ny2 = Math.Min(origH, ny2);
+            int pad = Math.Max(2, (int)Math.Round(b.Height * 0.25));
+            int ny1 = Math.Max(0, b.Y - pad);
+            int ny2 = Math.Min(origH, b.Bottom + pad);
             boxes[i] = new PhysicalRect(b.X, ny1, b.Width, ny2 - ny1);
         }
 
@@ -827,6 +1070,61 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         });
 
         return boxes;
+    }
+
+    /// <summary>
+    /// 3×3 形态学闭运算（先膨胀后腐蚀，一轮）：填充 ≤2px 的细缝而不改变大区域外轮廓。
+    /// 膨胀时越界按背景处理（区域只向内生长）；腐蚀时越界按前景处理，
+    /// 避免贴边区域被削掉 1px。
+    /// </summary>
+    internal static byte[] CloseMask(byte[] mask, int w, int h)
+    {
+        var dilated = new byte[w * h];
+        for (int y = 0; y < h; y++)
+        {
+            int row = y * w;
+            for (int x = 0; x < w; x++)
+            {
+                bool on = false;
+                for (int dy = -1; dy <= 1 && !on; dy++)
+                {
+                    int ny = y + dy;
+                    if (ny < 0 || ny >= h) continue;
+                    int nrow = ny * w;
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        int nx = x + dx;
+                        if (nx < 0 || nx >= w) continue;
+                        if (mask[nrow + nx] == 1) { on = true; break; }
+                    }
+                }
+                dilated[row + x] = on ? (byte)1 : (byte)0;
+            }
+        }
+
+        var closed = new byte[w * h];
+        for (int y = 0; y < h; y++)
+        {
+            int row = y * w;
+            for (int x = 0; x < w; x++)
+            {
+                bool all = true;
+                for (int dy = -1; dy <= 1 && all; dy++)
+                {
+                    int ny = y + dy;
+                    if (ny < 0 || ny >= h) continue; // 越界视为前景
+                    int nrow = ny * w;
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        int nx = x + dx;
+                        if (nx < 0 || nx >= w) continue; // 越界视为前景
+                        if (dilated[nrow + nx] == 0) { all = false; break; }
+                    }
+                }
+                closed[row + x] = all ? (byte)1 : (byte)0;
+            }
+        }
+        return closed;
     }
 
     // ==================== CLASSIFIER ====================
@@ -941,7 +1239,7 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         return (chw, targetW);
     }
 
-    private static string RunRecognizer(InferenceSession session, (float[] Input, int Width) input, string[] dict)
+    private static (string Text, float Confidence) RunRecognizer(InferenceSession session, (float[] Input, int Width) input, string[] dict)
     {
         var (data, w) = input;
         var inputName = session.InputMetadata.Keys.First();
@@ -956,20 +1254,27 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         int T, C;
         if (outShape.Length == 3) { T = outShape[1]; C = outShape[2]; }
         else if (outShape.Length == 2) { T = outShape[0]; C = outShape[1]; }
-        else return string.Empty;
+        else return (string.Empty, 0f);
 
         var probs = outTensor.ToArray();
 
         return CtcGreedyDecode(probs, T, C, dict);
     }
 
-    private static string CtcGreedyDecode(float[] probs, int T, int C, string[] dict)
+    internal static (string Text, float Confidence) CtcGreedyDecode(float[] probs, int T, int C, string[] dict)
     {
         // PaddleOCR CTC 布局：blank 固定在 index 0，字典字符从 1 开始，空格在末位 C-1。
         // dict 数组由 BuildCharDictionary 按同一布局构建（dict[i] 即 label i 的字符）。
         int blankIdx = 0;
         var sb = new System.Text.StringBuilder();
         int prevIdx = -1;
+
+        // 置信度 = 实际输出字符的时间步平均概率（PaddleOCR 同口径）。
+        // 部分 ONNX 导出图内含 softmax（行和≈1），部分输出原始 logits；
+        // 以首行检测：未归一化时对命中时间步单独做 softmax 取概率。
+        bool normalized = IsProbabilityRow(probs, C);
+        double confSum = 0;
+        int confCount = 0;
 
         for (int t = 0; t < T; t++)
         {
@@ -987,15 +1292,104 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 if (bestIdx >= 0 && bestIdx < dict.Length)
                 {
                     sb.Append(dict[bestIdx]);
+                    float p = normalized ? bestVal : SoftmaxAt(probs, start, C, bestIdx);
+                    confSum += p;
+                    confCount++;
                 }
             }
             prevIdx = bestIdx;
         }
 
-        return sb.ToString().Trim();
+        float confidence = confCount > 0 ? (float)(confSum / confCount) : 0f;
+        return (sb.ToString().Trim(), confidence);
+    }
+
+    private static bool IsProbabilityRow(float[] probs, int C)
+    {
+        if (probs.Length < C) return false;
+        double sum = 0;
+        for (int c = 0; c < C; c++) sum += probs[c];
+        return Math.Abs(sum - 1.0) < 0.05;
+    }
+
+    private static float SoftmaxAt(float[] probs, int start, int C, int idx)
+    {
+        // 行内减最大值防溢出；仅在输出未归一化（logits）时调用
+        float max = float.MinValue;
+        for (int c = 0; c < C; c++)
+        {
+            float v = probs[start + c];
+            if (v > max) max = v;
+        }
+        double sumExp = 0;
+        for (int c = 0; c < C; c++) sumExp += Math.Exp(probs[start + c] - max);
+        return (float)(Math.Exp(probs[start + idx] - max) / sumExp);
     }
 
     // ==================== UTILS ====================
+
+    /// <summary>
+    /// rec/cls 输入增强：1) 灰度化消除 ClearType 亚像素渲染的红/蓝彩边伪影；
+    /// 2) 行裁剪为深色底（暗色主题）时反色成浅底深字，对齐 rec 训练分布。
+    /// 深/浅判定用平均亮度（裁剪图背景占绝对多数，均值稳定）。
+    /// </summary>
+    internal static Bitmap EnhanceForRec(Bitmap src, out bool inverted)
+    {
+        int w = src.Width, h = src.Height;
+        var dst = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+        inverted = false;
+
+        var srcData = src.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        var dstData = dst.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            var srcBytes = new byte[srcData.Stride * h];
+            Marshal.Copy(srcData.Scan0, srcBytes, 0, srcBytes.Length);
+
+            // 第一遍：BT.601 亮度（0.299R + 0.587G + 0.114B）+ 均值统计
+            var gray = new byte[w * h];
+            long sum = 0;
+            for (int y = 0; y < h; y++)
+            {
+                int rowOff = y * srcData.Stride;
+                int gOff = y * w;
+                for (int x = 0; x < w; x++)
+                {
+                    int i = rowOff + x * 4;
+                    byte b = srcBytes[i], g = srcBytes[i + 1], r = srcBytes[i + 2];
+                    byte lum = (byte)((77 * r + 150 * g + 29 * b) >> 8);
+                    gray[gOff + x] = lum;
+                    sum += lum;
+                }
+            }
+
+            inverted = (double)sum / (w * h) < 127;
+
+            // 第二遍：写回灰度（深色行先反色）
+            var dstBytes = new byte[dstData.Stride * h];
+            for (int y = 0; y < h; y++)
+            {
+                int rowOff = y * dstData.Stride;
+                int gOff = y * w;
+                for (int x = 0; x < w; x++)
+                {
+                    byte v = inverted ? (byte)(255 - gray[gOff + x]) : gray[gOff + x];
+                    int i = rowOff + x * 4;
+                    dstBytes[i] = v;
+                    dstBytes[i + 1] = v;
+                    dstBytes[i + 2] = v;
+                    dstBytes[i + 3] = 255;
+                }
+            }
+            Marshal.Copy(dstBytes, 0, dstData.Scan0, dstBytes.Length);
+        }
+        finally
+        {
+            src.UnlockBits(srcData);
+            dst.UnlockBits(dstData);
+        }
+        return dst;
+    }
 
     private static Bitmap? CropBitmap(Bitmap src, PhysicalRect box)
     {

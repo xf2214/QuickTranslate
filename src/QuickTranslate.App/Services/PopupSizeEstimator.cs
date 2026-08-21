@@ -13,8 +13,10 @@ public static class PopupSizeEstimator
     private const double WordBodyFont = 14;
     private const double WordHeaderFont = 18;
     private const double WordHorizPadding = 24 + 6; // Border padding 12*2 + 冗余
-    private const double WordVertChrome = 106;      // header + margins + buttons + padding
+    private const double WordVertChrome = 106;      // header（单行）+ margins + buttons + padding
     private const double WordLineHeight = 22;       // 与 XAML LineHeight 同步
+    private const double WordHeaderLineHeight = 24; // 18px 标题换行时的行高
+    private const int WordHeaderMaxLines = 3;       // 与 XAML WordHeader MaxHeight 一致
 
     // Block 弹窗基准（紧凑化后 Padding=11）
     private const int BlockMinW = 340;
@@ -98,6 +100,10 @@ public static class PopupSizeEstimator
         var effInner = width - WordHorizPadding;
         var lines = CountDisplayLines(body, WordBodyFont, effInner);
         var height = (int)Math.Ceiling(WordVertChrome + lines * WordLineHeight);
+
+        // 选中文本是一整句时标题会换行（最多 WordHeaderMaxLines 行）：首行已含在 VertChrome 里，补算额外行
+        var headerLines = Math.Min(WordHeaderMaxLines, CountDisplayLines(header, WordHeaderFont, effInner));
+        height += (int)Math.Ceiling((headerLines - 1) * WordHeaderLineHeight);
 
         var maxH = (int)Math.Max(140, workAreaHeight * 0.45);
         height = Math.Clamp(height, 110, maxH);

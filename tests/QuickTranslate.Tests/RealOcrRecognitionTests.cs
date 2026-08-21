@@ -80,8 +80,8 @@ public class RealOcrRecognitionTests
         return new PaddleOcrV6Engine(settings, stubApp, logger);
     }
 
-    /// <summary>用 GDI+ 渲染一行已知文本，模拟屏幕截图。</summary>
-    private static ScreenFrame RenderLineFrame(string text, int fontPx = 32, int pad = 20)
+    /// <summary>用 GDI+ 渲染一行已知文本，模拟屏幕截图；dark=true 模拟暗色主题（白字黑底）。</summary>
+    private static ScreenFrame RenderLineFrame(string text, int fontPx = 32, int pad = 20, bool dark = false)
     {
         using var probe = new Bitmap(4, 4, PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(probe))
@@ -102,8 +102,8 @@ public class RealOcrRecognitionTests
         using (var g = Graphics.FromImage(bmp))
         {
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            g.Clear(Color.White);
-            using var brush = new SolidBrush(Color.Black);
+            g.Clear(dark ? Color.Black : Color.White);
+            using var brush = new SolidBrush(dark ? Color.White : Color.Black);
             g.DrawString(text, font, brush, pad, pad);
         }
         return new ScreenFrame(bmp, new PhysicalRect(100, 100, w, h), MonitorId.Empty);
@@ -155,5 +155,149 @@ public class RealOcrRecognitionTests
 
         Assert.True(result.LineCount >= 1, "should detect at least one line");
         Assert.Contains(expectedSubstring, recognized, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RecognizeAsync_DarkThemeLine_RecognizedWithConfidence()
+    {
+        if (!ModelsPresent)
+        {
+            _out.WriteLine($"SKIP: models not present under {ModelsDir}");
+            return;
+        }
+
+        using var engine = CreateEngine();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        await engine.WarmUpAsync(cts.Token);
+
+        // 暗色主题：白字黑底。引擎应先反色再进 rec，识别率与浅色路径相当，
+        // 且行级置信度（CTC 平均概率）落在合理区间。
+        using var frame = RenderLineFrame("dark mode text", dark: true);
+        var result = await engine.RecognizeAsync(frame, cts.Token);
+
+        var recognized = string.Join(" ", result.Lines.Select(l => l.Text));
+        _out.WriteLine($"Dark theme recognized: '{recognized}'");
+
+        Assert.True(result.LineCount >= 1, "dark line should be detected");
+        Assert.Contains("dark mode", recognized, StringComparison.OrdinalIgnoreCase);
+
+        var line = result.Lines[0];
+        Assert.NotNull(line.Confidence);
+        Assert.InRange(line.Confidence!.Value, 0.5f, 1.0f);
+    }
+
+    /// <summary>渲染两行间隔充分的已知文本，用于验证焦点带过滤与 det 裁剪。</summary>
+    private static ScreenFrame RenderTwoLineFrame(string top, string bottom, int fontPx = 32, int pad = 20, int lineGap = 160)
+    {
+        using var probe = new Bitmap(4, 4, PixelFormat.Format32bppArgb);
+        using var font = new Font("Segoe UI", fontPx, FontStyle.Regular, GraphicsUnit.Pixel);
+        SizeF s1, s2;
+        using (var mg = Graphics.FromImage(probe))
+        {
+            mg.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            s1 = mg.MeasureString(top, font);
+            s2 = mg.MeasureString(bottom, font);
+        }
+
+        int lineH = (int)Math.Ceiling(Math.Max(s1.Height, s2.Height));
+        int w = (int)Math.Ceiling(Math.Max(s1.Width, s2.Width)) + pad * 2;
+        int h = pad + lineH + lineGap + lineH + pad;
+        var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            g.Clear(Color.White);
+            using var brush = new SolidBrush(Color.Black);
+            g.DrawString(top, font, brush, pad, pad);
+            g.DrawString(bottom, font, brush, pad, pad + lineH + lineGap);
+        }
+        return new ScreenFrame(bmp, new PhysicalRect(100, 100, w, h), MonitorId.Empty);
+    }
+
+    [Fact]
+    public async Task RecognizeAsync_FocusBand_OnlyBandedLine_AndDetCacheHitsOnSameCrop()
+    {
+        if (!ModelsPresent)
+        {
+            _out.WriteLine($"SKIP: models not present under {ModelsDir}");
+            return;
+        }
+
+        using var engine = CreateEngine();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        await engine.WarmUpAsync(cts.Token);
+
+        // 两行相距 160px：帧高 ~286，上半帧带（高 143）+ 裁剪边距 20% 帧高（57）= 200，
+        // 第二行起点 ~223 完全落在裁剪区外。
+        using var frame = RenderTwoLineFrame("alpha beta", "gamma delta");
+        var topBand = new PhysicalRect(frame.Region.X, frame.Region.Y,
+            frame.Region.Width, frame.Region.Height / 2);
+        var bottomBand = new PhysicalRect(frame.Region.X, frame.Region.Y + frame.Region.Height / 2,
+            frame.Region.Width, frame.Region.Height - frame.Region.Height / 2);
+
+        var r1 = await engine.RecognizeAsync(frame, topBand, cts.Token);
+        var text1 = string.Join(" ", r1.Lines.Select(l => l.Text));
+        _out.WriteLine($"TopBand: '{text1}' (lines={r1.LineCount}, det={r1.Timings.Detector.TotalMilliseconds:F0}ms)");
+        Assert.Equal(1, r1.LineCount);
+        Assert.Contains("alpha beta", text1, StringComparison.OrdinalIgnoreCase);
+
+        // 换到下半帧带：裁剪区不包含于首次裁剪 → 重跑 det，且只能看到第二行
+        var r2 = await engine.RecognizeAsync(frame, bottomBand, cts.Token);
+        var text2 = string.Join(" ", r2.Lines.Select(l => l.Text));
+        _out.WriteLine($"BottomBand: '{text2}' (lines={r2.LineCount})");
+        Assert.Equal(1, r2.LineCount);
+        Assert.Contains("gamma delta", text2, StringComparison.OrdinalIgnoreCase);
+
+        // 回到上半帧带：裁剪区与缓存一致 → det 缓存命中，不再推理
+        var r3 = await engine.RecognizeAsync(frame, topBand, cts.Token);
+        _out.WriteLine($"TopBand again: det={r3.Timings.Detector.TotalMilliseconds:F0}ms");
+        Assert.Equal(1, r3.LineCount);
+        Assert.True(r3.Timings.Detector < r1.Timings.Detector,
+            "det cache should hit on identical crop (detector skipped)");
+    }
+
+    [Fact]
+    public async Task RecognizeAsync_SameFrameWiderBand_RecLineCacheReusesRecognizedLines()
+    {
+        if (!ModelsPresent)
+        {
+            _out.WriteLine($"SKIP: models not present under {ModelsDir}");
+            return;
+        }
+
+        using var engine = CreateEngine();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        await engine.WarmUpAsync(cts.Token);
+
+        using var frame = RenderTwoLineFrame("alpha beta", "gamma delta");
+        var topBand = new PhysicalRect(frame.Region.X, frame.Region.Y,
+            frame.Region.Width, frame.Region.Height / 2);
+
+        // 首识只带上半带：第一行被 rec 并写入行级缓存
+        var r1 = await engine.RecognizeAsync(frame, topBand, cts.Token);
+        Assert.Equal(1, r1.LineCount);
+        Assert.Equal(0, engine.LastRecCacheHits);
+
+        // 无带重识（模拟块生长后全带重扫）：det 重跑全帧，但第一行 box 不变 →
+        // 行级缓存命中，只对第二行跑 rec
+        var r2 = await engine.RecognizeAsync(frame, null, cts.Token);
+        var text2 = string.Join(" ", r2.Lines.Select(l => l.Text));
+        _out.WriteLine($"WiderBand: '{text2}' (lines={r2.LineCount}, recHits={engine.LastRecCacheHits}, rec={r2.Timings.Recognizer.TotalMilliseconds:F0}ms)");
+        _out.WriteLine($"Box r1[0]={r1.Lines[0].Box} r2[0]={r2.Lines[0].Box}");
+        Assert.Equal(2, r2.LineCount);
+        Assert.True(engine.LastRecCacheHits >= 1, "first line should hit the same-frame rec line cache");
+        Assert.Contains("alpha beta", text2, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("gamma delta", text2, StringComparison.OrdinalIgnoreCase);
+
+        // 再次同帧重识：两行全部命中缓存 → rec 几乎零耗时，词框/文本与首识一致
+        var r3 = await engine.RecognizeAsync(frame, null, cts.Token);
+        _out.WriteLine($"Again: recHits={engine.LastRecCacheHits}, rec={r3.Timings.Recognizer.TotalMilliseconds:F0}ms");
+        Assert.Equal(2, r3.LineCount);
+        Assert.Equal(2, engine.LastRecCacheHits);
+        Assert.True(r3.Timings.Recognizer < r2.Timings.Recognizer,
+            "fully cached re-recognition should cost less recognizer time");
+        var text3 = string.Join(" ", r3.Lines.Select(l => l.Text));
+        Assert.Equal(text2, text3);
+        Assert.All(r3.Lines, l => Assert.True(l.Words.Count > 0, "cached lines must carry word boxes"));
     }
 }

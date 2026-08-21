@@ -47,6 +47,16 @@ public class SelectionOptions
     // 防止把紧邻段落的全宽 UI 栏/标题栏（宽度远超正文行）吸入块。
     public float BlockMaxWidthVsMedianFactor { get; set; } = 2.5f;
 
+    // 核心列宽度上限 = 行宽基准 × 该因子：宽于该值的行虽可纳入块（受上方宽度上限约束），
+    // 但不参与“核心列并集”。水平连通性判定基于核心列，防止超宽行（横幅/跨栏标题）
+    // 把块的并集撑宽后，将水平上并不连续的附近文本（另一栏/隔开的文本）桥接进来。
+    public float BlockCoreWidthFactor { get; set; } = 1.2f;
+
+    // 核心列单次横向增长上限 = 中位行高 × 该因子：吸入候选行使核心列并集宽度
+    // 增长超过该值，说明选区正横向跳向另一文本区域（跨区域连通）→ 停在边界前。
+    // 正常段落左右缘逐行抖动仅数像素；行首项目符号/行尾标点外伸也远小于一行高。
+    public float BlockMaxCoreGrowthFactor { get; set; } = 1.0f;
+
     // 锚点不在任何行内时，允许锚定最近行的最大距离 = max(MaxAnchorDistanceBase, 行高 × 该因子)。
     // 光标落在空白区时防止把不相近的段落误当目标块。
     public float BlockMaxAnchorDistanceFactor { get; set; } = 2.0f;

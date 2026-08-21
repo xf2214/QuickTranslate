@@ -40,37 +40,46 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <StackPanel Grid.Row="0" Orientation="Horizontal">
+            <!-- 选中文本可能是一整句（选词最多 15 词）：标题可换行最多 3 行再省略，
+                 徽标停靠右侧不被长标题挤出；短单词时视觉效果与原来一致 -->
+            <DockPanel Grid.Row="0">
+                <StackPanel DockPanel.Dock="Right"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Top"
+                            Margin="8 3 0 0">
+                    <Border x:Name="DictionaryBadge"
+                            Background="#E8F8EE"
+                            CornerRadius="8"
+                            Padding="7 2"
+                            VerticalAlignment="Center"
+                            Visibility="Hidden">
+                        <TextBlock Text="词典"
+                                   Foreground="#34C759"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"/>
+                    </Border>
+                    <Border x:Name="CacheBadge"
+                            Background="#EAF3FF"
+                            CornerRadius="8"
+                            Padding="7 2"
+                            Margin="6 0 0 0"
+                            VerticalAlignment="Center"
+                            Visibility="Hidden">
+                        <TextBlock Text="缓存"
+                                   Foreground="#007AFF"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"/>
+                    </Border>
+                </StackPanel>
                 <TextBlock x:Name="WordHeader"
                            FontWeight="Bold"
                            FontSize="18"
                            Foreground="#1C1C1E"
-                           Margin="0 0 10 0"
+                           TextWrapping="Wrap"
+                           TextTrimming="CharacterEllipsis"
+                           MaxHeight="76"
                            Text=""/>
-                <Border x:Name="DictionaryBadge"
-                        Background="#E8F8EE"
-                        CornerRadius="8"
-                        Padding="7 2"
-                        VerticalAlignment="Center"
-                        Visibility="Hidden">
-                    <TextBlock Text="词典"
-                               Foreground="#34C759"
-                               FontSize="11"
-                               FontWeight="SemiBold"/>
-                </Border>
-                <Border x:Name="CacheBadge"
-                        Background="#EAF3FF"
-                        CornerRadius="8"
-                        Padding="7 2"
-                        Margin="6 0 0 0"
-                        VerticalAlignment="Center"
-                        Visibility="Hidden">
-                    <TextBlock Text="缓存"
-                               Foreground="#007AFF"
-                               FontSize="11"
-                               FontWeight="SemiBold"/>
-                </Border>
-            </StackPanel>
+            </DockPanel>
 
             <ScrollViewer Grid.Row="1"
                           VerticalScrollBarVisibility="Auto"
@@ -89,11 +98,20 @@
                         Orientation="Horizontal"
                         HorizontalAlignment="Right">
                 <Button x:Name="SpeakButton"
-                        Content="🔊 朗读"
                         Style="{StaticResource PopupActionButton}"
                         Padding="12 5"
                         Margin="8 0 0 0"
-                        Visibility="Collapsed"/>
+                        Visibility="Collapsed">
+                    <StackPanel Orientation="Horizontal">
+                        <!-- Segoe Fluent Icons 音量图标（单色线性，与全局极简风格一致，替代 emoji） -->
+                        <TextBlock Text="&#xE767;"
+                                   FontFamily="Segoe Fluent Icons"
+                                   FontSize="12"
+                                   VerticalAlignment="Center"
+                                   Margin="0 1 5 0"/>
+                        <TextBlock Text="朗读" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
                 <Button x:Name="CopyButton"
                         Content="复制"
                         Style="{StaticResource PopupActionButton}"

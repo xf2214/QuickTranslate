@@ -173,7 +173,9 @@ public class WordInteractionCoordinator : IInteractionCoordinator
                 _overlayService.Show(captureRegion.Value, mid, dpiX, dpiY, preview: true);
 
                 SetState(newSlot, AppState.Ocr);
-                var ocr = await _ocrEngine.RecognizeAsync(firstFrame, newSlot.Cts.Token).ConfigureAwait(false);
+                // 焦点带限定：取词只用光标所在行，带外行不跑 rec（扩抓后行多时收益显著）
+                var ocr = await _ocrEngine.RecognizeAsync(
+                    firstFrame, WordFocusBand(cursor, EstimatedLineHeight, firstFrame.Region), newSlot.Cts.Token).ConfigureAwait(false);
                 if (IsStaleOrCanceled(newSlot)) return;
 
                 SetState(newSlot, AppState.Selecting);
@@ -209,7 +211,8 @@ public class WordInteractionCoordinator : IInteractionCoordinator
 
                     _overlayService.Show(captureRegion.Value, mid, dpiX, dpiY, preview: true);
 
-                    var retryOcr = await _ocrEngine.RecognizeAsync(retryFrame, newSlot.Cts.Token).ConfigureAwait(false);
+                    var retryOcr = await _ocrEngine.RecognizeAsync(
+                        retryFrame, WordFocusBand(cursor, Math.Max(EstimatedLineHeight, anchorLineHeight), retryFrame.Region), newSlot.Cts.Token).ConfigureAwait(false);
                     if (IsStaleOrCanceled(newSlot)) return;
 
                     sel = _wordSelector.SelectWord(retryOcr, cursor, null);
@@ -448,6 +451,17 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         int y2 = Math.Min(box.Bottom, region.Bottom);
         if (x2 <= x1 || y2 <= y1) return box;
         return new PhysicalRect(x1, y1, x2 - x1, y2 - y1);
+    }
+
+    /// <summary>
+    /// Word 模式焦点带：光标 ±1.5 行高（引擎只识别与带相交的行）。
+    /// 取词语义上只用光标所在行，容差覆盖行高估值误差与光标在行内的垂直位置；
+    /// 不带时扩抓后捕获区内所有行都会跑 rec（实测 ~75ms/行），远行永远不会被选中。
+    /// </summary>
+    private static PhysicalRect WordFocusBand(PhysicalPoint cursor, int lineHeight, PhysicalRect frameRegion)
+    {
+        int half = Math.Max(1, lineHeight * 3 / 2);
+        return new PhysicalRect(frameRegion.X, cursor.Y - half, frameRegion.Width, half * 2);
     }
 
     private static int? GetLineHeightAtAnchor(Core.Ocr.OcrLayoutResult ocr, PhysicalPoint anchor)

@@ -115,6 +115,9 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
             Visible = false
         };
 
+        // 双击托盘图标直接打开主界面（设置窗口）
+        _notifyIcon.DoubleClick += OnOpenSettingsClick;
+
         _appLifecycle.Paused += OnAppLifecyclePaused;
         _appLifecycle.Resumed += OnAppLifecycleResumed;
     }
@@ -130,8 +133,13 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
                 {
                     _settingsWindow = SettingsWindow.Create(_serviceProvider);
                     _settingsWindow.Closed += (s, e2) => _settingsWindow = null;
+                }
+                // 窗口可能被「最小化/黄灯」隐藏而非关闭，需重新 Show
+                if (!_settingsWindow.IsVisible)
+                {
                     _settingsWindow.Show();
                 }
+                _settingsWindow.WindowState = System.Windows.WindowState.Normal;
                 _settingsWindow.Activate();
                 _settingsWindow.Focus();
             });
@@ -307,6 +315,7 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
 
             if (_notifyIcon != null)
             {
+                _notifyIcon.DoubleClick -= OnOpenSettingsClick;
                 _notifyIcon.Visible = false;
                 _notifyIcon.Dispose();
                 _notifyIcon = null;

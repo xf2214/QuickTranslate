@@ -99,15 +99,19 @@ public partial class BlockPopupWindow : Window, IFadeOutHideable
     {
         _fullText.Clear();
         TranslationText.Text = "";
-        if (string.IsNullOrWhiteSpace(sourceText))
+        // 原文预览经格式化（压缩 OCR 多余空格）后展示，与译文之间显示细分隔线
+        var preview = TranslationDisplayFormatter.ForSourcePreview(sourceText);
+        if (preview.Length == 0)
         {
             SourceText.Text = "";
             SourceText.Visibility = Visibility.Collapsed;
+            SourceDivider.Visibility = Visibility.Collapsed;
         }
         else
         {
-            SourceText.Text = sourceText;
+            SourceText.Text = preview;
             SourceText.Visibility = Visibility.Visible;
+            SourceDivider.Visibility = Visibility.Visible;
         }
         ResetStyle();
     }

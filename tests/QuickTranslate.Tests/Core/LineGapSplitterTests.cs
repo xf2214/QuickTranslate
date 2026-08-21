@@ -102,4 +102,64 @@ public class LineGapSplitterTests
         Assert.Equal("中文", result[0].Text);
         Assert.Equal("文本", result[1].Text);
     }
+
+    [Fact]
+    public void CjkChars_GapJustOverCjkThreshold_Splits()
+    {
+        // CJK 相邻时阈值用紧因子 1.25×：gap 130 > ceil(100×1.25)=125 → 拆分。
+        // 旧 4× 因子阈值会是 400，这种分栏/跨区域断开拆不开（选区跨区域连通）。
+        var line = MakeLine(100, 300, 800, 30,
+            (0, 200, "中文"),
+            (330, 200, "文本"));
+
+        var result = LineGapSplitter.SplitLines(new[] { line });
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal("中文", result[0].Text);
+        Assert.Equal("文本", result[1].Text);
+    }
+
+    [Fact]
+    public void CjkLatinMixed_WideGapFactor_StillProtected()
+    {
+        // 空隙一侧是拉丁文字（如 “中文 ABC”）时仍用宽因子 4×，不误拆混排宽词距
+        var line = MakeLine(100, 300, 800, 30,
+            (0, 200, "中文"),
+            (330, 200, "ABC"));
+
+        var result = LineGapSplitter.SplitLines(new[] { line });
+
+        Assert.Single(result);
+    }
+
+    [Fact]
+    public void ColumnGutter_TwoLineHeights_Splits()
+    {
+        // 分栏栏间距（约 2 倍行高，未达旧阈值 2.5 倍）也应拆开：
+        // 否则行框横跨栏间空白，选区“中间断开却连通到附近其他文本”。
+        // 两侧用多字符窄字宽词，避免字符宽项抬高阈值。
+        var line = MakeLine(100, 300, 800, 30,
+            (0, 300, new string('a', 30)),
+            (360, 300, new string('b', 30)));
+
+        var result = LineGapSplitter.SplitLines(new[] { line });
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal(100, result[0].Box.Left);
+        Assert.Equal(400, result[0].Box.Right);
+        Assert.Equal(460, result[1].Box.Left);
+    }
+
+    [Fact]
+    public void JustifiedWideTracking_OneLineHeight_NotSplit()
+    {
+        // 两端对齐/宽字距排版的词间距（约 1 倍行高以内）不应误拆
+        var line = MakeLine(100, 300, 800, 30,
+            (0, 300, new string('a', 30)),
+            (325, 300, new string('b', 30)));
+
+        var result = LineGapSplitter.SplitLines(new[] { line });
+
+        Assert.Single(result);
+    }
 }
