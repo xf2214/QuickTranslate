@@ -4,7 +4,7 @@
     <AssemblyName>QuickTranslate.TextToSpeech</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="System.Speech" Version="10.0.*" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.*" />
+    <PackageReference Include="System.Speech" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
 </Project>
