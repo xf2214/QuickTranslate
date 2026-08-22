@@ -237,3 +237,5 @@ assets/dictionaries/_ecdict_work/
 # Local tooling & experiment dirs (not tracked)
 .qoder/
 int8/
+# opencode agent state
+.omo/
