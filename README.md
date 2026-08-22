@@ -134,7 +134,7 @@ Word 模式                            Block 模式
 
 ## 性能基准
 
-来自 [docs/benchmark-results/cc0c3cb-1786438643301.md](docs/benchmark-results/cc0c3cb-1786438643301.md)（手工采集，OCR 用 Mock、翻译离线；端到端请以真机为准）：
+来自 [docs/benchmark-results/9a6fde2-1787294446398.md](docs/benchmark-results/9a6fde2-1787294446398.md)（WAL + synchronous=NORMAL，见 [docs/perf-analysis-20260820.md](docs/perf-analysis-20260820.md)  commit 9a6fde2；手工采集，OCR 用 Mock、翻译离线；端到端请以真机为准）：
 
 | 指标 | P50 | P95 |
 |------|----:|----:|
@@ -143,7 +143,7 @@ Word 模式                            Block 模式
 | Hotkey → Overlay | ~110 ms | ~110 ms |
 | WordSelector | ~32 µs | ~3048 µs |
 | Cancel Latency | ~33 µs | ~328 µs |
-| SqliteCache Add/Get | ~6.4 ms | ~6.8 ms |
+| SqliteCache Add/Get | ~141 µs / ~113 µs | ~277 µs / ~138 µs |
 
 ---
 
