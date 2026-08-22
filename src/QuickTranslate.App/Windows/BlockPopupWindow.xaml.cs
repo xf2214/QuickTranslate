@@ -36,6 +36,14 @@ public partial class BlockPopupWindow : Window, IFadeOutHideable
 
     public string FullText => _fullText.ToString();
 
+    // 保存 ResetContent 传入的原始源文，供粘性重算时估算宽度（格式化后的 preview 已丢失换行等信息）
+    private string? _sourcePreviewText;
+
+    public string? CurrentSourceText => _sourcePreviewText;
+
+    // 流式追加后通知宿主可按需重算弹窗尺寸；由 WpfBlockPopupService 节流处理
+    public event EventHandler? ContentGrew;
+
     public BlockPopupWindow()
     {
         InitializeComponent();
@@ -82,6 +90,7 @@ public partial class BlockPopupWindow : Window, IFadeOutHideable
         // 展示层统一格式化（去首尾空白/多余空行、规范换行）；_fullText 保留原文供复制
         TranslationText.Text = TranslationDisplayFormatter.ForBlock(_fullText.ToString());
         AutoScrollToEnd();
+        ContentGrew?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>仅在滚动条已贴近底部时自动跟随（距底 ≤ 24px），避免用户回看时被强制拉回。</summary>
@@ -97,6 +106,7 @@ public partial class BlockPopupWindow : Window, IFadeOutHideable
     /// <summary>新一轮展示前清空旧内容（窗口复用时避免上次译文残留/累积）。</summary>
     public void ResetContent(string? sourceText = null)
     {
+        _sourcePreviewText = sourceText;
         _fullText.Clear();
         TranslationText.Text = "";
         // 原文预览经格式化（压缩 OCR 多余空格）后展示，与译文之间显示细分隔线

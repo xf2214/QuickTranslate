@@ -24,6 +24,9 @@ public static class PopupSizeEstimator
     private const double BlockBodyFont = 14;
     private const double BlockVertChrome = 152;
     private const double BlockLineHeight = 22;      // 与 XAML LineHeight 同步
+    private const double BlockSrcFont = 11.5;       // 源文小号灰字字号，与高度估算一致
+    private const int BlockInnerPadTotal = 34;      // 内边距总和（width - 34 为可用内宽）
+    private const int BlockSelMargin = 12;          // 选宽余量，对齐词弹窗的 +12 策略
 
     /// <summary>估算字符串显示宽度（DIP）：CJK≈字号，ASCII/半角≈0.58*字号。忽略换行符。</summary>
     public static double EstimateTextWidth(string? text, double fontPx)
@@ -115,12 +118,34 @@ public static class PopupSizeEstimator
         string? sourceText, string? translationText, double workAreaWidth, double workAreaHeight)
     {
         var maxW = (int)Math.Min(BlockMaxW, Math.Max(BlockMinW, workAreaWidth * 0.6));
-        var width = maxW;
+        var minW = Math.Min(BlockMinW, maxW);
 
+        // 内容自适应宽度：短译文不再拉满宽，参照词弹窗的自适应策略，按自然宽选档
+        // 自然宽取译文与源文中最宽一行的最大值，避免短内容被拉出大片空白
+        var bodyNaturalW = EstimateMaxLineWidth(translationText, BlockBodyFont);
+        var srcNaturalW = string.IsNullOrWhiteSpace(sourceText) ? 0 : EstimateMaxLineWidth(sourceText, BlockSrcFont);
+        var natural = Math.Max(bodyNaturalW, srcNaturalW);
+
+        int width;
+        if (natural + BlockInnerPadTotal <= minW)
+        {
+            width = minW;
+        }
+        else if (natural + BlockInnerPadTotal <= maxW)
+        {
+            // 自然宽可容纳：宽度跟随内容 + 余量，向下取整后钳制到界内
+            width = Math.Clamp((int)Math.Ceiling(natural) + BlockInnerPadTotal + BlockSelMargin, minW, maxW);
+        }
+        else
+        {
+            width = maxW;
+        }
+
+        var innerW = width - BlockInnerPadTotal;
         // 源文（小号灰字，最多 3 行）+ 译文主体；两者都可能含换行，按段累计行数
-        var srcLines = Math.Min(3, CountDisplayLines(sourceText, 11.5, width - 34));
+        var srcLines = Math.Min(3, CountDisplayLines(sourceText, BlockSrcFont, innerW));
         if (string.IsNullOrWhiteSpace(sourceText)) srcLines = 0;
-        var bodyLines = CountDisplayLines(translationText, BlockBodyFont, width - 34);
+        var bodyLines = CountDisplayLines(translationText, BlockBodyFont, innerW);
 
         var height = (int)Math.Ceiling(BlockVertChrome + srcLines * 17 + bodyLines * BlockLineHeight);
         var maxH = (int)Math.Max(240, workAreaHeight * 0.6);

@@ -49,6 +49,87 @@ public class PopupSizeEstimatorTests
         Assert.True(h2 > h1, "longer text should need taller popup");
     }
 
+    // —— Block 宽度自适应回归 ——
+
+    [Fact]
+    public void BlockPopup_ShortContent_ClampsToMinWidth()
+    {
+        // 短译文不再拉满宽：自然宽远小于 minW 时应取下限 340
+        var (w, h) = PopupSizeEstimator.EstimateBlockPopupSize("Hello world", "你好世界", 1920, 1080);
+        Assert.Equal(340, w);
+        Assert.InRange(h, 200, 1080 * 0.6);
+    }
+
+    [Fact]
+    public void BlockPopup_MediumContent_WidthFollowsContent()
+    {
+        // 中等长度（50~70 ASCII）应落在 (340,640) 区间且明显宽于短文本
+        var (wShort, _) = PopupSizeEstimator.EstimateBlockPopupSize("Hello world", "你好世界", 1920, 1080);
+        var mediumText = new string('a', 60);
+        var (wMed, hMed) = PopupSizeEstimator.EstimateBlockPopupSize("Hello world", mediumText, 1920, 1080);
+        Assert.True(wMed > 340 && wMed < 640, $"medium width should be adaptive, got {wMed}");
+        Assert.True(wMed > wShort, $"medium {wMed} should be wider than short {wShort}");
+        Assert.InRange(hMed, 200, 1080 * 0.6);
+    }
+
+    [Fact]
+    public void BlockPopup_VeryLongContent_ClampsToMaxWidth()
+    {
+        // 超长文本顶到上限 640
+        var longText = new string('a', 2000);
+        var (w, h) = PopupSizeEstimator.EstimateBlockPopupSize(longText, longText, 1920, 1080);
+        Assert.Equal(640, w);
+        Assert.InRange(h, 200, 1080 * 0.6);
+    }
+
+    [Fact]
+    public void BlockPopup_CjkWiderThanAscii_SameCharCount()
+    {
+        // 同字符数的中文比等量 ASCII 需要更宽（CJK 字宽更大）
+        var cjkText = new string('中', 40);
+        var asciiText = new string('a', 40);
+        var (wCjk, _) = PopupSizeEstimator.EstimateBlockPopupSize("src", cjkText, 1920, 1080);
+        var (wAscii, _) = PopupSizeEstimator.EstimateBlockPopupSize("src", asciiText, 1920, 1080);
+        Assert.True(wCjk >= wAscii, $"CJK width {wCjk} should be >= ascii {wAscii}");
+    }
+
+    [Fact]
+    public void BlockPopup_TinyWorkArea_ClampsWidthAndHeight()
+    {
+        // 极小工作区：宽度被钳制到 340，高度仍被钳制到 [200,240]
+        var longText = new string('a', 2000);
+        var (w, h) = PopupSizeEstimator.EstimateBlockPopupSize(longText, longText, 400, 300);
+        Assert.Equal(340, w);
+        Assert.InRange(h, 200, 240);
+    }
+
+    [Fact]
+    public void BlockPopup_NullOrEmptySource_WithinBounds()
+    {
+        // 错误路径：source 为 null / 空串，尺寸仍在合法界内
+        var (w1, h1) = PopupSizeEstimator.EstimateBlockPopupSize(null, "你好", 1920, 1080);
+        Assert.InRange(w1, 340, 640);
+        Assert.InRange(h1, 200, 1080 * 0.6);
+
+        var (w2, h2) = PopupSizeEstimator.EstimateBlockPopupSize("", "Hi", 1920, 1080);
+        Assert.InRange(w2, 340, 640);
+        Assert.InRange(h2, 200, 1080 * 0.6);
+
+        var (w3, h3) = PopupSizeEstimator.EstimateBlockPopupSize(null, null, 1920, 1080);
+        Assert.InRange(w3, 340, 640);
+        Assert.InRange(h3, 200, 1080 * 0.6);
+    }
+
+    [Fact]
+    public void BlockPopup_HeightGrowsWithLongerTranslation()
+    {
+        // 高度行为回归：长译文高度 > 短译文高度
+        var (_, hShort) = PopupSizeEstimator.EstimateBlockPopupSize("Hello world", "你好", 1920, 1080);
+        var longText = new string('译', 200);
+        var (_, hLong) = PopupSizeEstimator.EstimateBlockPopupSize("Hello world", longText, 1920, 1080);
+        Assert.True(hLong > hShort, $"long height {hLong} should be > short {hShort}");
+    }
+
     [Fact]
     public void Cjk_CharWidth_Greater_Than_Ascii()
     {
