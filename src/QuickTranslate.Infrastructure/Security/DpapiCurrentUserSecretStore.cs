@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Infrastructure.Options;
@@ -10,9 +12,11 @@ public class DpapiCurrentUserSecretStore : ISecretStore
 {
     readonly string _storeDir;
     readonly byte[] _entropy;
+    readonly ILogger<DpapiCurrentUserSecretStore> _logger;
 
-    public DpapiCurrentUserSecretStore(IOptions<SecretStoreOptions> opts)
+    public DpapiCurrentUserSecretStore(IOptions<SecretStoreOptions> opts, ILogger<DpapiCurrentUserSecretStore>? logger = null)
     {
+        _logger = logger ?? NullLogger<DpapiCurrentUserSecretStore>.Instance;
         var dir = Path.IsPathRooted(opts.Value.DataDirectory) ? opts.Value.DataDirectory
                     : Path.Combine(AppContext.BaseDirectory, opts.Value.DataDirectory);
         Directory.CreateDirectory(dir);
@@ -34,7 +38,12 @@ public class DpapiCurrentUserSecretStore : ISecretStore
             var fs = fi.GetAccessControl();
             fs.SetSecurityDescriptorSddlForm("O:BAD:P(A;;FA;;;WD)");
         }
-        catch { }
+        catch (Exception ex)
+        {
+            // SECURITY-relevant: ACL hardening failed — entropy file may be more broadly accessible than intended.
+            // Never log key material or file content; only exception type/message and error code.
+            _logger.LogWarning(ex, "[SecretStore.EntropyAcl] Failed to set restrictive ACL on entropy file [ErrorCode=SECRETSTORE_ENTROPY_ACL_FAIL] {ExType}: {Message}", ex.GetType().Name, ex.Message);
+        }
         return b;
     }
 
