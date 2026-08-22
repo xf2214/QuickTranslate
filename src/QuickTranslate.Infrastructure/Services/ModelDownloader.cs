@@ -219,9 +219,10 @@ public class ModelDownloader : IModelDownloader
 
             await fs.FlushAsync(ct).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
-            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch (Exception delEx) { _logger.LogDebug(delEx, "[ModelDownloader.GetZipAsync] Temp cleanup delete failed for {Tmp} [ErrorCode=MODEL_TEMP_DELETE_FAIL]", tmp); }
+            _logger.LogDebug(ex, "[ModelDownloader.GetZipAsync] Download failed for {File} [ErrorCode=MODEL_DOWNLOAD_FAIL] {ExType}: {Message}", displayName, ex.GetType().Name, ex.Message);
             throw;
         }
 
@@ -233,7 +234,7 @@ public class ModelDownloader : IModelDownloader
         catch (InvalidDataException ex)
         {
             _logger.LogWarning(ex, "Downloaded zip for {File} is corrupt", displayName);
-            try { File.Delete(tmp); } catch { }
+            try { File.Delete(tmp); } catch (Exception delEx) { _logger.LogDebug(delEx, "[ModelDownloader.GetZipAsync] Corrupt zip temp delete failed for {Tmp} [ErrorCode=MODEL_TEMP_DELETE_FAIL]", tmp); }
             return null;
         }
 
@@ -261,9 +262,10 @@ public class ModelDownloader : IModelDownloader
             }
             await fs.FlushAsync(ct).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
-            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch (Exception delEx) { _logger.LogDebug(delEx, "[ModelDownloader.DownloadRawAsync] Temp cleanup delete failed for {Tmp} [ErrorCode=MODEL_TEMP_DELETE_FAIL]", tmp); }
+            _logger.LogDebug(ex, "[ModelDownloader.DownloadRawAsync] DownloadRaw failed for {File} [ErrorCode=MODEL_DOWNLOAD_RAW_FAIL] {ExType}: {Message}", displayName, ex.GetType().Name, ex.Message);
             return false;
         }
 
@@ -287,8 +289,9 @@ public class ModelDownloader : IModelDownloader
             entry.ExtractToFile(targetPath, overwrite: true);
             return new FileInfo(targetPath).Length > 1_000_000;
         }
-        catch
+        catch (Exception ex)
         {
+            global::Serilog.Log.Debug(ex, "[ModelDownloader.ExtractLargestOnnx] Extract failed for {Zip} -> {Target} [ErrorCode=MODEL_EXTRACT_FAIL] {ExType}: {Message}", zipPath, targetPath, ex.GetType().Name, ex.Message);
             return false;
         }
     }
