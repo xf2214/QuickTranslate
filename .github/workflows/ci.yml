@@ -1,0 +1,29 @@
+# CI — Windows build + test
+# QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS=1 disables dev-local model path probing
+# so tests don't accidentally pick up assets/models from the dev machine; RealOcrRecognitionTests
+# then correctly skips when no models are present on CI.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.400"
+      - name: Restore
+        run: dotnet restore QuickTranslate.sln
+      - name: Build
+        run: dotnet build QuickTranslate.sln -c Release --no-restore
+      - name: Test
+        env:
+          QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS: "1"
+        run: dotnet test QuickTranslate.sln -c Release --no-build --filter "FullyQualifiedName!~RealOcrRecognitionTests"
