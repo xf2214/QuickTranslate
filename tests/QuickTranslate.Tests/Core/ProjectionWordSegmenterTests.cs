@@ -592,4 +592,114 @@ public class ProjectionWordSegmenterTests : IDisposable
         Assert.True(words[0].Box.Right >= 58, $"aa 框右缘 {words[0].Box.Right} 应覆盖到 58");
         Assert.True(words[1].Box.X >= 64, $"bb 框左缘 {words[1].Box.X} 不应吸入前词墨水");
     }
+
+    // ===== 粘连词拆分的词汇佐证回归（修复"同一单词选区中断"，如 commit 只选中 com） =====
+
+    /// <summary>绘制逐字母墨块：widths 为各字母块宽，gaps 为字母间空隙宽（gaps.Length == widths.Length - 1）。</summary>
+    private (Bitmap Bmp, List<(int Left, int Right)> Blocks) DrawLetterBlocks(int[] widths, int[] gaps, int height = 44)
+    {
+        int width = widths.Sum() + gaps.Sum() + 20;
+        var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        _bitmaps.Add(bmp);
+        var blocks = new List<(int, int)>();
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            using var brush = new SolidBrush(Color.Black);
+            int x = 10;
+            for (int i = 0; i < widths.Length; i++)
+            {
+                g.FillRectangle(brush, x, 10, widths[i], 24);
+                blocks.Add((x, x + widths[i]));
+                x += widths[i];
+                if (i < gaps.Length) x += gaps[i];
+            }
+        }
+        return (bmp, blocks);
+    }
+
+    [Fact]
+    public void Case23_KerningGapInsideWord_PlausibleTokenNotSplit()
+    // 回归（用户报告：commit 选区止于 com）：正常单词内部出现单一异常宽的字距缝时，
+    // 旧逻辑按"丢空格"把词拦腰切断（com|mit）。token 本身是合理词（词典命中）时
+    // 必须保持整词输出——纯几何无法区分字距缝与丢空格，需词汇佐证裁决。
+    {
+        // c-o-m | m-i-t：字母缝 1px，"com" 与 "mit" 之间单一 5px 干净缝隙（≥ minGap=4@h44）
+        var (bmp, blocks) = DrawLetterBlocks(
+            new[] { 10, 10, 10, 10, 10, 10 }, new[] { 1, 1, 5, 1, 1 });
+        var frameRegion = new PhysicalRect(0, 0, bmp.Width, 44);
+        var localBox = new PhysicalRect(0, 0, bmp.Width, 44);
+
+        bool ok = ProjectionWordSegmenter.TrySegmentOrConstrained(
+            bmp, "commit", localBox, frameRegion, false, 0,
+            isPlausibleWord: t => string.Equals(t, "commit", StringComparison.OrdinalIgnoreCase),
+            out var words, out _);
+
+        Assert.True(ok);
+        Assert.Single(words);
+        Assert.Equal("commit", words[0].Text);
+        // 框横跨全部六个字母块（不被截断到 com）
+        Assert.True(words[0].Box.X <= blocks[0].Left + 1 && words[0].Box.Right >= blocks[^1].Right - 1,
+            $"commit 框 [{words[0].Box.X}..{words[0].Box.Right}] 应覆盖整词 [{blocks[0].Left}..{blocks[^1].Right}]");
+    }
+
+    [Fact]
+    public void Case24_FusedToken_WithPlausibility_StillSplitsWhenPiecesAreWords()
+    // 特性保留：真正的丢空格融合词（voidMain）在词汇佐证下仍应拆分——
+    // token 非合理词且所有片段均为合理词。
+    {
+        var (bmp, _) = DrawLetterBlocks(new[] { 40, 40 }, new[] { 5 });   // void | Main，5px 词缝
+        var frameRegion = new PhysicalRect(0, 0, bmp.Width, 44);
+        var localBox = new PhysicalRect(0, 0, bmp.Width, 44);
+
+        bool ok = ProjectionWordSegmenter.TrySegmentOrConstrained(
+            bmp, "voidMain", localBox, frameRegion, false, 0,
+            isPlausibleWord: t => t.Equals("void", StringComparison.OrdinalIgnoreCase)
+                || t.Equals("main", StringComparison.OrdinalIgnoreCase),
+            out var words, out _);
+
+        Assert.True(ok);
+        Assert.Equal(2, words.Count);
+        Assert.Equal("void", words[0].Text);
+        Assert.Equal("Main", words[1].Text);
+    }
+
+    [Fact]
+    public void Case25_DegeneratePiece_NeverSplit_EvenWithoutPlausibility()
+    // 退化保护：拆出的片段只有 1 个字符（如 bug→b+ug、repor→rep+o+r 的实屏撕裂）
+    // 时必须放弃拆分。无词典谓词的路径同样生效。
+    {
+        // b | ug：10px 宽缝触发旧逻辑单缝拆分 → 文本按宽度比例分出 "b"+"ug"
+        var (bmp, blocks) = DrawLetterBlocks(new[] { 10, 18 }, new[] { 10 });
+        var frameRegion = new PhysicalRect(0, 0, bmp.Width, 44);
+        var localBox = new PhysicalRect(0, 0, bmp.Width, 44);
+
+        bool ok = ProjectionWordSegmenter.TrySegmentOrConstrained(
+            bmp, "bug", localBox, frameRegion, false, 0, out var words, out _);
+
+        Assert.True(ok);
+        Assert.Single(words);
+        Assert.Equal("bug", words[0].Text);
+        Assert.True(words[0].Box.Right >= blocks[^1].Right - 1,
+            $"bug 框右缘 {words[0].Box.Right} 应覆盖完整单词");
+    }
+
+    [Fact]
+    public void Case26_ImplausiblePieces_NoSplit_EvenWhenTokenImplausible()
+    // 片段合理性门槛：token 不是合理词、但拆出的片段也都不是合理词 → 不拆
+    //（OCR 噪声串保持整段输出，避免任意撕裂）。
+    {
+        var (bmp, _) = DrawLetterBlocks(new[] { 20, 20 }, new[] { 8 });   // "xq" | "zu"
+        var frameRegion = new PhysicalRect(0, 0, bmp.Width, 44);
+        var localBox = new PhysicalRect(0, 0, bmp.Width, 44);
+
+        bool ok = ProjectionWordSegmenter.TrySegmentOrConstrained(
+            bmp, "xqzu", localBox, frameRegion, false, 0,
+            isPlausibleWord: _ => false,   // 词典全 miss
+            out var words, out _);
+
+        Assert.True(ok);
+        Assert.Single(words);
+        Assert.Equal("xqzu", words[0].Text);
+    }
 }

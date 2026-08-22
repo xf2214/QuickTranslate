@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -84,14 +85,21 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
     public event EventHandler? SessionCreated;
 
+    /// <summary>词合理性检查器（通常由 ECDICT 词典背书）：粘连词拆分（unfuse）前裁决
+    /// token/片段是否为合理词，防止正常单词被字距缝隙拦腰切断（如 commit→com|mit）。
+    /// null = 不做词汇佐证（保持纯几何判定）。</summary>
+    private readonly Func<string, bool>? _isPlausibleWord;
+
     public PaddleOcrV6Engine(
         IOptions<AppSettings> settings,
         IAppDataProvider appDataProvider,
-        ILogger<PaddleOcrV6Engine> logger)
+        ILogger<PaddleOcrV6Engine> logger,
+        Func<string, bool>? isPlausibleWord = null)
     {
         _settings = settings;
         _appDataProvider = appDataProvider;
         _logger = logger;
+        _isPlausibleWord = isPlausibleWord;
 
         var candidateDirs = new List<string>
         {
@@ -492,9 +500,11 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                                detCrop.Width != frame.Bitmap.Width || detCrop.Height != frame.Bitmap.Height;
                 Bitmap? cropBmp = cropped ? CropBitmap(frame.Bitmap, detCrop) : null;
                 var detSource = cropBmp ?? frame.Bitmap;
+                float[]? pooledDetInput = null;
                 try
                 {
                     var (detInput, detScaleW, detScaleH, detInputW, detInputH) = PreprocessDet(detSource);
+                    pooledDetInput = detInput;
                     preprocess = sw.Elapsed - preprocessStart;
 
                     ct.ThrowIfCancellationRequested();
@@ -518,6 +528,9 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 }
                 finally
                 {
+                    // [池化] chw 归还：RunDetector 已返回（其内部 using 已释放 outputs，
+                    // NamedOnnxValue/DenseTensor 局部变量随方法返回死亡），数组再无引用。
+                    if (pooledDetInput != null) ArrayPool<float>.Shared.Return(pooledDetInput);
                     cropBmp?.Dispose();
                 }
             }
@@ -617,7 +630,15 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                     if (holder.ClsSession != null)
                     {
                         var clsInput = PreprocessCls(enhancedBmp);
-                        (clsAngle, clsNeedRotate) = RunClassifier(holder.ClsSession, clsInput);
+                        try
+                        {
+                            (clsAngle, clsNeedRotate) = RunClassifier(holder.ClsSession, clsInput);
+                        }
+                        finally
+                        {
+                            // [池化] chw 归还：RunClassifier 内 using 已释放 outputs，数组再无引用。
+                            ArrayPool<float>.Shared.Return(clsInput);
+                        }
                     }
                     classifierTotal += sw.Elapsed - clsStart;
 
@@ -630,7 +651,17 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                         // ===== RECOGNIZER =====
                         var recStart = sw.Elapsed;
                         var recInput = PreprocessRec(recSource);
-                        var (recText, recConfidence) = RunRecognizer(holder.RecSession, recInput, holder.CharDictionary);
+                        string recText;
+                        float recConfidence;
+                        try
+                        {
+                            (recText, recConfidence) = RunRecognizer(holder.RecSession, recInput, holder.CharDictionary);
+                        }
+                        finally
+                        {
+                            // [池化] chw 归还：RunRecognizer 内 using 已释放 outputs，数组再无引用。
+                            ArrayPool<float>.Shared.Return(recInput.Input);
+                        }
                         recognizerTotal += sw.Elapsed - recStart;
 
                         string? cacheText = string.IsNullOrWhiteSpace(recText) ? null : recText;
@@ -651,7 +682,8 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                         IReadOnlyList<OcrWord> words;
                         string wordStrategy;
                         if (ProjectionWordSegmenter.TrySegmentOrConstrained(
-                                recSource, recText, box, frame.Region, clsNeedRotate, lineIdx, out var segWords, out var segDetail))
+                                recSource, recText, box, frame.Region, clsNeedRotate, lineIdx,
+                                _isPlausibleWord, out var segWords, out var segDetail))
                         {
                             words = segWords;
                             wordStrategy = segDetail == "constrained" ? "constrained" : $"projection({segDetail})";
@@ -819,32 +851,46 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             g.DrawImage(src, new Rectangle(0, 0, resizeW, resizeH), 0, 0, srcW, srcH, GraphicsUnit.Pixel);
         }
 
-        var bytes = new byte[inputW * inputH * 4];
-        var bmpData = resized.LockBits(new Rectangle(0, 0, inputW, inputH), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        // [池化] byte 租借：仅方法内生命周期，LockBits 拷贝进 chw 后即还池。
+        // det 输入最大 ~960×992×4 ≈ 3.8MB，此前每次热键全新分配，是 Gen0 压力主源之一。
+        // 注意 Marshal.Copy 长度用精确像素字节数而非 Rent 后的数组长度。
+        var bytes = ArrayPool<byte>.Shared.Rent(inputW * inputH * 4);
+        float[] chw;
         try
         {
-            Marshal.Copy(bmpData.Scan0, bytes, 0, bytes.Length);
+            var bmpData = resized.LockBits(new Rectangle(0, 0, inputW, inputH), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                Marshal.Copy(bmpData.Scan0, bytes, 0, inputW * inputH * 4);
+            }
+            finally
+            {
+                resized.UnlockBits(bmpData);
+            }
+
+            // HWC (BGRA32) -> CHW，通道顺序 BGR（与 PaddleOCR DecodeImage img_mode=BGR 一致）。
+            // 注意：PaddleOCR 对 BGR 图像直接按 [0.485, 0.456, 0.406] 逐通道归一化，
+            // 即 B 通道用 0.485、R 通道用 0.406（历史怪癖，勿"修正"成 RGB 顺序，
+            // 否则与模型训练分布不符，检测框召回率明显下降）。
+            // 单遍线性循环 + 查表：字节序与三平面索引同步递增，无乘法索引重算；
+            // 归一化预烘焙为 LUT，内循环仅剩 3 次查表写入。
+            // [池化] chw 租借：数组逃逸给 RunDetector→DenseTensor（零拷贝包装，
+            // 允许超长后备数组），由调用方在 session.Run 完成后归还
+            // （见 RecognizeAsync det 分支的 pooledDetInput finally）。
+            chw = ArrayPool<float>.Shared.Rent(3 * inputH * inputW);
+            int hw = inputH * inputW;
+            int plane2 = 2 * hw;
+            int srcIdx = 0;
+            for (int chwIdx = 0; chwIdx < hw; chwIdx++, srcIdx += 4)
+            {
+                chw[chwIdx] = DetLutB[bytes[srcIdx]];
+                chw[hw + chwIdx] = DetLutG[bytes[srcIdx + 1]];
+                chw[plane2 + chwIdx] = DetLutR[bytes[srcIdx + 2]];
+            }
         }
         finally
         {
-            resized.UnlockBits(bmpData);
-        }
-
-        // HWC (BGRA32) -> CHW，通道顺序 BGR（与 PaddleOCR DecodeImage img_mode=BGR 一致）。
-        // 注意：PaddleOCR 对 BGR 图像直接按 [0.485, 0.456, 0.406] 逐通道归一化，
-        // 即 B 通道用 0.485、R 通道用 0.406（历史怪癖，勿“修正”成 RGB 顺序，
-        // 否则与模型训练分布不符，检测框召回率明显下降）。
-        // 单遍线性循环 + 查表：字节序与三平面索引同步递增，无乘法索引重算；
-        // 归一化预烘焙为 LUT，内循环仅剩 3 次查表写入。
-        var chw = new float[3 * inputH * inputW];
-        int hw = inputH * inputW;
-        int plane2 = 2 * hw;
-        int srcIdx = 0;
-        for (int chwIdx = 0; chwIdx < hw; chwIdx++, srcIdx += 4)
-        {
-            chw[chwIdx] = DetLutB[bytes[srcIdx]];
-            chw[hw + chwIdx] = DetLutG[bytes[srcIdx + 1]];
-            chw[plane2 + chwIdx] = DetLutR[bytes[srcIdx + 2]];
+            ArrayPool<byte>.Shared.Return(bytes);
         }
 
         return (chw, scaleW, scaleH, inputW, inputH);
@@ -860,7 +906,9 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         var inputName = inputMeta.Keys.First();
         var dims = new[] { 1, 3, inputH, inputW };
 
-        var tensor = new DenseTensor<float>(input, dims);
+        // [池化] input 为 ArrayPool 租借（可能超长）。DenseTensor 对后备内存做严格等长校验，
+        // 故用 AsMemory 切片到精确张量长度后零拷贝包装。
+        var tensor = new DenseTensor<float>(input.AsMemory(0, 3 * inputH * inputW), dims);
         var inputValues = NamedOnnxValue.CreateFromTensor(inputName, tensor);
         using var outputs = session.Run(new[] { inputValues });
 
@@ -1150,20 +1198,30 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             g.DrawImage(src, new Rectangle(0, 0, dw, ClsH), 0, 0, src.Width, src.Height, GraphicsUnit.Pixel);
         }
 
-        var bytes = new byte[ClsW * ClsH * 4];
-        var bmpData = resized.LockBits(new Rectangle(0, 0, ClsW, ClsH), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-        try { Marshal.Copy(bmpData.Scan0, bytes, 0, bytes.Length); }
-        finally { resized.UnlockBits(bmpData); }
-
-        var chw = new float[3 * ClsH * ClsW];
-        int hw = ClsH * ClsW;
-        for (int i = 0; i < hw; i++)
+        // [池化] 固定尺寸 192×48：byte 仅方法内使用；chw 租借后逃逸给 RunClassifier，
+        // 由调用方在推理完成后归还（cls 逐行串行执行，池命中率高）。
+        var bytes = ArrayPool<byte>.Shared.Rent(ClsW * ClsH * 4);
+        float[] chw;
+        try
         {
-            int bi = i * 4;
-            byte b = bytes[bi], g = bytes[bi + 1], r = bytes[bi + 2];
-            chw[i] = ((r / 255f) - ClsMean[0]) / ClsStd[0];
-            chw[hw + i] = ((g / 255f) - ClsMean[1]) / ClsStd[1];
-            chw[2 * hw + i] = ((b / 255f) - ClsMean[2]) / ClsStd[2];
+            var bmpData = resized.LockBits(new Rectangle(0, 0, ClsW, ClsH), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try { Marshal.Copy(bmpData.Scan0, bytes, 0, ClsW * ClsH * 4); }
+            finally { resized.UnlockBits(bmpData); }
+
+            chw = ArrayPool<float>.Shared.Rent(3 * ClsH * ClsW);
+            int hw = ClsH * ClsW;
+            for (int i = 0; i < hw; i++)
+            {
+                int bi = i * 4;
+                byte b = bytes[bi], g = bytes[bi + 1], r = bytes[bi + 2];
+                chw[i] = ((r / 255f) - ClsMean[0]) / ClsStd[0];
+                chw[hw + i] = ((g / 255f) - ClsMean[1]) / ClsStd[1];
+                chw[2 * hw + i] = ((b / 255f) - ClsMean[2]) / ClsStd[2];
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(bytes);
         }
         return chw;
     }
@@ -1172,7 +1230,8 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
     {
         var inputName = session.InputMetadata.Keys.First();
         var dims = new[] { 1, 3, ClsH, ClsW };
-        var tensor = new DenseTensor<float>(input, dims);
+        // [池化] 同 RunDetector：租借数组可能超长，切片到精确张量长度后零拷贝包装。
+        var tensor = new DenseTensor<float>(input.AsMemory(0, 3 * ClsH * ClsW), dims);
         var inputValues = NamedOnnxValue.CreateFromTensor(inputName, tensor);
         using var outputs = session.Run(new[] { inputValues });
         var arr = outputs.First().AsTensor<float>().ToArray();
@@ -1221,20 +1280,31 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             g.DrawImage(src, new Rectangle(0, 0, drawW, RecH), 0, 0, src.Width, src.Height, GraphicsUnit.Pixel);
         }
 
-        var bytes = new byte[targetW * RecH * 4];
-        var bmpData = resized.LockBits(new Rectangle(0, 0, targetW, RecH), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-        try { Marshal.Copy(bmpData.Scan0, bytes, 0, bytes.Length); }
-        finally { resized.UnlockBits(bmpData); }
-
-        int hw = RecH * targetW;
-        var chw = new float[3 * hw];
-        for (int i = 0; i < hw; i++)
+        // [池化] byte 仅方法内使用；chw 租借后逃逸给 RunRecognizer，
+        // 由调用方在推理完成后归还（rec 逐行串行执行，池命中率高）。
+        // rec 宽度可变（48..1280，/4 对齐），ArrayPool 按容量分桶租借天然适配。
+        var bytes = ArrayPool<byte>.Shared.Rent(targetW * RecH * 4);
+        float[] chw;
+        try
         {
-            int bi = i * 4;
-            byte b = bytes[bi], g = bytes[bi + 1], r = bytes[bi + 2];
-            chw[i] = ((r / 255f) - RecMean[0]) / RecStd[0];
-            chw[hw + i] = ((g / 255f) - RecMean[1]) / RecStd[1];
-            chw[2 * hw + i] = ((b / 255f) - RecMean[2]) / RecStd[2];
+            var bmpData = resized.LockBits(new Rectangle(0, 0, targetW, RecH), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try { Marshal.Copy(bmpData.Scan0, bytes, 0, targetW * RecH * 4); }
+            finally { resized.UnlockBits(bmpData); }
+
+            int hw = RecH * targetW;
+            chw = ArrayPool<float>.Shared.Rent(3 * hw);
+            for (int i = 0; i < hw; i++)
+            {
+                int bi = i * 4;
+                byte b = bytes[bi], g = bytes[bi + 1], r = bytes[bi + 2];
+                chw[i] = ((r / 255f) - RecMean[0]) / RecStd[0];
+                chw[hw + i] = ((g / 255f) - RecMean[1]) / RecStd[1];
+                chw[2 * hw + i] = ((b / 255f) - RecMean[2]) / RecStd[2];
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(bytes);
         }
         return (chw, targetW);
     }
@@ -1244,7 +1314,8 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         var (data, w) = input;
         var inputName = session.InputMetadata.Keys.First();
         var dims = new[] { 1, 3, RecH, w };
-        var tensor = new DenseTensor<float>(data, dims);
+        // [池化] 同 RunDetector：租借数组可能超长，切片到精确张量长度后零拷贝包装。
+        var tensor = new DenseTensor<float>(data.AsMemory(0, 3 * RecH * w), dims);
         var inputValues = NamedOnnxValue.CreateFromTensor(inputName, tensor);
         using var outputs = session.Run(new[] { inputValues });
 
@@ -1527,13 +1598,38 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        if (_initTask != null && _initTask.IsValueCreated && _initTask.Value.IsCompletedSuccessfully)
+        if (_initTask == null || !_initTask.IsValueCreated)
+            return;
+
+        var task = _initTask.Value;
+        if (task.IsCompletedSuccessfully)
         {
-            var holder = _initTask.Value.Result;
-            holder.DetSession?.Dispose();
-            holder.ClsSession?.Dispose();
-            holder.RecSession?.Dispose();
+            DisposeSessions(task.Result);
+            return;
         }
+
+        if (!task.IsCompleted)
+        {
+            // 预热仍在进行：绝不阻塞等待 .Result（UI 线程死锁风险——App 退出路径会在
+            // STA 线程调用本方法）。挂接延续，在初始化完成后释放原生 ONNX 会话。
+            _ = task.ContinueWith(
+                static t =>
+                {
+                    if (t.IsCompletedSuccessfully && t.Result != null)
+                        DisposeSessions(t.Result);
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+        // faulted/canceled：会话未成功创建，无资源需要在此释放。
+    }
+
+    private static void DisposeSessions(InferenceSessionsHolder holder)
+    {
+        holder.DetSession?.Dispose();
+        holder.ClsSession?.Dispose();
+        holder.RecSession?.Dispose();
     }
 
     private class InferenceSessionsHolder

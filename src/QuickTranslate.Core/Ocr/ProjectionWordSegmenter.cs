@@ -62,7 +62,8 @@ public static class ProjectionWordSegmenter
         int lineIndex,
         out IReadOnlyList<OcrWord> words)
     {
-        return TrySegment(lineBitmap, recognizedText, localBox, frameRegion, rotated180, lineIndex, out words, out _);
+        return TrySegment(lineBitmap, recognizedText, localBox, frameRegion, rotated180, lineIndex,
+            isPlausibleWord: null, out words, out _);
     }
 
     /// <summary>带诊断信息的重载：detail 描述对齐方式（direct/retry=…/merge…）。</summary>
@@ -76,13 +77,34 @@ public static class ProjectionWordSegmenter
         out IReadOnlyList<OcrWord> words,
         out string detail)
     {
+        return TrySegment(lineBitmap, recognizedText, localBox, frameRegion, rotated180, lineIndex,
+            isPlausibleWord: null, out words, out detail);
+    }
+
+    /// <summary>
+    /// 带词汇佐证的重载：<paramref name="isPlausibleWord"/> 判定 token/片段是否为合理词
+    /// （通常由词典背书）。粘连词拆分（unfuse）仅在"token 非合理词且所有片段均合理词"
+    /// 时执行，防止正常单词被字距缝隙拦腰切断（如 commit→com|mit）。
+    /// </summary>
+    public static bool TrySegment(
+        Bitmap lineBitmap,
+        string recognizedText,
+        PhysicalRect localBox,
+        PhysicalRect frameRegion,
+        bool rotated180,
+        int lineIndex,
+        Func<string, bool>? isPlausibleWord,
+        out IReadOnlyList<OcrWord> words,
+        out string detail)
+    {
         words = Array.Empty<OcrWord>();
         detail = string.Empty;
 
         if (!TryPrepare(lineBitmap, recognizedText, out var tokens, out var profile))
             return false;
 
-        return TrySegmentFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex, out words, out detail);
+        return TrySegmentFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex,
+            isPlausibleWord, out words, out detail);
     }
 
     /// <summary>
@@ -100,16 +122,34 @@ public static class ProjectionWordSegmenter
         out IReadOnlyList<OcrWord> words,
         out string detail)
     {
+        return TrySegmentOrConstrained(lineBitmap, recognizedText, localBox, frameRegion, rotated180, lineIndex,
+            isPlausibleWord: null, out words, out detail);
+    }
+
+    /// <summary>带词汇佐证的重载，语义见 <see cref="TrySegment(Bitmap,string,PhysicalRect,PhysicalRect,bool,int,Func{string,bool}?,out IReadOnlyList{OcrWord},out string)"/>。</summary>
+    public static bool TrySegmentOrConstrained(
+        Bitmap lineBitmap,
+        string recognizedText,
+        PhysicalRect localBox,
+        PhysicalRect frameRegion,
+        bool rotated180,
+        int lineIndex,
+        Func<string, bool>? isPlausibleWord,
+        out IReadOnlyList<OcrWord> words,
+        out string detail)
+    {
         words = Array.Empty<OcrWord>();
         detail = string.Empty;
 
         if (!TryPrepare(lineBitmap, recognizedText, out var tokens, out var profile))
             return false;
 
-        if (TrySegmentFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex, out words, out detail))
+        if (TrySegmentFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex,
+                isPlausibleWord, out words, out detail))
             return true;
 
-        if (TrySegmentConstrainedFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex, out words, out var unfused))
+        if (TrySegmentConstrainedFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex,
+                isPlausibleWord, out words, out var unfused))
         {
             detail = WithUnfuse("constrained", unfused);
             return true;
@@ -125,6 +165,7 @@ public static class ProjectionWordSegmenter
         PhysicalRect frameRegion,
         bool rotated180,
         int lineIndex,
+        Func<string, bool>? isPlausibleWord,
         out IReadOnlyList<OcrWord> words,
         out string detail)
     {
@@ -145,7 +186,8 @@ public static class ProjectionWordSegmenter
 
             if (segments.Count == n && WidthsAligned(segments, tokens))
             {
-                words = BuildWordsFromSegments(segments, tokens, profile, rotated180, localBox, frameRegion, lineIndex, ProjectionConfidence, out var unfused);
+                words = BuildWordsFromSegments(segments, tokens, profile, rotated180, localBox, frameRegion, lineIndex,
+                    ProjectionConfidence, isPlausibleWord, out var unfused);
                 detail = WithUnfuse(string.IsNullOrEmpty(retryNote) ? "direct" : retryNote, unfused);
                 return true;
             }
@@ -155,7 +197,8 @@ public static class ProjectionWordSegmenter
                 // 伪分裂（噪声/标点粘连）：按宽度对齐择优合并，直到段数一致
                 if (MergeSmallestGaps(segments, n, tokens))
                 {
-                    words = BuildWordsFromSegments(segments, tokens, profile, rotated180, localBox, frameRegion, lineIndex, ProjectionConfidence, out var unfused2);
+                    words = BuildWordsFromSegments(segments, tokens, profile, rotated180, localBox, frameRegion, lineIndex,
+                        ProjectionConfidence, isPlausibleWord, out var unfused2);
                     detail = WithUnfuse(string.IsNullOrEmpty(retryNote) ? "merge" : $"{retryNote}+merge", unfused2);
                     return true;
                 }
@@ -180,12 +223,28 @@ public static class ProjectionWordSegmenter
         int lineIndex,
         out IReadOnlyList<OcrWord> words)
     {
+        return TrySegmentConstrained(lineBitmap, recognizedText, localBox, frameRegion, rotated180, lineIndex,
+            isPlausibleWord: null, out words);
+    }
+
+    /// <summary>带词汇佐证的重载，语义见 <see cref="TrySegment(Bitmap,string,PhysicalRect,PhysicalRect,bool,int,Func{string,bool}?,out IReadOnlyList{OcrWord},out string)"/>。</summary>
+    public static bool TrySegmentConstrained(
+        Bitmap lineBitmap,
+        string recognizedText,
+        PhysicalRect localBox,
+        PhysicalRect frameRegion,
+        bool rotated180,
+        int lineIndex,
+        Func<string, bool>? isPlausibleWord,
+        out IReadOnlyList<OcrWord> words)
+    {
         words = Array.Empty<OcrWord>();
 
         if (!TryPrepare(lineBitmap, recognizedText, out var tokens, out var profile))
             return false;
 
-        return TrySegmentConstrainedFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex, out words, out _);
+        return TrySegmentConstrainedFromProfile(profile, tokens, localBox, frameRegion, rotated180, lineIndex,
+            isPlausibleWord, out words, out _);
     }
 
     private static bool TrySegmentConstrainedFromProfile(
@@ -195,6 +254,7 @@ public static class ProjectionWordSegmenter
         PhysicalRect frameRegion,
         bool rotated180,
         int lineIndex,
+        Func<string, bool>? isPlausibleWord,
         out IReadOnlyList<OcrWord> words,
         out int unfused)
     {
@@ -223,7 +283,7 @@ public static class ProjectionWordSegmenter
         {
             words = BuildWordsFromSegments(
                 new List<(int, int)> { (firstInk, lastInk + 1) }, tokens, profile,
-                rotated180, localBox, frameRegion, lineIndex, ConstrainedConfidence, out unfused);
+                rotated180, localBox, frameRegion, lineIndex, ConstrainedConfidence, isPlausibleWord, out unfused);
             return true;
         }
         if (span < n * MinSegmentWidth)
@@ -291,7 +351,8 @@ public static class ProjectionWordSegmenter
         }
         bounds.Reverse();
 
-        words = BuildWordsFromSegments(bounds, tokens, profile, rotated180, localBox, frameRegion, lineIndex, ConstrainedConfidence, out unfused);
+        words = BuildWordsFromSegments(bounds, tokens, profile, rotated180, localBox, frameRegion, lineIndex,
+            ConstrainedConfidence, isPlausibleWord, out unfused);
         return true;
     }
 
@@ -334,6 +395,7 @@ public static class ProjectionWordSegmenter
         PhysicalRect frameRegion,
         int lineIndex,
         float confidence,
+        Func<string, bool>? isPlausibleWord,
         out int unfused)
     {
         unfused = 0;
@@ -372,7 +434,8 @@ public static class ProjectionWordSegmenter
                 if (runs.Count <= 1)
                 {
                     unfused += AddUnfusedWords(result, token, startX, endX, profile, noiseFloor,
-                        rotated180, bmpW, localBox, frameRegion, lineY, tightTop, tightBottom, confidence, lineIndex);
+                        rotated180, bmpW, localBox, frameRegion, lineY, tightTop, tightBottom, confidence, lineIndex,
+                        isPlausibleWord);
                     continue;
                 }
                 {
@@ -391,7 +454,8 @@ public static class ProjectionWordSegmenter
                     {
                         var (rx1, rx2) = bounds[ri];
                         unfused += AddUnfusedWords(result, runs[ri].Slice(token), rx1, rx2, profile, noiseFloor,
-                            rotated180, bmpW, localBox, frameRegion, lineY, tightTop, tightBottom, confidence, lineIndex);
+                            rotated180, bmpW, localBox, frameRegion, lineY, tightTop, tightBottom, confidence, lineIndex,
+                            isPlausibleWord);
                     }
                 }
             }
@@ -431,9 +495,10 @@ public static class ProjectionWordSegmenter
         InkProfile profile, int noiseFloor,
         bool rotated180, int bmpW,
         PhysicalRect localBox, PhysicalRect frameRegion, int lineY,
-        int tightTop, int tightBottom, float confidence, int lineIndex)
+        int tightTop, int tightBottom, float confidence, int lineIndex,
+        Func<string, bool>? isPlausibleWord)
     {
-        if (!TrySplitFusedToken(token, startX, endX, profile, noiseFloor, out var parts))
+        if (!TrySplitFusedToken(token, startX, endX, profile, noiseFloor, isPlausibleWord, out var parts))
         {
             result.Add(BuildWord(startX, endX, token, rotated180, bmpW,
                 localBox, frameRegion, lineY, tightTop, tightBottom, confidence, lineIndex));
@@ -451,15 +516,23 @@ public static class ProjectionWordSegmenter
     /// <summary>
     /// 判定 token 段内是否存在“丢空格”级别的缝隙并按其拆分。
     /// 仅对纯字母/数字/撇号/连字符且长度 ≥3 的 token 生效（CJK 有逐字切分，
-    /// 短词/标点无拆分价值）；每段拆出文本必须仍含字母，否则放弃拆分。
+    /// 短词/标点无拆分价值）；每段拆出文本必须仍含字母且 ≥2 字符，否则放弃拆分。
+    /// 词汇佐证：<paramref name="isPlausibleWord"/> 非空时，token 本身为合理词 → 不拆；
+    /// 拆出的片段须全部为合理词才允许拆分——纯几何无法区分丢空格与宽字距缝，
+    /// 以词典裁决防止正常单词被拦腰切断（如 commit→com|mit）。
     /// </summary>
     private static bool TrySplitFusedToken(
         string token, int startX, int endX,
         InkProfile profile, int noiseFloor,
+        Func<string, bool>? isPlausibleWord,
         out List<(string Text, int X1, int X2)> parts)
     {
         parts = new List<(string, int, int)>();
         if (token.Length < 3 || !IsPlainWordToken(token))
+            return false;
+
+        // 词汇佐证：token 本身是合理词（词典命中）→ 正常单词，缝隙更可能是字距伪影
+        if (isPlausibleWord != null && isPlausibleWord(token))
             return false;
 
         var colInk = profile.ColInk;
@@ -527,8 +600,15 @@ public static class ProjectionWordSegmenter
         {
             string sub = token.Substring(pos, lens[i]);
             pos += lens[i];
+            // 退化片段保护：单字符片段（实屏撕裂形态如 bug→b+ug、repor→rep+o+r）
+            // 说明缝隙更像渲染伪影而非真实词界 → 放弃拆分
+            if (sub.Length < 2)
+                return false;
             if (!ContainsLetter(sub))
                 return false; // 拆出的片段不像词（纯数字/标点）→ 放弃拆分
+            // 片段合理性门槛：所有片段都必须是合理词，否则保持整段（OCR 噪声不任意撕裂）
+            if (isPlausibleWord != null && !isPlausibleWord(sub))
+                return false;
             parts.Add((sub, bounds[i].X1, bounds[i].X2));
         }
         return true;
