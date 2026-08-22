@@ -127,7 +127,7 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
         _logger.LogInformation("OpenSettings menu clicked");
         try
         {
-            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            InvokeOnWpfDispatcher(() =>
             {
                 if (_settingsWindow == null || !_settingsWindow.IsLoaded)
                 {
@@ -156,7 +156,7 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
         _logger.LogInformation("About menu clicked");
         try
         {
-            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            InvokeOnWpfDispatcher(() =>
             {
                 if (_aboutWindow == null || !_aboutWindow.IsLoaded)
                 {
@@ -240,6 +240,39 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
         _pauseMenuItem.Text = _pauseMenuItem.Checked ? "启用" : "暂停";
     }
 
+    private static void InvokeOnWpfDispatcher(Action action)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null)
+        {
+            // No WPF dispatcher (e.g., during shutdown or headless tests) — execute directly
+            // if already on a suitable thread, otherwise try current dispatcher.
+            var fallback = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+            if (fallback != null && !fallback.HasShutdownStarted)
+            {
+                if (fallback.CheckAccess()) action();
+                else _ = fallback.InvokeAsync(action);
+            }
+            else
+            {
+                action();
+            }
+            return;
+        }
+
+        if (dispatcher.CheckAccess())
+        {
+            action();
+        }
+        else
+        {
+            // Tray menu events originate on WinForms message-loop thread; BeginInvoke/
+            // InvokeAsync is safe here — menu actions tolerate async dispatch and this
+            // avoids blocking the WinForms loop under WPF contention (10-30ms).
+            _ = dispatcher.InvokeAsync(action, System.Windows.Threading.DispatcherPriority.Normal);
+        }
+    }
+
     private static Icon LoadTrayIcon()
     {
         try
@@ -279,7 +312,11 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
         {
             UnsafeNativeMethods.DestroyIcon(hicon);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            global::Serilog.Log.Debug(ex, "[TrayIcon.DestroyIcon] Failed to destroy placeholder icon handle [ErrorCode=TRAY_DESTROYICON_FAIL]");
+        }
+
         return result;
     }
 
@@ -329,13 +366,16 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
 
             try
             {
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                InvokeOnWpfDispatcher(() =>
                 {
                     _settingsWindow?.Close();
                     _aboutWindow?.Close();
                 });
             }
-            catch { }
+            catch (Exception ex)
+            {
+                global::Serilog.Log.Debug(ex, "[TrayIcon.Dispose] Failed to close settings/about windows on WPF dispatcher [ErrorCode=TRAY_WINDOW_CLOSE_FAIL]");
+            }
         }
         _disposed = true;
     }

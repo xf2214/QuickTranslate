@@ -40,7 +40,10 @@ public partial class App : WpfApplication
                     tempLogger.LogWarning("Another instance is already running. Exiting.");
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                global::Serilog.Log.Warning(ex, "[App.OnStartup] Failed to log duplicate-instance warning [ErrorCode=APP_INSTANCE_LOG_FAIL]");
+            }
             _instanceGuard.Dispose();
             Environment.Exit(1);
             return;
@@ -85,7 +88,10 @@ public partial class App : WpfApplication
                 var crashFile = Path.Combine(crashDir, $"crash_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
                 File.WriteAllText(crashFile, $"[{DateTime.Now:O}] Startup FAILED:{Environment.NewLine}{ex}");
             }
-            catch { }
+            catch (Exception crashEx)
+            {
+                global::Serilog.Log.Debug(crashEx, "[App.OnStartup] Failed to write crash file [ErrorCode=APP_CRASH_FILE_FAIL]");
+            }
             try
             {
                 using (var tempLoggerFactory = LoggerFactory.Create(b => { }))
@@ -94,7 +100,10 @@ public partial class App : WpfApplication
                     tempLogger.LogCritical(ex, "Failed to start application");
                 }
             }
-            catch { }
+            catch (Exception logEx)
+            {
+                global::Serilog.Log.Warning(logEx, "[App.OnStartup] Failed to log critical startup failure [ErrorCode=APP_STARTUP_LOG_FAIL]");
+            }
             Cleanup();
             Environment.Exit(1);
         }
@@ -106,13 +115,21 @@ public partial class App : WpfApplication
         {
             _logger?.LogInformation("App lifecycle shutting down with code {ExitCode}", exitCode);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            if (_logger != null) _logger.LogDebug(ex, "[App.Shutdown] Failed to log lifecycle shutting down [ErrorCode=APP_LIFECYCLE_LOG_FAIL]");
+            else global::Serilog.Log.Debug(ex, "[App.Shutdown] Failed to log lifecycle shutting down [ErrorCode=APP_LIFECYCLE_LOG_FAIL]");
+        }
 
         try
         {
             _hotkeyBroker?.UnregisterAll();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            if (_logger != null) _logger.LogDebug(ex, "[App.Shutdown] Hotkey UnregisterAll failed during lifecycle shutdown [ErrorCode=APP_HOTKEY_UNREGISTER_FAIL]");
+            else global::Serilog.Log.Debug(ex, "[App.Shutdown] Hotkey UnregisterAll failed during lifecycle shutdown [ErrorCode=APP_HOTKEY_UNREGISTER_FAIL]");
+        }
 
         CleanupTray();
     }
@@ -123,7 +140,11 @@ public partial class App : WpfApplication
         {
             _logger?.LogInformation("App exiting with code {ExitCode}", e.ApplicationExitCode);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            if (_logger != null) _logger.LogDebug(ex, "[App.OnExit] Failed to log exit code [ErrorCode=APP_EXIT_LOG_FAIL]");
+            else global::Serilog.Log.Debug(ex, "[App.OnExit] Failed to log exit code [ErrorCode=APP_EXIT_LOG_FAIL]");
+        }
 
         Cleanup();
 
@@ -131,7 +152,16 @@ public partial class App : WpfApplication
         {
             global::Serilog.Log.CloseAndFlush();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            // LAST: Serilog flush must remain last; failure is diagnostic only.
+            try
+            {
+                _logger?.LogDebug(ex, "[App.OnExit] Serilog CloseAndFlush failed [ErrorCode=APP_SERILOG_FLUSH_FAIL]");
+            }
+            catch (Exception) { /* logger itself failing — swallow to preserve exit (intentionally unlogged, no diagnostic channel left) */ }
+            global::Serilog.Log.Debug(ex, "[App.OnExit] Serilog CloseAndFlush failed [ErrorCode=APP_SERILOG_FLUSH_FAIL]");
+        }
 
         base.OnExit(e);
     }
@@ -150,7 +180,11 @@ public partial class App : WpfApplication
                 _trayIconService = null;
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            if (_logger != null) _logger.LogDebug(ex, "[App.CleanupTray] Tray hide/dispose failed [ErrorCode=APP_TRAY_CLEANUP_FAIL]");
+            else global::Serilog.Log.Debug(ex, "[App.CleanupTray] Tray hide/dispose failed [ErrorCode=APP_TRAY_CLEANUP_FAIL]");
+        }
     }
 
     private void RegisterGlobalExceptionHandlers(ILogger<App> logger, IServiceProvider sp)
@@ -158,20 +192,23 @@ public partial class App : WpfApplication
         AppDomain.CurrentDomain.UnhandledException += (s, e) =>
         {
             var ex = (Exception)e.ExceptionObject;
-            logger.LogCritical(ex, "AppDomain Unhandled Exception (isTerminating={IsTerminating})", e.IsTerminating);
+            var cid = Guid.NewGuid().ToString("N")[..8];
+            logger.LogCritical(ex, "[App.GlobalHandler] AppDomain Unhandled Exception (isTerminating={IsTerminating}) [CorrelationId={CorrelationId}] [ErrorCode=APP_DOMAIN_UNHANDLED]", e.IsTerminating, cid);
             TryCleanupAll(sp, logger);
         };
 
         DispatcherUnhandledException += (s, e) =>
         {
-            logger.LogError(e.Exception, "Dispatcher Unhandled Exception");
+            var cid = Guid.NewGuid().ToString("N")[..8];
+            logger.LogError(e.Exception, "[App.GlobalHandler] Dispatcher Unhandled Exception [CorrelationId={CorrelationId}] [ErrorCode=APP_DISPATCHER_UNHANDLED] Handled=true — tray resilience swallow-by-design", cid);
             TryCleanupAll(sp, logger);
             e.Handled = true;
         };
 
         TaskScheduler.UnobservedTaskException += (s, e) =>
         {
-            logger.LogError(e.Exception, "Unobserved Task Exception");
+            var cid = Guid.NewGuid().ToString("N")[..8];
+            logger.LogError(e.Exception, "[App.GlobalHandler] Unobserved Task Exception [CorrelationId={CorrelationId}] [ErrorCode=APP_UNOBSERVED_TASK] SetObserved — tray resilience swallow-by-design", cid);
             e.SetObserved();
         };
     }
@@ -237,28 +274,66 @@ public partial class App : WpfApplication
             {
                 _appLifecycle.ShuttingDown -= OnAppLifecycleShuttingDown;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                if (_logger != null) _logger.LogDebug(ex, "[App.Cleanup] Unsubscribe ShuttingDown failed [ErrorCode=APP_UNSUBSCRIBE_FAIL]");
+                else global::Serilog.Log.Debug(ex, "[App.Cleanup] Unsubscribe ShuttingDown failed [ErrorCode=APP_UNSUBSCRIBE_FAIL]");
+            }
             _appLifecycle = null;
         }
 
         CleanupTray();
 
+        // Bounded shutdown: avoid blocking UI thread via .GetAwaiter().GetResult() which can deadlock
+        // when StopAsync continuations need the Dispatcher. Instead initiate StopAsync on a worker
+        // and wait with timeout; tray already disposed above, Serilog CloseAndFlush stays LAST in OnExit after this returns.
         try
         {
             if (_host != null)
             {
-                _host.StopAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
-                _host.Dispose();
+                var hostToStop = _host;
                 _host = null;
+                try
+                {
+                    var stopTask = Task.Run(() => hostToStop.StopAsync(TimeSpan.FromSeconds(5)));
+                    if (!stopTask.Wait(TimeSpan.FromSeconds(6)))
+                    {
+                        if (_logger != null) _logger.LogWarning("[App.Cleanup] Host StopAsync timed out after 6s [ErrorCode=APP_HOST_STOP_TIMEOUT]");
+                        else global::Serilog.Log.Warning("[App.Cleanup] Host StopAsync timed out after 6s [ErrorCode=APP_HOST_STOP_TIMEOUT]");
+                    }
+                    else if (stopTask.IsFaulted && stopTask.Exception != null)
+                    {
+                        var ex = stopTask.Exception.InnerException ?? stopTask.Exception;
+                        if (_logger != null) _logger.LogWarning(ex, "[App.Cleanup] Host StopAsync faulted [ErrorCode=APP_HOST_STOP_FAIL]");
+                        else global::Serilog.Log.Warning(ex, "[App.Cleanup] Host StopAsync faulted [ErrorCode=APP_HOST_STOP_FAIL]");
+                    }
+                }
+                finally
+                {
+                    try { hostToStop.Dispose(); }
+                    catch (Exception ex)
+                    {
+                        if (_logger != null) _logger.LogDebug(ex, "[App.Cleanup] Host Dispose failed [ErrorCode=APP_HOST_DISPOSE_FAIL]");
+                        else global::Serilog.Log.Debug(ex, "[App.Cleanup] Host Dispose failed [ErrorCode=APP_HOST_DISPOSE_FAIL]");
+                    }
+                }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            if (_logger != null) _logger.LogWarning(ex, "[App.Cleanup] Host shutdown failed [ErrorCode=APP_HOST_SHUTDOWN_FAIL]");
+            else global::Serilog.Log.Warning(ex, "[App.Cleanup] Host shutdown failed [ErrorCode=APP_HOST_SHUTDOWN_FAIL]");
+        }
 
         try
         {
             _instanceGuard?.Dispose();
             _instanceGuard = null;
         }
-        catch { }
+        catch (Exception ex)
+        {
+            if (_logger != null) _logger.LogDebug(ex, "[App.Cleanup] SingleInstanceGuard dispose failed [ErrorCode=APP_GUARD_DISPOSE_FAIL]");
+            else global::Serilog.Log.Debug(ex, "[App.Cleanup] SingleInstanceGuard dispose failed [ErrorCode=APP_GUARD_DISPOSE_FAIL]");
+        }
     }
 }
