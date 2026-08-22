@@ -20,7 +20,7 @@ public interface IFadeOutHideable
 /// 1. 只动画内容元素（RootBorder），绝不动画 Window 自身 Opacity；
 /// 2. 进场前同步把 Opacity/缩放/位移复位到可见终态，动画被中断时元素依然可见；
 /// 3. 退场完成后立即 Hide() 并复位 Opacity=1，保证下一次显示不会卡在透明态；
-/// 4. 所有动画 ≤ 200ms。
+/// 4. 所有动画时长对齐规范第 11.2 章：单段 ≤ 120ms。
 /// </summary>
 public static class PopupTransition
 {
@@ -32,16 +32,16 @@ public static class PopupTransition
 
     private static readonly ConditionalWeakTable<FrameworkElement, TransitionState> States = new();
 
-    // 共享时长：进场 180ms / 退场 140ms，均 ≤ 200ms。
+    // 共享时长：进场 120ms / 退场 110ms，均 ≤ 120ms（规范 11.2）。
     // 注意：缓动函数（EasingFunctionBase）是 DispatcherObject 而非 Freezable，
     // 不可跨线程静态共享（测试在多个 STA 线程各自建窗，会触发线程归属冲突），每次新建
-    private static readonly TimeSpan EntryDuration = TimeSpan.FromMilliseconds(180);
-    private static readonly TimeSpan ExitDuration = TimeSpan.FromMilliseconds(140);
+    private static readonly TimeSpan EntryDuration = TimeSpan.FromMilliseconds(120);
+    private static readonly TimeSpan ExitDuration = TimeSpan.FromMilliseconds(110);
 
     private static TransitionState GetState(FrameworkElement root) => States.GetValue(root, _ => new TransitionState());
 
     /// <summary>
-    /// 进场：缩放 0.97→1 + 上移滑入（+8→0）+ 淡入，180ms EaseOut。
+    /// 进场：缩放 0.97→1 + 上移滑入（+8→0）+ 淡入，120ms EaseOut。
     /// 同时取消任何进行中的退场动画（窗口在退场途中被复用时不残留）。
     /// </summary>
     public static void PlayEntry(FrameworkElement root)
@@ -83,7 +83,7 @@ public static class PopupTransition
     }
 
     /// <summary>
-    /// 退场：140ms 淡出 + 轻微缩小（1→0.98）+ 下移 2px，完成后 Hide() 并复位 Opacity=1。
+    /// 退场：110ms 淡出 + 轻微缩小（1→0.98）+ 下移 2px，完成后 Hide() 并复位 Opacity=1。
     /// 窗口不可见时直接 Hide()；重复调用只生效一次。
     /// </summary>
     public static void PlayExit(Window window, FrameworkElement root)
