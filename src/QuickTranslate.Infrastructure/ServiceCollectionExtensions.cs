@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using QuickTranslate.Core.Abstractions;
@@ -20,6 +21,76 @@ using QuickTranslate.Infrastructure.Translation;
 
 namespace QuickTranslate.Infrastructure;
 
+/// <summary>
+/// Holds the eagerly-started settings load task and its result.
+/// Mechanism: eager-start LoadAsync at singleton registration time (disk + DPAPI CurrentUser decrypt ~50-300ms)
+/// without blocking Host.Build via sync-over-async. A HostedService awaits the task during Host.StartAsync
+/// (off the UI thread, before hotkeys fire) and patches the cached IOptions AppSettings value in-place.
+/// Rationale: Blocking Host.Build with sync-over-async stalls Tray Ready budget under 1s and risks
+/// deadlock if LoadAsync ever captures a SynchronizationContext (STA/WPF). Eager Task plus HostedService
+/// keeps Build synchronous and fast, while guaranteeing settings are ready before the first hotkey pipeline
+/// (coordinators read IOptions at translation time, SettingsWindow is opened lazily after Start; both see the
+/// patched instance).
+/// </summary>
+internal sealed class SettingsLoadState
+{
+    public Task<AppSettings>? LoadTask { get; set; }
+    public AppSettings? Loaded { get; set; }
+}
+
+internal sealed class SettingsInitializationService : IHostedService
+{
+    private readonly SettingsLoadState _state;
+    private readonly IServiceProvider _sp;
+    private readonly ILogger<SettingsInitializationService> _logger;
+
+    public SettingsInitializationService(SettingsLoadState state, IServiceProvider sp, ILogger<SettingsInitializationService> logger)
+    {
+        _state = state;
+        _sp = sp;
+        _logger = logger;
+    }
+
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        if (_state.LoadTask is null) return;
+        try
+        {
+            var loaded = await _state.LoadTask.ConfigureAwait(false);
+            _state.Loaded = loaded;
+
+            // Patch the cached IOptions value in-place if it was already created during Build (Wire*Hotkey).
+            // If not yet created, the IConfigureOptions below will copy from _state.Loaded on first resolve.
+            var opts = _sp.GetService<IOptions<AppSettings>>();
+            if (opts is not null)
+            {
+                var cur = opts.Value;
+                // In-place mutation preserves reference identity for any coordinator holding IOptions reference.
+                cur.WordHotkey = loaded.WordHotkey;
+                cur.BlockHotkey = loaded.BlockHotkey;
+                cur.TargetLanguage = loaded.TargetLanguage;
+                cur.TranslationQuality = loaded.TranslationQuality;
+                cur.StartWithWindows = loaded.StartWithWindows;
+                cur.CloseOnOutsideClick = loaded.CloseOnOutsideClick;
+                cur.DebugLogging = loaded.DebugLogging;
+                cur.DebugOverlayMode = loaded.DebugOverlayMode;
+                cur.EnableTextToSpeech = loaded.EnableTextToSpeech;
+                cur.TranslationProvider = loaded.TranslationProvider;
+                cur.CustomLlmBaseUrl = loaded.CustomLlmBaseUrl;
+                cur.CustomLlmModel = loaded.CustomLlmModel;
+                cur.CustomLlmMaxContextLines = loaded.CustomLlmMaxContextLines;
+                cur.ResolvedApiKey = loaded.ResolvedApiKey;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SettingsInitializationService: eager LoadAsync failed (non-fatal, defaults will be used)");
+        }
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
 public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
@@ -27,43 +98,50 @@ public static class ServiceCollectionExtensions
         services.AddSecretStore(configuration);
         services.AddSingleton<IAppDataProvider, DefaultAppDataProvider>();
 
-        services.AddSingleton<ISettingsManager>(sp =>
+        // Eager-start LoadAsync without blocking Host.Build: see SettingsLoadState doc above.
+        services.AddSingleton<SettingsLoadState>();
+        services.AddSingleton<SettingsManager>(sp =>
         {
             var appDataProvider = sp.GetRequiredService<IAppDataProvider>();
             var appDataDir = appDataProvider.GetAppDataDirectory();
             var secretStore = sp.GetRequiredService<ISecretStore>();
-            var sm = new SettingsManager(appDataDir, secretStore);
-            var appSettings = sm.LoadAsync().GetAwaiter().GetResult();
-            return sm;
+            var mgr = new SettingsManager(appDataDir, secretStore);
+            var state = sp.GetRequiredService<SettingsLoadState>();
+            state.LoadTask = mgr.LoadAsync();
+            return mgr;
         });
 
-        services.AddSingleton(sp =>
-        {
-            var sm = sp.GetRequiredService<ISettingsManager>();
-            return (SettingsManager)sm;
-        });
+        // Concrete singleton once; interface forwards to same instance — eliminates fragile (SettingsManager)sm downcast double-registration.
+        services.AddSingleton<ISettingsManager>(sp => sp.GetRequiredService<SettingsManager>());
+        services.AddHostedService<SettingsInitializationService>();
 
         services.AddSingleton<SingleInstanceGuard>();
 
+        // No sync-over-async: copy from SettingsLoadState.Loaded if already available; otherwise keep defaults.
+        // The HostedService patches the cached IOptions instance after await, so early resolves (Wire* during Build)
+        // see defaults briefly but are corrected before the first hotkey can fire (Host.StartAsync awaits the service).
+        // SettingsWindow is opened lazily via tray after Start, so it always sees the patched value.
         services.AddSingleton<IConfigureOptions<AppSettings>>(sp =>
         {
-            var settingsManager = sp.GetRequiredService<ISettingsManager>();
-            var appSettings = settingsManager.LoadAsync().GetAwaiter().GetResult();
+            var state = sp.GetRequiredService<SettingsLoadState>();
             return new ConfigureOptions<AppSettings>(opts =>
             {
-                opts.WordHotkey = appSettings.WordHotkey;
-                opts.BlockHotkey = appSettings.BlockHotkey;
-                opts.TargetLanguage = appSettings.TargetLanguage;
-                opts.TranslationQuality = appSettings.TranslationQuality;
-                opts.StartWithWindows = appSettings.StartWithWindows;
-                opts.CloseOnOutsideClick = appSettings.CloseOnOutsideClick;
-                opts.DebugLogging = appSettings.DebugLogging;
-                opts.EnableTextToSpeech = appSettings.EnableTextToSpeech;
-                opts.TranslationProvider = appSettings.TranslationProvider;
-                opts.CustomLlmBaseUrl = appSettings.CustomLlmBaseUrl;
-                opts.CustomLlmModel = appSettings.CustomLlmModel;
-                opts.CustomLlmMaxContextLines = appSettings.CustomLlmMaxContextLines;
-                opts.ResolvedApiKey = appSettings.ResolvedApiKey;
+                var loaded = state.Loaded;
+                if (loaded is null) return;
+                opts.WordHotkey = loaded.WordHotkey;
+                opts.BlockHotkey = loaded.BlockHotkey;
+                opts.TargetLanguage = loaded.TargetLanguage;
+                opts.TranslationQuality = loaded.TranslationQuality;
+                opts.StartWithWindows = loaded.StartWithWindows;
+                opts.CloseOnOutsideClick = loaded.CloseOnOutsideClick;
+                opts.DebugLogging = loaded.DebugLogging;
+                opts.DebugOverlayMode = loaded.DebugOverlayMode;
+                opts.EnableTextToSpeech = loaded.EnableTextToSpeech;
+                opts.TranslationProvider = loaded.TranslationProvider;
+                opts.CustomLlmBaseUrl = loaded.CustomLlmBaseUrl;
+                opts.CustomLlmModel = loaded.CustomLlmModel;
+                opts.CustomLlmMaxContextLines = loaded.CustomLlmMaxContextLines;
+                opts.ResolvedApiKey = loaded.ResolvedApiKey;
             });
         });
 
@@ -224,7 +302,19 @@ public static class ServiceCollectionExtensions
 
     public static IServiceCollection AddOcrEngines(this IServiceCollection services)
     {
-        services.AddSingleton<PaddleOcrV6Engine>();
+        // 词合理性检查器：ECDICT 词典背书，供 OCR 粘连词拆分（unfuse）做词汇佐证，
+        // 防止正常单词被字距缝隙拦腰切断（如 commit→com|mit）。词典未注册（最小容器/
+        // 测试）或为空时传 null → 拆分保持纯几何判定；词典为空时 TryLookup 返回 false
+        // → 拆分被保守拒绝（宁整勿碎）。
+        services.AddSingleton<PaddleOcrV6Engine>(sp =>
+        {
+            var dictionary = sp.GetService<ILocalDictionary>();
+            return new PaddleOcrV6Engine(
+                sp.GetRequiredService<IOptions<AppSettings>>(),
+                sp.GetRequiredService<IAppDataProvider>(),
+                sp.GetRequiredService<ILogger<PaddleOcrV6Engine>>(),
+                isPlausibleWord: dictionary is null ? null : word => dictionary.TryLookup(word, "zh", out _));
+        });
         services.AddSingleton<MockOcrEngine>();
 
         services.AddSingleton<IOcrEngine>(sp =>

@@ -17,6 +17,19 @@ namespace QuickTranslate.App.Bootstrap;
 
 public static class AppHost
 {
+    /// <summary>
+    /// Build the Host. DI composition no longer blocks on disk/DPAPI IO:
+    /// ServiceCollectionExtensions now eager-starts SettingsManager.LoadAsync at registration time
+    /// and a HostedService (SettingsInitializationService) awaits it during Host.StartAsync.
+    /// Build itself stays synchronous and fast (Tray Ready &lt;1s). The HostedService patches the
+    /// cached IOptions.AppSettings value in-place before any hotkey can fire (hotkeys are only
+    /// pumped after the WPF message loop starts, which is after host.Start completes).
+    /// Wire*Hotkey / WarmUp chain is intentionally left AS-IS this wave; their IOptions reads
+    /// during Build may transiently see defaults, but are corrected in-place before first use.
+    /// Coordinators capture IOptions reference and read Value at pipeline time, SettingsWindow
+    /// is opened lazily after Start, so both observe the loaded settings. This avoids
+    /// sync-over-async deadlock/startup jank while preserving the 'settings ready before first hotkey' invariant.
+    /// </summary>
     public static IHost Build()
     {
         var host = Host.CreateDefaultBuilder()
