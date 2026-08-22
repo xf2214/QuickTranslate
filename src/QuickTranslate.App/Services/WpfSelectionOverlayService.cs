@@ -42,8 +42,26 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
         else dispatcher.Invoke(DispatcherPriority.Normal, a);
     }
 
+    private static void RunOnUiAsync(Action a)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+        if (dispatcher == null)
+        {
+            throw new InvalidOperationException(
+                "No WPF dispatcher is available (both Application.Current and Dispatcher.CurrentDispatcher are null). " +
+                "WPF UI services cannot operate on an MTA thread without a host Application instance.");
+        }
+
+        if (dispatcher.CheckAccess()) a();
+        else _ = dispatcher.InvokeAsync(a, DispatcherPriority.Normal);
+    }
+
     public void Show(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX = 96, uint dpiY = 96, bool preview = false)
     {
+        // Show keeps blocking Invoke: strict ordering required — callers (coordinators) rely on
+        // HWND creation / EnsureHandle + measured placement completing before OCR/selection
+        // continues and before any subsequent Update/Hide. Non-blocking here would race
+        // IsVisible/Handle checks and cause flicker/misplaced overlay under contention.
         RunOnUi(() => ShowCore(physicalBox, monitorId, dpiX, dpiY, preview));
     }
 
@@ -92,7 +110,7 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
 
     public void Update(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX = 96, uint dpiY = 96)
     {
-        RunOnUi(() => UpdateCore(physicalBox, monitorId, dpiX, dpiY));
+        RunOnUiAsync(() => UpdateCore(physicalBox, monitorId, dpiX, dpiY));
     }
 
     private void UpdateCore(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX, uint dpiY)
@@ -116,7 +134,7 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
 
     public void Hide(MonitorId monitorId)
     {
-        RunOnUi(() => HideCore(monitorId));
+        RunOnUiAsync(() => HideCore(monitorId));
     }
 
     private void HideCore(MonitorId monitorId)
@@ -129,7 +147,7 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
 
     public void HideAll()
     {
-        RunOnUi(HideAllCore);
+        RunOnUiAsync(HideAllCore);
     }
 
     private void HideAllCore()

@@ -42,8 +42,25 @@ public class WpfWordPopupService : IWordPopupService
         else dispatcher.Invoke(DispatcherPriority.Normal, a);
     }
 
+    private static void RunOnUiAsync(Action a)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+        if (dispatcher == null)
+        {
+            throw new InvalidOperationException(
+                "No WPF dispatcher is available (both Application.Current and Dispatcher.CurrentDispatcher are null). " +
+                "WPF UI services cannot operate on an MTA thread without a host Application instance.");
+        }
+
+        if (dispatcher.CheckAccess()) a();
+        else _ = dispatcher.InvokeAsync(a, DispatcherPriority.Normal);
+    }
+
     public void Show(SelectionResult selection, TranslationResult translation, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX = 96, uint dpiY = 96)
     {
+        // Keep blocking Invoke: Show requires HWND creation + measured placement (Place/Dpi mapping)
+        // to complete before callers continue — strict ordering avoids racing Show vs subsequent
+        // HideWithFade/ReplayEntry and ensures popup geometry is committed synchronously.
         RunOnUi(() => ShowCore(selection, translation, monitorId, anchorBox, dpiX, dpiY));
     }
 
@@ -126,6 +143,8 @@ public class WpfWordPopupService : IWordPopupService
 
     public void ShowError(MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY, string shortMessage, Guid operationId)
     {
+        // Keep blocking Invoke for same reason as Show — HWND/placement must be committed
+        // synchronously before error state is visible; Hide/Replay ordering depends on it.
         RunOnUi(() => ShowErrorCore(monitorId, anchorBox, dpiX, dpiY, shortMessage, operationId));
     }
 
@@ -199,7 +218,7 @@ public class WpfWordPopupService : IWordPopupService
 
     public void Hide()
     {
-        RunOnUi(HideCore);
+        RunOnUiAsync(HideCore);
     }
 
     private void HideCore()
@@ -212,7 +231,7 @@ public class WpfWordPopupService : IWordPopupService
 
     public void HideAll()
     {
-        RunOnUi(HideAllCore);
+        RunOnUiAsync(HideAllCore);
     }
 
     private void HideAllCore()
