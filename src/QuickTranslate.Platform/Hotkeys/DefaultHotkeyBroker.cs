@@ -121,9 +121,9 @@ public class DefaultHotkeyBroker : IHotkeyBroker
 
     public void UnregisterAll()
     {
-        try { _globalHotkeyService.Unregister(WordId); } catch { }
-        try { _globalHotkeyService.Unregister(BlockId); } catch { }
-        try { _globalHotkeyService.Unregister(EscId); } catch { }
+        try { _globalHotkeyService.Unregister(WordId); } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.UnregisterAll] Unregister WordId {Id} failed [ErrorCode=HOTKEY_UNREGISTER_FAIL]", WordId); }
+        try { _globalHotkeyService.Unregister(BlockId); } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.UnregisterAll] Unregister BlockId {Id} failed [ErrorCode=HOTKEY_UNREGISTER_FAIL]", BlockId); }
+        try { _globalHotkeyService.Unregister(EscId); } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.UnregisterAll] Unregister EscId {Id} failed [ErrorCode=HOTKEY_UNREGISTER_FAIL]", EscId); }
     }
 
     public bool Probe(HotkeyModifiers mods, KeyboardKey key)
@@ -158,8 +158,9 @@ public class DefaultHotkeyBroker : IHotkeyBroker
             }
             return ok;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogDebug(ex, "[HotkeyBroker.Probe] Probe failed for {Mods}+{Key} [ErrorCode=HOTKEY_PROBE_FAIL]", mods, key);
             return false;
         }
     }

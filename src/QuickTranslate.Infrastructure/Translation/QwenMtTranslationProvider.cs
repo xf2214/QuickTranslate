@@ -291,7 +291,11 @@ public class QwenMtTranslationProvider : ITranslationProvider
                 {
                     errorBody = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    // Best-effort read — keep fallback to empty body semantics, but log diagnostic.
+                    _logger.LogDebug(ex, "[QwenMt.SendTranslate] Failed to read error body [ErrorCode=QWEN_ERROR_BODY_READ_FAIL] {ExType}: {Message}", ex.GetType().Name, ex.Message);
+                }
 
                 response.Dispose();
                 throw TranslationException.FromHttpStatus((int)response.StatusCode, Truncate(errorBody, 300));

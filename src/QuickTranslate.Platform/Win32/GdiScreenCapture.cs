@@ -34,8 +34,7 @@ public sealed class GdiScreenCapture : IScreenCapture
         var region = new PhysicalRect(x, y, size.Width, size.Height);
         region = ClampRegionToBounds(region, monitor.Bounds);
 
-        var frame = CaptureGdiInternal(region, monitor);
-        return Task.FromResult(frame);
+        return Task.Run(() => CaptureGdiInternal(region, monitor, ct), ct);
     }
 
     public Task<ScreenFrame> CaptureRectAsync(PhysicalRect region, MonitorId? monitorHint = null, CancellationToken ct = default)
@@ -73,8 +72,7 @@ public sealed class GdiScreenCapture : IScreenCapture
 
         region = ClampRegionToBounds(region, monitor.Bounds);
 
-        var frame = CaptureGdiInternal(region, monitor);
-        return Task.FromResult(frame);
+        return Task.Run(() => CaptureGdiInternal(region, monitor, ct), ct);
     }
 
     public static PhysicalRect ClampRegionToBounds(PhysicalRect region, PhysicalRect bounds)
@@ -112,7 +110,7 @@ public sealed class GdiScreenCapture : IScreenCapture
         return new PhysicalRect(left, top, finalWidth, finalHeight);
     }
 
-    private ScreenFrame CaptureGdiInternal(PhysicalRect region, MonitorInfo monitor)
+    private ScreenFrame CaptureGdiInternal(PhysicalRect region, MonitorInfo monitor, CancellationToken ct = default)
     {
         if (region.IsEmpty)
             throw new ArgumentException("Capture region is empty.", nameof(region));
@@ -150,6 +148,8 @@ public sealed class GdiScreenCapture : IScreenCapture
 
             Gdi32.SelectObject(hdcMem, oldBitmap);
             oldBitmap = IntPtr.Zero;
+
+            ct.ThrowIfCancellationRequested();
 
             // FromHbitmap 对桌面 DDB 通常返回 Format32bppRgb，而 ScreenFrame 契约
             // 强制 Format32bppArgb，因此只有已是 Argb 时才能直接包装；否则必须转换

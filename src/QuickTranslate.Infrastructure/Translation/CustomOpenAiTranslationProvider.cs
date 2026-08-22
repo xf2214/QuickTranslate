@@ -208,18 +208,22 @@ public class CustomOpenAiTranslationProvider : ITranslationProvider
             {
                 errorBody = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // Best-effort read — keep fallback to empty body semantics, but log diagnostic.
+                _logger.LogDebug(ex, "[CustomOpenAi.Send] Failed to read error body [ErrorCode=CUSTOM_ERROR_BODY_READ_FAIL] {ExType}: {Message}", ex.GetType().Name, ex.Message);
+            }
 
             var shortBody = Truncate(errorBody, 300);
-            var ex = TranslationException.FromHttpStatus((int)response.StatusCode, shortBody);
+            var translationEx = TranslationException.FromHttpStatus((int)response.StatusCode, shortBody);
             response.Dispose();
-            throw ex;
+            throw translationEx;
         }
 
         return response;
     }
 
-    private static async IAsyncEnumerable<TranslationChunk> ConsumeSseAsync(
+    private async IAsyncEnumerable<TranslationChunk> ConsumeSseAsync(
         HttpResponseMessage response,
         [EnumeratorCancellation] CancellationToken ct)
     {
@@ -244,8 +248,10 @@ public class CustomOpenAiTranslationProvider : ITranslationProvider
                 {
                     frame = JsonSerializer.Deserialize<OpenAiChatResponse>(payload);
                 }
-                catch (JsonException)
+                catch (JsonException ex)
                 {
+                    // Malformed SSE JSON frame — keep fallback semantics (skip frame, continue stream) but log diagnostic.
+                    _logger.LogDebug(ex, "[CustomOpenAi.SSE] Skipping malformed JSON frame [ErrorCode=CUSTOM_SSE_JSON_SKIP] {ExType}: {Message}", ex.GetType().Name, ex.Message);
                     continue;
                 }
 

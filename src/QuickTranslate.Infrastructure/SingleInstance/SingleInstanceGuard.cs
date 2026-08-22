@@ -43,8 +43,14 @@ public class SingleInstanceGuard : IDisposable
         if (_createdNew)
         {
             try { _mutex.ReleaseMutex(); }
-            catch (ObjectDisposedException) { }
-            catch (ApplicationException) { }
+            catch (ObjectDisposedException ex)
+            {
+                global::Serilog.Log.Debug(ex, "[SingleInstanceGuard.Dispose] Mutex already disposed during release [ErrorCode=SINGLEINSTANCE_MUTEX_DISPOSED]");
+            }
+            catch (ApplicationException ex)
+            {
+                global::Serilog.Log.Debug(ex, "[SingleInstanceGuard.Dispose] Current thread does not own the mutex; skipping release [ErrorCode=SINGLEINSTANCE_NOT_OWNER]");
+            }
         }
         _mutex.Dispose();
         GC.SuppressFinalize(this);
