@@ -5,7 +5,7 @@ using QuickTranslate.Core.Options;
 
 namespace QuickTranslate.Platform.Hotkeys;
 
-public class DefaultHotkeyBroker : IHotkeyBroker
+public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
 {
     public const int WordId = 0xB001;
     public const int BlockId = 0xB002;
@@ -25,11 +25,10 @@ public class DefaultHotkeyBroker : IHotkeyBroker
     private DateTimeOffset? _blockDownTimestamp;
     private bool _holdStarted;
     private readonly object _holdLock = new();
+    private bool _disposed;
 
     public event EventHandler<HotkeyEvent>? HotkeyFired;
     public event EventHandler<HotkeyHoldEventArgs>? BlockHoldStateChanged;
-    public event EventHandler<HotkeyHoldEventArgs>? BlockHoldStarted;
-    public event EventHandler<HotkeyHoldEventArgs>? BlockHoldEnded;
 
     public DefaultHotkeyBroker(
         IGlobalHotkeyService globalHotkeyService,
@@ -142,6 +141,16 @@ public class DefaultHotkeyBroker : IHotkeyBroker
             _blockDownTimestamp = null;
             _holdStarted = false;
         }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        try { _globalHotkeyService.HotkeyPressed -= OnGlobalHotkeyPressed; } catch { }
+        try { _globalHotkeyService.KeyStateChanged -= OnKeyStateChanged; } catch { }
+        UnregisterAll();
+        GC.SuppressFinalize(this);
     }
 
     public bool Probe(HotkeyModifiers mods, KeyboardKey key)
@@ -298,7 +307,6 @@ public class DefaultHotkeyBroker : IHotkeyBroker
             {
                 var holdArgs = new HotkeyHoldEventArgs(HotkeyEventType.Block, HotkeyHoldPhase.Start, TimeSpan.FromMilliseconds(HoldThresholdMs), DateTimeOffset.Now, BlockId);
                 BlockHoldStateChanged?.Invoke(this, holdArgs);
-                BlockHoldStarted?.Invoke(this, holdArgs);
                 _logger.LogDebug("Block hold started after {Threshold}ms", HoldThresholdMs);
             }
         });
@@ -330,7 +338,6 @@ public class DefaultHotkeyBroker : IHotkeyBroker
         {
             var holdEnd = new HotkeyHoldEventArgs(HotkeyEventType.Block, HotkeyHoldPhase.End, duration, DateTimeOffset.Now, BlockId);
             BlockHoldStateChanged?.Invoke(this, holdEnd);
-            BlockHoldEnded?.Invoke(this, holdEnd);
             _logger.LogDebug("Block hold ended duration {Duration}ms", duration.TotalMilliseconds);
         }
         else

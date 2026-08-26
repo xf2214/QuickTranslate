@@ -96,8 +96,8 @@ public class BlockDragCoordinatorTests
     {
         var lines = Create5Lines();
         var initial = lines[0].Box;
-        // drag 5px (110 -> 115) should stay initial line0
-        var expanded = BlockInteractionCoordinator.ExpandSelectedLines(lines, anchorY: 110, dragY: 115);
+        // drag inside anchor line (110 -> 109 still inside 100-120) stays single; snap h/2=10 should not include next line yet
+        var expanded = BlockInteractionCoordinator.ExpandSelectedLines(lines, anchorY: 110, dragY: 109);
         Assert.Equal(initial, expanded);
     }
 

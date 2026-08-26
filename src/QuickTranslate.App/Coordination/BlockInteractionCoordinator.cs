@@ -128,11 +128,12 @@ public class BlockInteractionCoordinator : IDisposable
             return anchorLine.Box;
         }
         var anchorTop = anchorLine.Box.Top;
+        int snap = anchorLine.Box.Height / 2;
         var selected = new List<OcrLine>();
         foreach (var line in lines)
         {
             if (line.Box.Top < anchorTop) continue;
-            if (line.Box.Top <= dragY)
+            if (line.Box.Top <= dragY + snap)
             {
                 selected.Add(line);
             }
@@ -322,9 +323,7 @@ public class BlockInteractionCoordinator : IDisposable
                 if (anchorLine != null)
                 {
                     int anchorTop = anchorLine.Box.Top;
-                    int curY = _cursorService.GetPhysicalCursorPos(out _).Y;
-                    // Use lastExpandedUnion's bottom as dragY approximation if cursor hasn't moved far
-                    int dragY = Math.Max(curY, expandedBox.Bottom);
+                    int dragY = expandedBox.Bottom;
                     int snap = anchorLine.Box.Height / 2;
                     foreach (var line in _dragOcr.Lines)
                     {
@@ -421,7 +420,69 @@ public class BlockInteractionCoordinator : IDisposable
 
     private void OnDragTick(object? sender, EventArgs e)
     {
-        TriggerDragTickForTest();
+        _ = TriggerDragTickAsync();
+    }
+
+    internal async Task TriggerDragTickAsync()
+    {
+        if (!_isDragging || _dragOcr == null) return;
+        var cur = _cursorService.GetPhysicalCursorPos(out var mid);
+        var mi = _monitorService.TryGetMonitorFromPoint(cur);
+        if (mi != null)
+        {
+            _dragMonitorId = mi.Id;
+            _dragDpiX = mi.DpiX;
+            _dragDpiY = mi.DpiY;
+        }
+        else
+        {
+            _dragMonitorId = mid;
+        }
+        if (cur.Y <= _anchorPoint.Y) return;
+        var expanded = ExpandSelectedLines(_dragOcr.Lines, _anchorPoint.Y, cur.Y);
+        if (expanded.IsEmpty) return;
+        PhysicalRect last;
+        lock (_dragLock) { last = _lastExpandedUnion; }
+        bool changed = !expanded.Equals(last);
+        if (changed)
+        {
+            lock (_dragLock) { _lastExpandedUnion = expanded; }
+            _overlayService.Update(expanded, _dragMonitorId, _dragDpiX, _dragDpiY);
+            _logger.LogDebug("Drag tick expanded to {Box}", expanded);
+        }
+
+        // Task4: capture expansion to 1600x1200 once when drag exceeds initial frame bottom
+        if (!_hasExpandedCapture && !_dragCaptureRegion.IsEmpty && cur.Y > _dragCaptureRegion.Bottom - 20 && _dragCaptureRegion.Width < 1600)
+        {
+            // optimistic guard to avoid concurrent re-entry; reset on failure to allow retry
+            _hasExpandedCapture = true;
+            try
+            {
+                var newSize = new PhysicalSize(1600, 1200);
+                var frame = await _retryCoordinator.Capture.CaptureAroundAsync(_anchorPoint, newSize).ConfigureAwait(false);
+                var newFrameRegion = frame.Region;
+                var band = MakeBand(_anchorPoint, 600);
+                var newOcr = await _retryCoordinator.Ocr.RecognizeAsync(frame, band).ConfigureAwait(false);
+                ((IDisposable)frame).Dispose();
+                lock (_dragLock)
+                {
+                    _dragOcr = newOcr;
+                    _dragCaptureRegion = newOcr.CaptureRegion.IsEmpty ? newFrameRegion : newOcr.CaptureRegion;
+                }
+                if (_dragFrame != null) { ((IDisposable)_dragFrame).Dispose(); _dragFrame = null; }
+                var expandedAfter = ExpandSelectedLines(newOcr.Lines, _anchorPoint.Y, cur.Y);
+                if (!expandedAfter.IsEmpty && !expandedAfter.Equals(_lastExpandedUnion))
+                {
+                    lock (_dragLock) { _lastExpandedUnion = expandedAfter; }
+                    _overlayService.Update(expandedAfter, _dragMonitorId, _dragDpiX, _dragDpiY);
+                }
+            }
+            catch (Exception ex)
+            {
+                _hasExpandedCapture = false;
+                _logger.LogDebug(ex, "Drag capture expansion failed");
+            }
+        }
     }
 
     // Test helpers
@@ -488,66 +549,9 @@ public class BlockInteractionCoordinator : IDisposable
 
     internal void TriggerDragTickForTest()
     {
-        if (!_isDragging || _dragOcr == null) return;
-        var cur = _cursorService.GetPhysicalCursorPos(out var mid);
-        // Update monitor/dpi if moved to different monitor
-        var mi = _monitorService.TryGetMonitorFromPoint(cur);
-        if (mi != null)
-        {
-            _dragMonitorId = mi.Id;
-            _dragDpiX = mi.DpiX;
-            _dragDpiY = mi.DpiY;
-        }
-        else
-        {
-            _dragMonitorId = mid;
-        }
-        if (cur.Y <= _anchorPoint.Y) return;
-        var expanded = ExpandSelectedLines(_dragOcr.Lines, _anchorPoint.Y, cur.Y);
-        if (expanded.IsEmpty) return;
-        PhysicalRect last;
-        lock (_dragLock) { last = _lastExpandedUnion; }
-        bool changed = !expanded.Equals(last);
-        if (changed)
-        {
-            lock (_dragLock) { _lastExpandedUnion = expanded; }
-            // Task3: subsequent ticks use Update keeping preview mode, not Show (avoids re-creating window attributes and replaying entry animation)
-            _overlayService.Update(expanded, _dragMonitorId, _dragDpiX, _dragDpiY);
-            _logger.LogDebug("Drag tick expanded to {Box}", expanded);
-        }
-
-        // Task4: capture expansion to 1600x1200 once when drag exceeds initial frame bottom
-        if (!_hasExpandedCapture && !_dragCaptureRegion.IsEmpty && cur.Y > _dragCaptureRegion.Bottom - 20 && _dragCaptureRegion.Width < 1600)
-        {
-            _hasExpandedCapture = true;
-            try
-            {
-                var newSize = new PhysicalSize(1600, 1200);
-                var frame = _retryCoordinator.Capture.CaptureAroundAsync(_anchorPoint, newSize).GetAwaiter().GetResult();
-                var newFrameRegion = frame.Region;
-                // use large band to include new area: half 600 covers 1200 height
-                var band = MakeBand(_anchorPoint, 600);
-                var newOcr = _retryCoordinator.Ocr.RecognizeAsync(frame, band).GetAwaiter().GetResult();
-                ((IDisposable)frame).Dispose();
-                lock (_dragLock)
-                {
-                    _dragOcr = newOcr;
-                    _dragCaptureRegion = newOcr.CaptureRegion.IsEmpty ? newFrameRegion : newOcr.CaptureRegion;
-                }
-                if (_dragFrame != null) { ((IDisposable)_dragFrame).Dispose(); _dragFrame = null; }
-                // Recompute expanded after new lines available
-                var expandedAfter = ExpandSelectedLines(newOcr.Lines, _anchorPoint.Y, cur.Y);
-                if (!expandedAfter.IsEmpty && !expandedAfter.Equals(_lastExpandedUnion))
-                {
-                    lock (_dragLock) { _lastExpandedUnion = expandedAfter; }
-                    _overlayService.Update(expandedAfter, _dragMonitorId, _dragDpiX, _dragDpiY);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Drag capture expansion failed");
-            }
-        }
+        // Synchronous wrapper for tests (no WPF Dispatcher, no deadlock risk).
+        // Production tick uses TriggerDragTickAsync() via Dispatcher without blocking.
+        TriggerDragTickAsync().ConfigureAwait(false).GetAwaiter().GetResult();
     }
 
     public void Start()
