@@ -21,7 +21,13 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
     private IntPtr _mouseHookHandle = IntPtr.Zero;
     private User32.LowLevelMouseProc? _mouseHookProc;
 
+    // 键盘长按检测：WH_KEYBOARD_LL 钩子
+    private IntPtr _keyboardHookHandle = IntPtr.Zero;
+    private User32.LowLevelKeyboardProc? _keyboardHookProc;
+    private readonly Dictionary<int, DateTime> _downTimes = new();
+
     public event EventHandler<HotkeyEventArgs>? HotkeyPressed;
+    public event EventHandler<KeyStateChangedEventArgs>? KeyStateChanged;
 
     public GlobalHotkeyService()
     {
@@ -118,6 +124,7 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
         if (ok)
         {
             _registered[id] = (modifiers, key);
+            EnsureKeyboardHookInstalled();
         }
 
         return ok;
@@ -144,6 +151,71 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
         _mouseHookProc = MouseHookCallback;
         IntPtr hMod = Kernel32.GetModuleHandleW(null);
         _mouseHookHandle = User32.SetWindowsHookExW(User32.WH_MOUSE_LL, _mouseHookProc, hMod, 0);
+    }
+
+    private void EnsureKeyboardHookInstalled()
+    {
+        if (_keyboardHookHandle != IntPtr.Zero)
+            return;
+
+        _keyboardHookProc = KeyboardHookCallback;
+        IntPtr hMod = Kernel32.GetModuleHandleW(null);
+        _keyboardHookHandle = User32.SetWindowsHookExW(User32.WH_KEYBOARD_LL, _keyboardHookProc, hMod, 0);
+    }
+
+    private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode == HC_ACTION && _registered.Count > 0)
+        {
+            int msg = (int)wParam.ToInt64();
+            bool isDown = msg == User32.WM_KEYDOWN || msg == User32.WM_SYSKEYDOWN;
+            bool isUp = msg == User32.WM_KEYUP || msg == User32.WM_SYSKEYUP;
+            if (isDown || isUp)
+            {
+                int vk = Marshal.ReadInt32(lParam);
+                foreach (var kvp in _registered.ToArray())
+                {
+                    int id = kvp.Key;
+                    var (mods, key) = kvp.Value;
+                    if ((int)key != vk)
+                        continue;
+                    if (!CheckModifiers(mods))
+                        continue;
+
+                    if (isDown)
+                    {
+                        if (_downTimes.ContainsKey(id))
+                            continue; // ignore auto-repeat
+                        _downTimes[id] = DateTime.UtcNow;
+                        var args = new KeyStateChangedEventArgs(id, KeyStatePhase.Down, null, DateTimeOffset.UtcNow);
+                        RaiseKeyStateChanged(args);
+                    }
+                    else if (isUp)
+                    {
+                        if (!_downTimes.TryGetValue(id, out var downTime))
+                            continue;
+                        _downTimes.Remove(id);
+                        var duration = DateTime.UtcNow - downTime;
+                        var args = new KeyStateChangedEventArgs(id, KeyStatePhase.Up, duration, DateTimeOffset.UtcNow);
+                        RaiseKeyStateChanged(args);
+                    }
+                }
+            }
+        }
+
+        return User32.CallNextHookEx(_keyboardHookHandle, nCode, wParam, lParam);
+    }
+
+    private void RaiseKeyStateChanged(KeyStateChangedEventArgs args)
+    {
+        if (Application.Current?.Dispatcher != null)
+        {
+            Application.Current.Dispatcher.BeginInvoke(() => KeyStateChanged?.Invoke(this, args));
+        }
+        else
+        {
+            KeyStateChanged?.Invoke(this, args);
+        }
     }
 
     private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
@@ -233,6 +305,7 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
         }
 
         _mouseButtonHotkeys.Remove(id);
+        _downTimes.Remove(id);
 
         // 没有鼠标按键热键时卸载钩子
         if (_mouseButtonHotkeys.Count == 0 && _mouseHookHandle != IntPtr.Zero)
@@ -240,6 +313,13 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
             User32.UnhookWindowsHookEx(_mouseHookHandle);
             _mouseHookHandle = IntPtr.Zero;
             _mouseHookProc = null;
+        }
+
+        if (_registered.Count == 0 && _keyboardHookHandle != IntPtr.Zero)
+        {
+            User32.UnhookWindowsHookEx(_keyboardHookHandle);
+            _keyboardHookHandle = IntPtr.Zero;
+            _keyboardHookProc = null;
         }
     }
 
@@ -253,12 +333,20 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
         }
         _registered.Clear();
         _mouseButtonHotkeys.Clear();
+        _downTimes.Clear();
 
         if (_mouseHookHandle != IntPtr.Zero)
         {
             User32.UnhookWindowsHookEx(_mouseHookHandle);
             _mouseHookHandle = IntPtr.Zero;
             _mouseHookProc = null;
+        }
+
+        if (_keyboardHookHandle != IntPtr.Zero)
+        {
+            User32.UnhookWindowsHookEx(_keyboardHookHandle);
+            _keyboardHookHandle = IntPtr.Zero;
+            _keyboardHookProc = null;
         }
     }
 

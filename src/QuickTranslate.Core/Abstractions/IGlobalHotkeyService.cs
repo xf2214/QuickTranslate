@@ -23,4 +23,6 @@ public interface IGlobalHotkeyService
     void UnregisterAll();
 
     event EventHandler<HotkeyEventArgs>? HotkeyPressed;
+
+    event EventHandler<KeyStateChangedEventArgs>? KeyStateChanged;
 }

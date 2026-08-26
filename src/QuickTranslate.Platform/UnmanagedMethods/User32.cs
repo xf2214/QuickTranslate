@@ -103,6 +103,12 @@ public static unsafe partial class User32
 
     // 低级鼠标钩子（WH_MOUSE_LL）——用于支持鼠标侧键作为热键
     public const int WH_MOUSE_LL = 14;
+    public const int WH_KEYBOARD_LL = 13;
+
+    public const int WM_KEYDOWN = 0x0100;
+    public const int WM_KEYUP = 0x0101;
+    public const int WM_SYSKEYDOWN = 0x0104;
+    public const int WM_SYSKEYUP = 0x0105;
 
     public const int WM_XBUTTONDOWN = 0x020B;
     public const int WM_LBUTTONDOWN = 0x0201;
@@ -126,4 +132,8 @@ public static unsafe partial class User32
     public static partial short GetAsyncKeyState(int vKey);
 
     public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+    public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [LibraryImport(DllName, SetLastError = true)]
+    public static partial IntPtr SetWindowsHookExW(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
 }

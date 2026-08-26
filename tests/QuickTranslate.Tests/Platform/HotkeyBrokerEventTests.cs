@@ -13,9 +13,12 @@ public class FakeGlobalHotkeyService : IGlobalHotkeyService
     public List<int> UnregisterAllCalls { get; } = new();
 
     public event EventHandler<HotkeyEventArgs>? HotkeyPressed;
+    public event EventHandler<KeyStateChangedEventArgs>? KeyStateChanged;
 
     public bool RegisterReturns { get; set; } = true;
     public Func<int, HotkeyModifiers, KeyboardKey, bool>? RegisterFunc { get; set; }
+
+    private readonly Dictionary<int, DateTimeOffset> _fakeDownTimes = new();
 
     public bool Register(int id, HotkeyModifiers modifiers, KeyboardKey key)
     {
@@ -36,6 +39,25 @@ public class FakeGlobalHotkeyService : IGlobalHotkeyService
     public void RaiseHotkeyPressed(int id)
     {
         HotkeyPressed?.Invoke(this, new HotkeyEventArgs(id, HotkeyModifiers.None, KeyboardKey.None));
+    }
+
+    public void RaiseKeyDown(int id)
+    {
+        var now = DateTimeOffset.UtcNow;
+        _fakeDownTimes[id] = now;
+        KeyStateChanged?.Invoke(this, new KeyStateChangedEventArgs(id, KeyStatePhase.Down, null, now));
+    }
+
+    public void RaiseKeyUp(int id)
+    {
+        var now = DateTimeOffset.UtcNow;
+        TimeSpan? duration = null;
+        if (_fakeDownTimes.TryGetValue(id, out var down))
+        {
+            duration = now - down;
+            _fakeDownTimes.Remove(id);
+        }
+        KeyStateChanged?.Invoke(this, new KeyStateChangedEventArgs(id, KeyStatePhase.Up, duration, now));
     }
 }
 

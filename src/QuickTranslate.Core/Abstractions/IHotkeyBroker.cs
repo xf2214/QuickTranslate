@@ -9,5 +9,6 @@ public interface IHotkeyBroker
     Result TryUpdateHotkeys(HotkeyCombo newWord, HotkeyCombo newBlock);
     bool Probe(HotkeyModifiers mods, KeyboardKey key);
     event EventHandler<HotkeyEvent>? HotkeyFired;
+    event EventHandler<HotkeyHoldEventArgs>? BlockHoldStateChanged;
     void UnregisterAll();
 }

@@ -17,6 +17,7 @@ namespace QuickTranslate.Tests.Coordination;
 public class FakeHotkeyBroker : IHotkeyBroker
 {
     public event EventHandler<HotkeyEvent>? HotkeyFired;
+    public event EventHandler<HotkeyHoldEventArgs>? BlockHoldStateChanged;
 
     public List<AppSettings> RegisterDefaultsCalls { get; } = new();
     public List<(HotkeyCombo Word, HotkeyCombo Block)> UpdateCalls { get; } = new();
@@ -308,6 +309,7 @@ public class FakeBlockPopupService : IBlockPopupService
     public int ShowCount { get; private set; }
     public int HideAllCount { get; private set; }
     public int ShowErrorCount { get; private set; }
+    public int MarkCompletedCount { get; private set; }
     public List<(BlockSelectionResult Block, TranslationResult Trans, MonitorId Monitor, PhysicalRect Box, uint DpiX, uint DpiY)> ShowCalls { get; } = new();
     public List<(MonitorId Monitor, PhysicalRect Box, uint DpiX, uint DpiY, string Msg, Guid OpId)> ShowErrorCalls { get; } = new();
 
@@ -324,6 +326,8 @@ public class FakeBlockPopupService : IBlockPopupService
     }
 
     public void HideAll() => HideAllCount++;
+
+    public void MarkStreamCompleted() => MarkCompletedCount++;
 }
 
 public class FakeEscHook : IEscHook

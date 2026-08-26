@@ -409,6 +409,7 @@ public class BenchmarksRunner
     private class BenchFakeHotkeyBroker : IHotkeyBroker
     {
         public event EventHandler<HotkeyEvent>? HotkeyFired;
+        public event EventHandler<HotkeyHoldEventArgs>? BlockHoldStateChanged;
         public void RegisterDefaultsFromSettings(AppSettings settings) { }
         public Result TryUpdateHotkeys(HotkeyCombo newWord, HotkeyCombo newBlock) => Result.Ok();
         public bool Probe(HotkeyModifiers mods, KeyboardKey key) => true;
@@ -569,6 +570,7 @@ public class BenchmarksRunner
         public void Show(BlockSelectionResult blockSelection, TranslationResult translation, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY) => ShowCount++;
         public void ShowError(MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY, string shortMessage, Guid operationId) { }
         public void HideAll() { }
+        public void MarkStreamCompleted() { }
     }
 
     private BenchmarkMetric MeasureCancelLatency()

@@ -20,7 +20,16 @@ public class DefaultHotkeyBroker : IHotkeyBroker
     private HotkeyCombo? _blockCombo;
     private HotkeyCombo? _escCombo;
 
+    private const int HoldThresholdMs = 400;
+    private CancellationTokenSource? _holdCts;
+    private DateTimeOffset? _blockDownTimestamp;
+    private bool _holdStarted;
+    private readonly object _holdLock = new();
+
     public event EventHandler<HotkeyEvent>? HotkeyFired;
+    public event EventHandler<HotkeyHoldEventArgs>? BlockHoldStateChanged;
+    public event EventHandler<HotkeyHoldEventArgs>? BlockHoldStarted;
+    public event EventHandler<HotkeyHoldEventArgs>? BlockHoldEnded;
 
     public DefaultHotkeyBroker(
         IGlobalHotkeyService globalHotkeyService,
@@ -34,6 +43,7 @@ public class DefaultHotkeyBroker : IHotkeyBroker
         _escHook = escHook;
 
         _globalHotkeyService.HotkeyPressed += OnGlobalHotkeyPressed;
+        _globalHotkeyService.KeyStateChanged += OnKeyStateChanged;
     }
 
     public void RegisterDefaultsFromSettings(AppSettings settings)
@@ -124,6 +134,14 @@ public class DefaultHotkeyBroker : IHotkeyBroker
         try { _globalHotkeyService.Unregister(WordId); } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.UnregisterAll] Unregister WordId {Id} failed [ErrorCode=HOTKEY_UNREGISTER_FAIL]", WordId); }
         try { _globalHotkeyService.Unregister(BlockId); } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.UnregisterAll] Unregister BlockId {Id} failed [ErrorCode=HOTKEY_UNREGISTER_FAIL]", BlockId); }
         try { _globalHotkeyService.Unregister(EscId); } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.UnregisterAll] Unregister EscId {Id} failed [ErrorCode=HOTKEY_UNREGISTER_FAIL]", EscId); }
+        lock (_holdLock)
+        {
+            try { _holdCts?.Cancel(); } catch { }
+            _holdCts?.Dispose();
+            _holdCts = null;
+            _blockDownTimestamp = null;
+            _holdStarted = false;
+        }
     }
 
     public bool Probe(HotkeyModifiers mods, KeyboardKey key)
@@ -190,6 +208,14 @@ public class DefaultHotkeyBroker : IHotkeyBroker
                     _logger.LogDebug("hotkey suppressed by paused");
                     return;
                 }
+                lock (_holdLock)
+                {
+                    if (_blockDownTimestamp != null || _holdCts != null || _holdStarted)
+                    {
+                        _logger.LogDebug("Block WM_HOTKEY suppressed by hold tracking");
+                        return;
+                    }
+                }
                 eventType = HotkeyEventType.Block;
                 break;
             case EscId:
@@ -206,6 +232,125 @@ public class DefaultHotkeyBroker : IHotkeyBroker
         if (eventType.Value == HotkeyEventType.Escape)
         {
             _escHook?.RaiseEscPressed();
+        }
+    }
+
+    private void OnKeyStateChanged(object? sender, KeyStateChangedEventArgs e)
+    {
+        if (e.Id != BlockId)
+            return;
+
+        if (e.Phase == KeyStatePhase.Down)
+        {
+            HandleBlockDown(e);
+        }
+        else if (e.Phase == KeyStatePhase.Up)
+        {
+            HandleBlockUp(e);
+        }
+    }
+
+    private void HandleBlockDown(KeyStateChangedEventArgs e)
+    {
+        if (_appLifecycle.IsPaused)
+        {
+            _logger.LogDebug("Block hold down suppressed by paused");
+            return;
+        }
+
+        CancellationTokenSource? cts;
+        lock (_holdLock)
+        {
+            if (_blockDownTimestamp != null && _holdCts != null)
+                return;
+            _blockDownTimestamp = e.Timestamp;
+            _holdStarted = false;
+            _holdCts?.Cancel();
+            _holdCts?.Dispose();
+            _holdCts = new CancellationTokenSource();
+            cts = _holdCts;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(HoldThresholdMs, cts.Token).ConfigureAwait(false);
+            }
+            catch (TaskCanceledException)
+            {
+                return;
+            }
+
+            bool shouldFire = false;
+            lock (_holdLock)
+            {
+                if (cts.IsCancellationRequested)
+                    return;
+                if (_holdStarted)
+                    return;
+                // Still holding
+                _holdStarted = true;
+                shouldFire = true;
+            }
+
+            if (shouldFire)
+            {
+                var holdArgs = new HotkeyHoldEventArgs(HotkeyEventType.Block, HotkeyHoldPhase.Start, TimeSpan.FromMilliseconds(HoldThresholdMs), DateTimeOffset.Now, BlockId);
+                BlockHoldStateChanged?.Invoke(this, holdArgs);
+                BlockHoldStarted?.Invoke(this, holdArgs);
+                _logger.LogDebug("Block hold started after {Threshold}ms", HoldThresholdMs);
+            }
+        });
+    }
+
+    private void HandleBlockUp(KeyStateChangedEventArgs e)
+    {
+        CancellationTokenSource? ctsToCancel = null;
+        bool wasHoldStarted;
+        DateTimeOffset? downTimestamp;
+        TimeSpan duration;
+
+        lock (_holdLock)
+        {
+            downTimestamp = _blockDownTimestamp;
+            if (downTimestamp == null)
+                return;
+            wasHoldStarted = _holdStarted;
+            duration = e.HoldDuration ?? (e.Timestamp - downTimestamp.Value);
+            ctsToCancel = _holdCts;
+            _holdCts = null;
+            // keep _blockDownTimestamp and _holdStarted until after firing, but capture values
+        }
+
+        try { ctsToCancel?.Cancel(); } catch { }
+        ctsToCancel?.Dispose();
+
+        if (wasHoldStarted)
+        {
+            var holdEnd = new HotkeyHoldEventArgs(HotkeyEventType.Block, HotkeyHoldPhase.End, duration, DateTimeOffset.Now, BlockId);
+            BlockHoldStateChanged?.Invoke(this, holdEnd);
+            BlockHoldEnded?.Invoke(this, holdEnd);
+            _logger.LogDebug("Block hold ended duration {Duration}ms", duration.TotalMilliseconds);
+        }
+        else
+        {
+            if (_appLifecycle.IsPaused)
+            {
+                _logger.LogDebug("Block tap suppressed by paused");
+            }
+            else
+            {
+                var hotkeyEvent = new HotkeyEvent(HotkeyEventType.Block, DateTimeOffset.Now, duration, false);
+                HotkeyFired?.Invoke(this, hotkeyEvent);
+                _logger.LogDebug("Block tap fired duration {Duration}ms", duration.TotalMilliseconds);
+            }
+        }
+
+        lock (_holdLock)
+        {
+            _blockDownTimestamp = null;
+            _holdStarted = false;
         }
     }
 }
