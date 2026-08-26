@@ -1,8 +1,10 @@
+using System.Windows.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Geometry;
 using QuickTranslate.Core.Options;
+using QuickTranslate.Core.Ocr;
 using QuickTranslate.Core.Selection;
 using QuickTranslate.Core.Translation;
 using QuickTranslate.Infrastructure.Coordination;
@@ -35,11 +37,27 @@ public class BlockInteractionCoordinator : IDisposable
     private readonly IOptions<AppSettings> _settings;
     private readonly ILogger<BlockInteractionCoordinator> _logger;
     private readonly IEscHook _escHook;
+    private readonly ISelectedTextProbe? _selectedTextProbe;
+    private readonly IHotkeyBroker? _hotkeyBroker;
 
     private volatile OperationSlot? _current;
     private readonly object _stateLock = new();
     private bool _disposed;
     private bool _started;
+
+    // Dragging state machine (Task2: hold 400ms enters dragging, 16ms poll cursor Y to expand UnionBox)
+    private DispatcherTimer? _dragTimer;
+    private PhysicalPoint _anchorPoint;
+    private OcrLayoutResult? _dragOcr;
+    private PhysicalRect _dragInitialUnion;
+    private PhysicalRect _lastExpandedUnion;
+    private MonitorId _dragMonitorId;
+    private uint _dragDpiX = 96;
+    private uint _dragDpiY = 96;
+    private bool _isDragging;
+    private BlockSelectionResult? _dragBlock;
+    private long _dragOverlayShownAt;
+    private readonly object _dragLock = new();
 
     // 翻译前让区域选定框至少可见的时长（毫秒）：瞬时翻译时避免框一闪而过
     private const int SelectionHoldMs = 250;
@@ -64,7 +82,9 @@ public class BlockInteractionCoordinator : IDisposable
         IOptions<AppSettings> settings,
         ILogger<BlockInteractionCoordinator> logger,
         IEscHook escHook,
-        IStatusIndicatorService? statusIndicator = null)
+        IStatusIndicatorService? statusIndicator = null,
+        ISelectedTextProbe? selectedTextProbe = null,
+        IHotkeyBroker? hotkeyBroker = null)
     {
         _cursorService = cursorService;
         _monitorService = monitorService;
@@ -77,12 +97,389 @@ public class BlockInteractionCoordinator : IDisposable
         _logger = logger;
         _escHook = escHook;
 
+        _selectedTextProbe = selectedTextProbe;
+        _hotkeyBroker = hotkeyBroker;
         _escHook.EscPressed += OnEscPressed;
+        if (_hotkeyBroker != null)
+        {
+            _hotkeyBroker.BlockHoldStateChanged += OnBlockHoldStateChanged;
+        }
     }
 
     private void OnEscPressed(object? sender, EventArgs e)
     {
+        StopDragging();
         TryCancelAndClear(returnIdle: true);
+    }
+
+    // === Dragging state machine (Task2) ===
+
+    public static PhysicalRect ExpandSelectedLines(IReadOnlyList<OcrLine> lines, int anchorY, int dragY)
+    {
+        if (lines.Count == 0) return PhysicalRect.Empty;
+        var anchorLine = FindAnchorLine(lines, anchorY);
+        if (anchorLine == null) return PhysicalRect.Empty;
+        if (dragY <= anchorY)
+        {
+            return anchorLine.Box;
+        }
+        var anchorTop = anchorLine.Box.Top;
+        var selected = new List<OcrLine>();
+        foreach (var line in lines)
+        {
+            if (line.Box.Top < anchorTop) continue;
+            if (line.Box.Top <= dragY)
+            {
+                selected.Add(line);
+            }
+        }
+        if (selected.Count == 0) return anchorLine.Box;
+        return UnionRect(selected);
+    }
+
+    private static OcrLine? FindAnchorLine(IReadOnlyList<OcrLine> lines, int anchorY)
+    {
+        foreach (var line in lines)
+        {
+            if (anchorY >= line.Box.Top && anchorY < line.Box.Bottom)
+                return line;
+        }
+        // nearest by distance to rect
+        double best = double.MaxValue;
+        OcrLine? bestLine = null;
+        var pt = new PhysicalPoint(0, anchorY);
+        foreach (var line in lines)
+        {
+            double d = DistanceToRect(pt, line.Box);
+            if (d < best)
+            {
+                best = d;
+                bestLine = line;
+            }
+        }
+        return bestLine;
+    }
+
+    private static PhysicalRect UnionRect(IEnumerable<OcrLine> lines)
+    {
+        int minX = int.MaxValue, minY = int.MaxValue, maxR = int.MinValue, maxB = int.MinValue;
+        bool any = false;
+        foreach (var l in lines)
+        {
+            any = true;
+            if (l.Box.X < minX) minX = l.Box.X;
+            if (l.Box.Y < minY) minY = l.Box.Y;
+            if (l.Box.Right > maxR) maxR = l.Box.Right;
+            if (l.Box.Bottom > maxB) maxB = l.Box.Bottom;
+        }
+        if (!any) return PhysicalRect.Empty;
+        return new PhysicalRect(minX, minY, maxR - minX, maxB - minY);
+    }
+
+    private static double DistanceToRect(PhysicalPoint p, PhysicalRect box)
+    {
+        int dx = 0;
+        if (p.X < box.Left) dx = box.Left - p.X;
+        else if (p.X >= box.Right) dx = p.X - (box.Right - 1);
+        int dy = 0;
+        if (p.Y < box.Top) dy = box.Top - p.Y;
+        else if (p.Y >= box.Bottom) dy = p.Y - (box.Bottom - 1);
+        return Math.Sqrt(dx * dx + dy * dy);
+    }
+
+    private void OnBlockHoldStateChanged(object? sender, HotkeyHoldEventArgs e)
+    {
+        if (e.Phase == HotkeyHoldPhase.Start)
+        {
+            HandleHoldStart();
+        }
+        else if (e.Phase == HotkeyHoldPhase.End)
+        {
+            HandleHoldEnd();
+        }
+    }
+
+    private void HandleHoldStart()
+    {
+        if (_disposed) return;
+        var anchor = _cursorService.GetPhysicalCursorPos(out var monitorId);
+        var monitorInfo = _monitorService.TryGetMonitorFromPoint(anchor) ?? _monitorService.TryGetPrimary();
+        if (monitorInfo != null)
+        {
+            _dragMonitorId = monitorInfo.Id;
+            _dragDpiX = monitorInfo.DpiX;
+            _dragDpiY = monitorInfo.DpiY;
+        }
+        else
+        {
+            _dragMonitorId = monitorId;
+            _dragDpiX = 96;
+            _dragDpiY = 96;
+        }
+
+        lock (_dragLock)
+        {
+            _anchorPoint = anchor;
+            // If we have a last block/ocr from pipeline, reuse it; otherwise need to wait for pipeline
+            if (_dragOcr != null && _dragOcr.Lines.Count > 0)
+            {
+                // Initialize dragging with existing OCR
+                _lastExpandedUnion = ExpandSelectedLines(_dragOcr.Lines, _anchorPoint.Y, _anchorPoint.Y);
+                if (_lastExpandedUnion.IsEmpty)
+                    _lastExpandedUnion = _dragInitialUnion;
+            }
+            else if (_dragInitialUnion.IsEmpty == false)
+            {
+                _lastExpandedUnion = _dragInitialUnion;
+            }
+            else
+            {
+                // Fallback: small box around anchor
+                _lastExpandedUnion = new PhysicalRect(anchor.X - 20, anchor.Y - 10, 40, 20);
+            }
+            _isDragging = true;
+        }
+
+        // Show initial preview (dragging state, no scan)
+        var initialUnion = _lastExpandedUnion;
+        _overlayService.Show(initialUnion, _dragMonitorId, _dragDpiX, _dragDpiY, preview: true);
+        _dragOverlayShownAt = Environment.TickCount64;
+
+        // If pipeline hasn't produced OCR yet, trigger it async in background
+        if (_dragOcr == null)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await RunBlockPipelineForDragAsync(anchor, _dragMonitorId, _dragDpiX, _dragDpiY).ConfigureAwait(false);
+                }
+                catch { }
+            });
+        }
+
+        StartDragTimer();
+        _logger.LogDebug("Block hold started at {Anchor}, dragging preview", anchor);
+    }
+
+    private async Task RunBlockPipelineForDragAsync(PhysicalPoint anchor, MonitorId mid, uint dpiX, uint dpiY)
+    {
+        if (_disposed || !_isDragging) return;
+        var slot = _current;
+        if (slot == null)
+        {
+            slot = new OperationSlot(Guid.NewGuid(), new CancellationTokenSource(), AppState.Capturing);
+            var old = Interlocked.Exchange(ref _current, slot);
+            old?.Cts.Cancel();
+            old?.Cts.Dispose();
+            SetState(slot, AppState.Capturing);
+        }
+        try
+        {
+            var (ocr, block, _) = await _retryCoordinator.SelectBlockWithRetryAsync(anchor, mid, dpiX, dpiY, slot.Cts.Token).ConfigureAwait(false);
+            if (IsStaleOrCanceled(slot) || !_isDragging) return;
+            lock (_dragLock)
+            {
+                _dragOcr = ocr;
+                _dragBlock = block;
+                _dragInitialUnion = block.UnionBox;
+                _lastExpandedUnion = block.UnionBox;
+            }
+            _overlayService.Show(block.UnionBox, mid, dpiX, dpiY, preview: true);
+            _dragOverlayShownAt = Environment.TickCount64;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Drag pipeline failed");
+        }
+    }
+
+    private void HandleHoldEnd()
+    {
+        if (!_isDragging) return;
+        StopDragTimer();
+        PhysicalRect finalUnion;
+        BlockSelectionResult? blockToTranslate;
+        lock (_dragLock)
+        {
+            finalUnion = _lastExpandedUnion;
+            _isDragging = false;
+            // Build expanded block from dragOcr lines
+            if (_dragOcr != null && _dragOcr.Lines.Count > 0)
+            {
+                var expandedBox = finalUnion;
+                var expandedLines = new List<OcrLine>();
+                // Re-derive which lines contributed to union (geometric filter)
+                // Use same logic as ExpandSelectedLines but collect lines
+                var anchorLine = FindAnchorLine(_dragOcr.Lines, _anchorPoint.Y);
+                if (anchorLine != null)
+                {
+                    int anchorTop = anchorLine.Box.Top;
+                    int curY = _cursorService.GetPhysicalCursorPos(out _).Y;
+                    // Use lastExpandedUnion's bottom as dragY approximation if cursor hasn't moved far
+                    int dragY = Math.Max(curY, expandedBox.Bottom);
+                    int snap = anchorLine.Box.Height / 2;
+                    foreach (var line in _dragOcr.Lines)
+                    {
+                        if (line.Box.Top < anchorTop) continue;
+                        if (line.Box.Top <= dragY + snap) // includes last line
+                            expandedLines.Add(line);
+                        else if (expandedLines.Count > 0 && line.Box.Top <= expandedBox.Bottom + 5)
+                            expandedLines.Add(line);
+                    }
+                    // Ensure union matches finalUnion: if expandedLines union != finalUnion, trust finalUnion
+                    if (expandedLines.Count == 0 && _dragBlock != null)
+                        expandedLines.AddRange(_dragBlock.SelectedLines);
+                    var text = string.Join("\n", expandedLines.Select(l => l.Text));
+                    var opId = _current?.Id ?? Guid.NewGuid();
+                    blockToTranslate = new BlockSelectionResult(text, expandedBox, expandedLines.AsReadOnly(), SelectionKind.Block, opId, NoBlockFound: false);
+                }
+                else
+                {
+                    blockToTranslate = _dragBlock;
+                }
+            }
+            else
+            {
+                blockToTranslate = _dragBlock;
+            }
+        }
+
+        if (blockToTranslate == null)
+        {
+            // Fallback to current slot's block if available, or just hide
+            _overlayService.HideAll();
+            _statusIndicator?.Hide();
+            SetState(null, AppState.Idle);
+            return;
+        }
+
+        // Switch to solid scan + translation
+        _overlayService.Show(finalUnion, _dragMonitorId, _dragDpiX, _dragDpiY, preview: false);
+        var currentSlot = _current;
+        if (currentSlot == null)
+        {
+            currentSlot = new OperationSlot(Guid.NewGuid(), new CancellationTokenSource(), AppState.OverlayVisible);
+            var old = Interlocked.Exchange(ref _current, currentSlot);
+            old?.Cts.Cancel();
+            old?.Cts.Dispose();
+        }
+        SetState(currentSlot, AppState.OverlayVisible);
+        _ = TranslateAndDisplayBlockAsync(currentSlot, blockToTranslate, _dragMonitorId, _dragDpiX, _dragDpiY, _dragOverlayShownAt, skipHold: false);
+        _logger.LogDebug("Block hold ended, final union {Box}, translating", finalUnion);
+    }
+
+    private void StartDragTimer()
+    {
+        StopDragTimer();
+        try
+        {
+            var timer = new DispatcherTimer(DispatcherPriority.Normal);
+            timer.Interval = TimeSpan.FromMilliseconds(16);
+            timer.Tick += OnDragTick;
+            _dragTimer = timer;
+            timer.Start();
+        }
+        catch
+        {
+            // Fallback for non-WPF thread (tests): no timer, manual ticks only
+            _dragTimer = null;
+        }
+    }
+
+    private void StopDragTimer()
+    {
+        var t = _dragTimer;
+        if (t != null)
+        {
+            try { t.Stop(); } catch { }
+            try { t.Tick -= OnDragTick; } catch { }
+            _dragTimer = null;
+        }
+    }
+
+    private void StopDragging()
+    {
+        lock (_dragLock)
+        {
+            _isDragging = false;
+        }
+        StopDragTimer();
+    }
+
+    private void OnDragTick(object? sender, EventArgs e)
+    {
+        TriggerDragTickForTest();
+    }
+
+    // Test helpers
+    internal void SetDragStateForTest(OcrLayoutResult ocr, PhysicalPoint anchor, PhysicalRect initialUnion, MonitorId mid, uint dpiX, uint dpiY)
+    {
+        lock (_dragLock)
+        {
+            _dragOcr = ocr;
+            _dragInitialUnion = initialUnion;
+            _lastExpandedUnion = initialUnion;
+            _anchorPoint = anchor;
+            _dragMonitorId = mid;
+            _dragDpiX = dpiX;
+            _dragDpiY = dpiY;
+            _isDragging = false;
+            _dragBlock = new BlockSelectionResult(string.Join("\n", ocr.Lines.Select(l => l.Text)), initialUnion, ocr.Lines, SelectionKind.Block, Guid.NewGuid(), false);
+        }
+    }
+
+    internal void HandleHoldStartForTest(PhysicalPoint anchor)
+    {
+        _anchorPoint = anchor;
+        lock (_dragLock)
+        {
+            _isDragging = true;
+            if (_dragOcr != null)
+            {
+                _lastExpandedUnion = ExpandSelectedLines(_dragOcr.Lines, anchor.Y, anchor.Y);
+                if (_lastExpandedUnion.IsEmpty) _lastExpandedUnion = _dragInitialUnion;
+            }
+            else
+            {
+                _lastExpandedUnion = _dragInitialUnion;
+            }
+        }
+        _overlayService.Show(_lastExpandedUnion, _dragMonitorId, _dragDpiX, _dragDpiY, preview: true);
+        _dragOverlayShownAt = Environment.TickCount64;
+        StartDragTimer();
+    }
+
+    internal void TriggerDragTickForTest()
+    {
+        if (!_isDragging || _dragOcr == null) return;
+        var cur = _cursorService.GetPhysicalCursorPos(out var mid);
+        // Update monitor/dpi if moved to different monitor
+        var mi = _monitorService.TryGetMonitorFromPoint(cur);
+        if (mi != null)
+        {
+            _dragMonitorId = mi.Id;
+            _dragDpiX = mi.DpiX;
+            _dragDpiY = mi.DpiY;
+        }
+        else
+        {
+            _dragMonitorId = mid;
+        }
+        if (cur.Y <= _anchorPoint.Y) return;
+        var expanded = ExpandSelectedLines(_dragOcr.Lines, _anchorPoint.Y, cur.Y);
+        if (expanded.IsEmpty) return;
+        PhysicalRect last;
+        lock (_dragLock) { last = _lastExpandedUnion; }
+        if (expanded.Equals(last)) return;
+        lock (_dragLock) { _lastExpandedUnion = expanded; }
+        if (IsStaleOrCanceled(_current ?? new OperationSlot(Guid.Empty, new CancellationTokenSource(), AppState.Idle)) && _current != null)
+        {
+            // still allow preview update even if slot stale? Check IsStale but preview should still show
+        }
+        _overlayService.Show(expanded, _dragMonitorId, _dragDpiX, _dragDpiY, preview: true);
+        _logger.LogDebug("Drag tick expanded to {Box}", expanded);
     }
 
     public void Start()
@@ -95,6 +492,7 @@ public class BlockInteractionCoordinator : IDisposable
     public void Stop()
     {
         if (!_started || _disposed) return;
+        StopDragging();
         TryCancelAndClear(returnIdle: true);
         _started = false;
         _logger.LogDebug("BlockInteractionCoordinator stopped");
@@ -106,6 +504,11 @@ public class BlockInteractionCoordinator : IDisposable
         _disposed = true;
 
         _escHook.EscPressed -= OnEscPressed;
+        if (_hotkeyBroker != null)
+        {
+            _hotkeyBroker.BlockHoldStateChanged -= OnBlockHoldStateChanged;
+        }
+        StopDragging();
 
         var old = Interlocked.Exchange(ref _current, null);
         if (old != null)
@@ -117,6 +520,65 @@ public class BlockInteractionCoordinator : IDisposable
         _overlayService.HideAll();
         _statusIndicator?.Hide();
         _popupService.HideAll();
+    }
+
+    private async Task<BlockSelectionResult?> TryProbeBlockAsync(OperationSlot slot, PhysicalPoint cursor)
+    {
+        if (!_settings.Value.EnableSelectedTextProbe || _selectedTextProbe is null) return null;
+        try
+        {
+            var result = await _selectedTextProbe.ProbeAsync(cursor, slot.Cts.Token).ConfigureAwait(false);
+            if (result is null) return null;
+            var text = SelectedTextProbePolicy.Normalize(result.Text);
+            if (!SelectedTextProbePolicy.IsAdoptable(text, SelectedTextProbePolicy.BlockModeMaxChars)) return null;
+            // 空间相关性校验：残留旧选区远离光标时拒绝，回退截屏/OCR
+            if (!SelectedTextProbePolicy.IsSpatiallyRelevant(result.LineRects, result.UnionBox, cursor, wordMode: false))
+            {
+                _logger.LogDebug("[Probe] Selection not near cursor, fall back to OCR");
+                return null;
+            }
+            return new BlockSelectionResult(text, result.UnionBox, new List<OcrLine>().AsReadOnly(), SelectionKind.Block, slot.Id, NoBlockFound: false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SelectedText probe failed, fallback to OCR");
+            return null;
+        }
+    }
+
+    private async Task TranslateAndDisplayBlockAsync(OperationSlot slot, BlockSelectionResult block, MonitorId mid, uint dpiX, uint dpiY, long overlayShownAt, bool skipHold)
+    {
+        if (IsStaleOrCanceled(slot)) return;
+        SetState(slot, AppState.Translating);
+        _statusIndicator?.Update("正在翻译…");
+        var translation = await _translationRouter.TranslateBlockAsync(block.BlockText!, _settings.Value.TargetLanguage, slot.Cts.Token).ConfigureAwait(false);
+        if (IsStaleOrCanceled(slot)) return;
+        if (!skipHold)
+        {
+            long elapsed = Environment.TickCount64 - overlayShownAt;
+            int remaining = SelectionHoldMs - (int)elapsed;
+            if (remaining > 0)
+            {
+                try
+                {
+                    await Task.Delay(remaining, slot.Cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                if (IsStaleOrCanceled(slot)) return;
+            }
+        }
+        SetState(slot, AppState.Displaying);
+        _statusIndicator?.Hide();
+        _popupService.Show(block, translation, mid, block.UnionBox, dpiX, dpiY);
+        _popupService.MarkStreamCompleted();
+        ScheduleSelectionAutoHide(slot);
     }
 
     private void SetState(OperationSlot? slot, AppState s)
@@ -166,6 +628,7 @@ public class BlockInteractionCoordinator : IDisposable
 
     public void TryCancelAndClear(bool returnIdle)
     {
+        StopDragging();
         var old = Interlocked.Exchange(ref _current, null);
         if (old != null)
         {
@@ -227,10 +690,39 @@ public class BlockInteractionCoordinator : IDisposable
 
         try
         {
+            // 选中文本预探测放在截屏之前：若用户已显式选中文本（浏览器/编辑器等支持 UIA 的场景），
+            // 可直接取段落文本跳过截屏/OCR/选择与多轮重试，显著降低延迟与识别误差。
+            var probeBlock = await TryProbeBlockAsync(newSlot, anchor).ConfigureAwait(false);
+            if (probeBlock != null)
+            {
+                if (IsStaleOrCanceled(newSlot)) return;
+                unionBox = probeBlock.UnionBox;
+                SetState(newSlot, AppState.OverlayVisible);
+                _overlayService.Show(probeBlock.UnionBox, mid, dpiX, dpiY);
+                long overlayShownAtProbe = Environment.TickCount64;
+                if (IsStaleOrCanceled(newSlot)) return;
+                await TranslateAndDisplayBlockAsync(newSlot, probeBlock, mid, dpiX, dpiY, overlayShownAtProbe, skipHold: true).ConfigureAwait(false);
+                return;
+            }
+            if (IsStaleOrCanceled(newSlot)) return;
+
             var (ocr, block, captures) = await _retryCoordinator.SelectBlockWithRetryAsync(
                 anchor, mid, dpiX, dpiY, newSlot.Cts.Token).ConfigureAwait(false);
 
             if (IsStaleOrCanceled(newSlot)) return;
+
+            // Store for potential drag expansion (Task2: hold-drag uses already OCRed lines)
+            lock (_dragLock)
+            {
+                _dragOcr = ocr;
+                _dragBlock = block;
+                _dragInitialUnion = block.UnionBox;
+                _lastExpandedUnion = block.UnionBox;
+                _anchorPoint = anchor;
+                _dragMonitorId = mid;
+                _dragDpiX = dpiX;
+                _dragDpiY = dpiY;
+            }
 
             SetState(newSlot, AppState.Selecting);
             SetState(newSlot, AppState.OverlayVisible);
@@ -270,34 +762,7 @@ public class BlockInteractionCoordinator : IDisposable
 
             if (IsStaleOrCanceled(newSlot)) return;
 
-            SetState(newSlot, AppState.Translating);
-            _statusIndicator?.Update("正在翻译…");
-            var translation = await _translationRouter.TranslateBlockAsync(
-                block.BlockText!, _settings.Value.TargetLanguage, newSlot.Cts.Token).ConfigureAwait(false);
-
-            if (IsStaleOrCanceled(newSlot)) return;
-
-            // 保证区域选定框至少可见 SelectionHoldMs，让用户先看清翻译范围再弹结果
-            long elapsed = Environment.TickCount64 - overlayShownAt;
-            int remaining = SelectionHoldMs - (int)elapsed;
-            if (remaining > 0)
-            {
-                try
-                {
-                    await Task.Delay(remaining, newSlot.Cts.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    return;
-                }
-                if (IsStaleOrCanceled(newSlot)) return;
-            }
-
-            SetState(newSlot, AppState.Displaying);
-            _statusIndicator?.Hide();
-            _popupService.Show(block, translation, mid, block.UnionBox, dpiX, dpiY);
-            // 自动隐藏从 Popup 出现时开始计时，与 Word 模式策略一致
-            ScheduleSelectionAutoHide(newSlot);
+            await TranslateAndDisplayBlockAsync(newSlot, block, mid, dpiX, dpiY, overlayShownAt, skipHold: false).ConfigureAwait(false);
         }
         catch (TranslationException te)
         {
