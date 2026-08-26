@@ -2,6 +2,7 @@ using System.Windows.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using QuickTranslate.Core.Abstractions;
+using QuickTranslate.Core.Capture;
 using QuickTranslate.Core.Geometry;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Core.Ocr;
@@ -45,7 +46,7 @@ public class BlockInteractionCoordinator : IDisposable
     private bool _disposed;
     private bool _started;
 
-    // Dragging state machine (Task2: hold 400ms enters dragging, 16ms poll cursor Y to expand UnionBox)
+    // Dragging state machine (Task2+Task3/4: hold 400ms enters dragging, 16ms poll cursor Y to expand UnionBox)
     private DispatcherTimer? _dragTimer;
     private PhysicalPoint _anchorPoint;
     private OcrLayoutResult? _dragOcr;
@@ -58,6 +59,9 @@ public class BlockInteractionCoordinator : IDisposable
     private BlockSelectionResult? _dragBlock;
     private long _dragOverlayShownAt;
     private readonly object _dragLock = new();
+    private PhysicalRect _dragCaptureRegion;
+    private bool _hasExpandedCapture;
+    private ScreenFrame? _dragFrame;
 
     // 翻译前让区域选定框至少可见的时长（毫秒）：瞬时翻译时避免框一闪而过
     private const int SelectionHoldMs = 250;
@@ -220,6 +224,7 @@ public class BlockInteractionCoordinator : IDisposable
         lock (_dragLock)
         {
             _anchorPoint = anchor;
+            _hasExpandedCapture = false;
             // If we have a last block/ocr from pipeline, reuse it; otherwise need to wait for pipeline
             if (_dragOcr != null && _dragOcr.Lines.Count > 0)
             {
@@ -284,6 +289,7 @@ public class BlockInteractionCoordinator : IDisposable
                 _dragBlock = block;
                 _dragInitialUnion = block.UnionBox;
                 _lastExpandedUnion = block.UnionBox;
+                _dragCaptureRegion = ocr.CaptureRegion;
             }
             _overlayService.Show(block.UnionBox, mid, dpiX, dpiY, preview: true);
             _dragOverlayShownAt = Environment.TickCount64;
@@ -406,6 +412,11 @@ public class BlockInteractionCoordinator : IDisposable
             _isDragging = false;
         }
         StopDragTimer();
+        if (_dragFrame != null)
+        {
+            ((IDisposable)_dragFrame).Dispose();
+            _dragFrame = null;
+        }
     }
 
     private void OnDragTick(object? sender, EventArgs e)
@@ -426,8 +437,26 @@ public class BlockInteractionCoordinator : IDisposable
             _dragDpiX = dpiX;
             _dragDpiY = dpiY;
             _isDragging = false;
+            _hasExpandedCapture = false;
+            _dragCaptureRegion = ocr.CaptureRegion;
             _dragBlock = new BlockSelectionResult(string.Join("\n", ocr.Lines.Select(l => l.Text)), initialUnion, ocr.Lines, SelectionKind.Block, Guid.NewGuid(), false);
         }
+    }
+
+    internal void SetDragFrameForTest(ScreenFrame frame)
+    {
+        if (_dragFrame != null) ((IDisposable)_dragFrame).Dispose();
+        _dragFrame = frame;
+        lock (_dragLock)
+        {
+            _dragCaptureRegion = frame.Region;
+            _hasExpandedCapture = false;
+        }
+    }
+
+    internal void HandleHoldEndForTest()
+    {
+        HandleHoldEnd();
     }
 
     internal void HandleHoldStartForTest(PhysicalPoint anchor)
@@ -436,6 +465,7 @@ public class BlockInteractionCoordinator : IDisposable
         lock (_dragLock)
         {
             _isDragging = true;
+            _hasExpandedCapture = false;
             if (_dragOcr != null)
             {
                 _lastExpandedUnion = ExpandSelectedLines(_dragOcr.Lines, anchor.Y, anchor.Y);
@@ -449,6 +479,11 @@ public class BlockInteractionCoordinator : IDisposable
         _overlayService.Show(_lastExpandedUnion, _dragMonitorId, _dragDpiX, _dragDpiY, preview: true);
         _dragOverlayShownAt = Environment.TickCount64;
         StartDragTimer();
+    }
+
+    private static PhysicalRect MakeBand(PhysicalPoint anchor, int halfHeight)
+    {
+        return new PhysicalRect(anchor.X - 1, anchor.Y - halfHeight, 2, halfHeight * 2);
     }
 
     internal void TriggerDragTickForTest()
@@ -472,14 +507,47 @@ public class BlockInteractionCoordinator : IDisposable
         if (expanded.IsEmpty) return;
         PhysicalRect last;
         lock (_dragLock) { last = _lastExpandedUnion; }
-        if (expanded.Equals(last)) return;
-        lock (_dragLock) { _lastExpandedUnion = expanded; }
-        if (IsStaleOrCanceled(_current ?? new OperationSlot(Guid.Empty, new CancellationTokenSource(), AppState.Idle)) && _current != null)
+        bool changed = !expanded.Equals(last);
+        if (changed)
         {
-            // still allow preview update even if slot stale? Check IsStale but preview should still show
+            lock (_dragLock) { _lastExpandedUnion = expanded; }
+            // Task3: subsequent ticks use Update keeping preview mode, not Show (avoids re-creating window attributes and replaying entry animation)
+            _overlayService.Update(expanded, _dragMonitorId, _dragDpiX, _dragDpiY);
+            _logger.LogDebug("Drag tick expanded to {Box}", expanded);
         }
-        _overlayService.Show(expanded, _dragMonitorId, _dragDpiX, _dragDpiY, preview: true);
-        _logger.LogDebug("Drag tick expanded to {Box}", expanded);
+
+        // Task4: capture expansion to 1600x1200 once when drag exceeds initial frame bottom
+        if (!_hasExpandedCapture && !_dragCaptureRegion.IsEmpty && cur.Y > _dragCaptureRegion.Bottom - 20 && _dragCaptureRegion.Width < 1600)
+        {
+            _hasExpandedCapture = true;
+            try
+            {
+                var newSize = new PhysicalSize(1600, 1200);
+                var frame = _retryCoordinator.Capture.CaptureAroundAsync(_anchorPoint, newSize).GetAwaiter().GetResult();
+                var newFrameRegion = frame.Region;
+                // use large band to include new area: half 600 covers 1200 height
+                var band = MakeBand(_anchorPoint, 600);
+                var newOcr = _retryCoordinator.Ocr.RecognizeAsync(frame, band).GetAwaiter().GetResult();
+                ((IDisposable)frame).Dispose();
+                lock (_dragLock)
+                {
+                    _dragOcr = newOcr;
+                    _dragCaptureRegion = newOcr.CaptureRegion.IsEmpty ? newFrameRegion : newOcr.CaptureRegion;
+                }
+                if (_dragFrame != null) { ((IDisposable)_dragFrame).Dispose(); _dragFrame = null; }
+                // Recompute expanded after new lines available
+                var expandedAfter = ExpandSelectedLines(newOcr.Lines, _anchorPoint.Y, cur.Y);
+                if (!expandedAfter.IsEmpty && !expandedAfter.Equals(_lastExpandedUnion))
+                {
+                    lock (_dragLock) { _lastExpandedUnion = expandedAfter; }
+                    _overlayService.Update(expandedAfter, _dragMonitorId, _dragDpiX, _dragDpiY);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Drag capture expansion failed");
+            }
+        }
     }
 
     public void Start()
@@ -718,6 +786,8 @@ public class BlockInteractionCoordinator : IDisposable
                 _dragBlock = block;
                 _dragInitialUnion = block.UnionBox;
                 _lastExpandedUnion = block.UnionBox;
+                _dragCaptureRegion = ocr.CaptureRegion;
+                _hasExpandedCapture = false;
                 _anchorPoint = anchor;
                 _dragMonitorId = mid;
                 _dragDpiX = dpiX;

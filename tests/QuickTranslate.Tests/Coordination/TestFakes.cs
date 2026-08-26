@@ -100,11 +100,15 @@ public class FakeScreenCapture : IScreenCapture
     public TaskCompletionSource<ScreenFrame> CaptureAroundTcs { get; set; } = new();
     public int CaptureAroundCount { get; private set; }
     public List<PhysicalSize> CaptureAroundSizes { get; } = new();
+    public Queue<ScreenFrame> QueuedFrames { get; } = new();
+    public Func<PhysicalPoint, PhysicalSize, ScreenFrame>? CaptureAroundFunc { get; set; }
 
     public Task<ScreenFrame> CaptureAroundAsync(PhysicalPoint anchor, PhysicalSize size, CancellationToken ct = default)
     {
         CaptureAroundCount++;
         CaptureAroundSizes.Add(size);
+        if (CaptureAroundFunc != null) return Task.FromResult(CaptureAroundFunc(anchor, size));
+        if (QueuedFrames.Count > 0) return Task.FromResult(QueuedFrames.Dequeue());
         return CaptureAroundTcs.Task;
     }
 
@@ -225,6 +229,7 @@ public class FakeOverlayService : ISelectionOverlayService
     public int HideCount { get; private set; }
     public int HideAllCount { get; private set; }
     public List<(PhysicalRect Box, MonitorId Monitor, uint DpiX, uint DpiY, bool Preview)> ShowCalls { get; } = new();
+    public List<(PhysicalRect Box, MonitorId Monitor, uint DpiX, uint DpiY)> UpdateCalls { get; } = new();
 
     public void Show(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX = 96, uint dpiY = 96, bool preview = false)
     {
@@ -237,7 +242,10 @@ public class FakeOverlayService : ISelectionOverlayService
     }
 
     public void Update(PhysicalRect physicalBox, MonitorId monitorId, uint dpiX = 96, uint dpiY = 96)
-        => UpdateCount++;
+    {
+        UpdateCount++;
+        UpdateCalls.Add((physicalBox, monitorId, dpiX, dpiY));
+    }
 
     public void Hide(MonitorId monitorId) => HideCount++;
 

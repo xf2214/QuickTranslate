@@ -118,14 +118,16 @@ public class BlockDragCoordinatorTests
         coord.HandleHoldStartForTest(new PhysicalPoint(50, 110));
         cursor.CursorPos = new PhysicalPoint(50, 90); // upward
         int showBefore = overlay.ShowTotalCount;
+        int updateBefore = overlay.UpdateCount;
         coord.TriggerDragTickForTest();
         // should not have expanded
         Assert.Equal(showBefore, overlay.ShowTotalCount);
-        // drag downward should expand
+        Assert.Equal(updateBefore, overlay.UpdateCount);
+        // drag downward should expand via Update (preview mode), not Show
         cursor.CursorPos = new PhysicalPoint(50, 165);
         coord.TriggerDragTickForTest();
-        Assert.True(overlay.ShowTotalCount > showBefore);
-        var lastBox = overlay.ShowCalls.Last().Box;
+        Assert.True(overlay.UpdateCount > updateBefore);
+        var lastBox = overlay.UpdateCalls.Last().Box;
         var expected = UnionOf(lines.Take(4));
         Assert.Equal(expected, lastBox);
     }
