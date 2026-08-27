@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -19,6 +20,8 @@ public partial class WordPopupWindow : Window, IFadeOutHideable
 
     // Apple 风格配色（与 XAML 保持一致）；Freeze 后免去变更跟踪与跨线程检查开销
     private static readonly SolidColorBrush PrimaryTextBrush = Frozen(System.Windows.Media.Color.FromRgb(0x1C, 0x1C, 0x1E));
+    private static readonly SolidColorBrush SecondaryTextBrush = Frozen(System.Windows.Media.Color.FromRgb(0x8E, 0x8E, 0x93));
+    private static readonly SolidColorBrush PosBrush = Frozen(System.Windows.Media.Color.FromRgb(0x00, 0x7A, 0xFF));
     private static readonly SolidColorBrush ErrorTextBrush = Frozen(System.Windows.Media.Color.FromRgb(0xFF, 0x3B, 0x30));
     private static readonly SolidColorBrush CopiedFeedbackBrush = Frozen(System.Windows.Media.Color.FromRgb(0x34, 0xC7, 0x59));
 
@@ -39,6 +42,7 @@ public partial class WordPopupWindow : Window, IFadeOutHideable
     private ITextToSpeechService? _textToSpeech;
     private string? _speechLanguage;
     private DispatcherTimer? _copyFeedbackTimer;
+    private bool _detailed = true;
 
     public WordPopupWindow()
     {
@@ -65,6 +69,12 @@ public partial class WordPopupWindow : Window, IFadeOutHideable
         PopupAutoHide.Attach(this, TimeSpan.FromSeconds(5));
     }
 
+    public void ApplyDisplayMode(bool detailed)
+    {
+        _detailed = detailed;
+        PopupChrome.ApplyFooterMode(SpeakButton, CopyButton, DismissButton, detailed);
+    }
+
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
@@ -79,34 +89,184 @@ public partial class WordPopupWindow : Window, IFadeOutHideable
 
         ResetStyle();
 
-        WordHeader.Text = sel.Text ?? string.Empty;
-
-        // 在线翻译结果（NeedsOnline=true）与本地词典/缓存结果一样直接展示；
-        // 早期 M5 阶段曾在此显示占位文本，导致在线译文被吞掉、看起来像未接入在线 API。
-        // 词典 TargetText 含字面量 \n 与 "[音标]  " 前缀，显示前统一格式化（不改缓存内容）。
+        // _displayText 始终是 ForWord 的原始格式化输出（供复制/TTS 使用，不随富文本样式改变）
         _displayText = TranslationDisplayFormatter.ForWord(trans.TargetText, trans.FromDictionary);
-        TranslationText.Text = _displayText;
 
-        DictionaryBadge.Visibility = trans.FromDictionary ? Visibility.Visible : Visibility.Hidden;
-        CacheBadge.Visibility = trans.FromCache ? Visibility.Visible : Visibility.Hidden;
+        if (trans.FromDictionary)
+        {
+            // 词典命中：用结构化视图做富文本渲染，头行合并音标，正文按行着色
+            var view = DictionaryStructuredView.Parse(trans.TargetText);
+            RenderWordHeader(sel.Text ?? string.Empty, view.Phonetic);
+            RenderDictionaryBody(view);
+        }
+        else
+        {
+            // 非词典：保持原有纯文本呈现（单一前景色），避免样式残留
+            RenderPlainHeader(sel.Text ?? string.Empty);
+            RenderPlainBody(_displayText);
+        }
+
+        if (_detailed)
+        {
+            MetaRow.Visibility = Visibility.Visible;
+            if (trans.FromDictionary)
+            {
+                PopupChrome.SetMeta(MetaDot, MetaText, PopupChrome.SuccessGreen, "词典");
+            }
+            else if (trans.FromCache)
+            {
+                PopupChrome.SetMeta(MetaDot, MetaText, PopupChrome.AccentBlue, "缓存");
+            }
+            else
+            {
+                PopupChrome.SetMeta(MetaDot, MetaText, PopupChrome.SecondaryText, "在线");
+            }
+        }
+        else
+        {
+            MetaRow.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    // 头部：单词(18px Bold #1C1C1E) + 音标(13px Regular #8E8E93，斜杠包裹，去括号)
+    private void RenderWordHeader(string word, string? phonetic)
+    {
+        WordHeader.Inlines.Clear();
+        // 先清空 Text 属性，避免 Inlines 与 Text 互斥导致的残留
+        WordHeader.Text = string.Empty;
+        WordHeader.Inlines.Add(new Run(word)
+        {
+            FontSize = 18,
+            FontWeight = FontWeights.Bold,
+            Foreground = PrimaryTextBrush,
+        });
+        if (!string.IsNullOrWhiteSpace(phonetic))
+        {
+            WordHeader.Inlines.Add(new Run("  /" + phonetic + "/")
+            {
+                FontSize = 13,
+                FontWeight = FontWeights.Normal,
+                Foreground = SecondaryTextBrush,
+            });
+        }
+    }
+
+    private void RenderPlainHeader(string word)
+    {
+        WordHeader.Inlines.Clear();
+        WordHeader.Text = word;
+    }
+
+    private void RenderPlainBody(string text)
+    {
+        TranslationText.Inlines.Clear();
+        TranslationText.Text = text;
+        TranslationText.Foreground = PrimaryTextBrush;
+    }
+
+    // 正文：每行按 序号(11px #8E8E93) + 词性(13px SemiBold #007AFF) + 领域标签(13px #8E8E93) + 释义(14px #1C1C1E)
+    private void RenderDictionaryBody(DictionaryStructuredView view)
+    {
+        TranslationText.Inlines.Clear();
+        TranslationText.Text = string.Empty;
+        TranslationText.Foreground = PrimaryTextBrush;
+
+        if (view.Lines.Count == 0) return;
+
+        bool shouldNumber = view.ShouldNumberLines;
+        int number = 1;
+        for (int i = 0; i < view.Lines.Count; i++)
+        {
+            var line = view.Lines[i];
+            if (i > 0) TranslationText.Inlines.Add(new LineBreak());
+
+            if (line.IsTruncationMarker)
+            {
+                // 截断省略号：灰色，与序号同色，保持紧凑
+                TranslationText.Inlines.Add(new Run(line.Body)
+                {
+                    FontSize = 14,
+                    Foreground = SecondaryTextBrush,
+                });
+                continue;
+            }
+
+            if (shouldNumber)
+            {
+                TranslationText.Inlines.Add(new Run($"{number}. ")
+                {
+                    FontSize = 11,
+                    Foreground = SecondaryTextBrush,
+                });
+                number++;
+            }
+
+            if (!string.IsNullOrEmpty(line.PosTag))
+            {
+                TranslationText.Inlines.Add(new Run(line.PosTag + " ")
+                {
+                    FontSize = 13,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = PosBrush,
+                });
+            }
+
+            if (!string.IsNullOrEmpty(line.DomainTag))
+            {
+                TranslationText.Inlines.Add(new Run(line.DomainTag)
+                {
+                    FontSize = 13,
+                    Foreground = SecondaryTextBrush,
+                });
+                if (!string.IsNullOrEmpty(line.Body))
+                {
+                    TranslationText.Inlines.Add(new Run(" ")
+                    {
+                        FontSize = 14,
+                        Foreground = PrimaryTextBrush,
+                    });
+                }
+            }
+
+            if (!string.IsNullOrEmpty(line.Body))
+            {
+                // 领域标签已处理空格，此处直接追加剩余正文
+                TranslationText.Inlines.Add(new Run(line.Body)
+                {
+                    FontSize = 14,
+                    Foreground = PrimaryTextBrush,
+                });
+            }
+        }
     }
 
     public void ShowError(string shortMessage)
     {
-        TranslationText.Text = "";
+        // 清理富文本残留，避免复用时旧 Inlines 串色
+        WordHeader.Inlines.Clear();
+        WordHeader.Text = string.Empty;
+        TranslationText.Inlines.Clear();
+        TranslationText.Text = string.Empty;
         TranslationText.Foreground = ErrorTextBrush;
         TranslationText.Text = shortMessage;
         WordHeader.Visibility = Visibility.Collapsed;
-        DictionaryBadge.Visibility = Visibility.Collapsed;
-        CacheBadge.Visibility = Visibility.Collapsed;
+        MetaRow.Visibility = Visibility.Collapsed;
     }
 
     public void ResetStyle()
     {
+        // 清理上一次富文本的 Inlines 与颜色，避免复用窗口时样式串台（窗口实例跨多次 Show 复用）
+        WordHeader.Inlines.Clear();
+        WordHeader.Text = string.Empty;
+        TranslationText.Inlines.Clear();
+        TranslationText.Text = string.Empty;
         TranslationText.Foreground = PrimaryTextBrush;
         WordHeader.Visibility = Visibility.Visible;
-        DictionaryBadge.Visibility = Visibility.Hidden;
-        CacheBadge.Visibility = Visibility.Hidden;
+        MetaRow.Visibility = Visibility.Collapsed;
+        // 重置复制反馈，避免复用时绿色/已复制状态串台
+        _copyFeedbackTimer?.Stop();
+        PopupChrome.ApplyCopyFeedback(CopyButton, _detailed, false);
+        PlayFeedbackFade(CopyButton);
     }
 
     /// <summary>带淡出退场的隐藏（自动隐藏/服务收起链路统一入口）。</summary>
@@ -161,21 +321,19 @@ public partial class WordPopupWindow : Window, IFadeOutHideable
         }
     }
 
-    /// <summary>复制成功微反馈：按钮变绿勾 1.2 秒后还原，内容切换带 100ms 淡入。</summary>
+    /// <summary>复制成功微反馈：详细模式按钮文字变「已复制 ✓」，简洁模式图标变绿色对勾，1.2 秒后还原，内容切换带 100ms 淡入。</summary>
     private void ShowCopyFeedback()
     {
         _copyFeedbackTimer?.Stop();
 
-        CopyButton.Content = "已复制 ✓";
-        CopyButton.Foreground = CopiedFeedbackBrush;
+        PopupChrome.ApplyCopyFeedback(CopyButton, _detailed, true);
         PlayFeedbackFade(CopyButton);
 
         _copyFeedbackTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.2) };
         _copyFeedbackTimer.Tick += (_, _) =>
         {
             _copyFeedbackTimer!.Stop();
-            CopyButton.Content = "复制";
-            CopyButton.ClearValue(ForegroundProperty);
+            PopupChrome.ApplyCopyFeedback(CopyButton, _detailed, false);
             PlayFeedbackFade(CopyButton);
         };
         _copyFeedbackTimer.Start();
@@ -217,6 +375,19 @@ public partial class WordPopupWindow : Window, IFadeOutHideable
         _textToSpeech = textToSpeech;
         _speechLanguage = targetLanguage;
         SpeakButton.Visibility = enabled && textToSpeech != null ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// 以当前窗口宽度对内容做无限高测量，返回真实所需内容高度（DIP）。
+    /// 服务层在 ApplyContent 之后调用：用真实测量校正估算高度，
+    /// 兜住结构化词典视图/元信息行等动态布局与静态常数的偏差（防底部按钮裁切的最终防线）。
+    /// </summary>
+    public double MeasureDesiredContentHeight()
+    {
+        double width = double.IsFinite(ActualWidth) && ActualWidth > 0 ? ActualWidth : Width;
+        RootBorder.UpdateLayout();
+        RootBorder.Measure(new System.Windows.Size(width, double.PositiveInfinity));
+        return RootBorder.DesiredSize.Height;
     }
 
     private void OnSpeakButtonClick(object sender, RoutedEventArgs e)

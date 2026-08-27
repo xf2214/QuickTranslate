@@ -38,39 +38,29 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <!-- 选中文本可能是一整句（选词最多 15 词）：标题可换行最多 3 行再省略，
-                 徽标停靠右侧不被长标题挤出；短单词时视觉效果与原来一致 -->
-            <DockPanel Grid.Row="0">
-                <StackPanel DockPanel.Dock="Right"
-                            Orientation="Horizontal"
-                            VerticalAlignment="Top"
-                            Margin="8 3 0 0">
-                    <Border x:Name="DictionaryBadge"
-                            Background="#E8F8EE"
-                            CornerRadius="8"
-                            Padding="7 2"
-                            VerticalAlignment="Center"
-                            Visibility="Hidden">
-                        <TextBlock Text="词典"
-                                   Foreground="#34C759"
-                                   FontSize="11"
-                                   FontWeight="SemiBold"/>
-                    </Border>
-                    <Border x:Name="CacheBadge"
-                            Background="#EAF3FF"
-                            CornerRadius="8"
-                            Padding="7 2"
-                            Margin="6 0 0 0"
-                            VerticalAlignment="Center"
-                            Visibility="Hidden">
-                        <TextBlock Text="缓存"
-                                   Foreground="#007AFF"
-                                   FontSize="11"
-                                   FontWeight="SemiBold"/>
-                    </Border>
-                </StackPanel>
+            <!-- 详细模式元信息行：彩色圆点 + 标签（词典/缓存/在线），简洁模式隐藏 -->
+            <StackPanel x:Name="MetaRow"
+                        Grid.Row="0"
+                        Orientation="Horizontal"
+                        Margin="2,2,2,6"
+                        Visibility="Collapsed">
+                <Ellipse x:Name="MetaDot"
+                         Width="7"
+                         Height="7"
+                         VerticalAlignment="Center"/>
+                <TextBlock x:Name="MetaText"
+                           FontSize="11.5"
+                           FontWeight="Medium"
+                           Foreground="#6D6D72"
+                           Margin="6,0,0,0"
+                           VerticalAlignment="Center"
+                           Text=""/>
+            </StackPanel>
+
+            <DockPanel Grid.Row="1">
                 <TextBlock x:Name="WordHeader"
                            FontWeight="Bold"
                            FontSize="18"
@@ -81,7 +71,7 @@
                            Text=""/>
             </DockPanel>
 
-            <ScrollViewer Grid.Row="1"
+            <ScrollViewer Grid.Row="2"
                           VerticalScrollBarVisibility="Auto"
                           MaxHeight="300"
                           HorizontalScrollBarVisibility="Disabled">
@@ -94,7 +84,7 @@
                            Text=""/>
             </ScrollViewer>
 
-            <StackPanel Grid.Row="2"
+            <StackPanel Grid.Row="3"
                         Orientation="Horizontal"
                         HorizontalAlignment="Right">
                 <Button x:Name="SpeakButton"

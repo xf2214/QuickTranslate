@@ -6,6 +6,11 @@ public class SelectionOptions
     public float MaxAnchorDistanceRowHeightFactor { get; set; } = 1.2f;
     public int MinWordWidth { get; set; } = 4;
     public int MinWordHeight { get; set; } = 3;
+    // 词框高度下限（相对所属行框高度）：det 框被邻行渗漏撑高或识别产出碎片时，
+    // 词框只覆盖行内一条细带（日志实测 23x5 / 170x9 出现在 35px 行内），此类
+    // 碎片词文本不可信且选框明显错位 → 按比例拒绝。0.28 兼容小写 x-height 词框
+    // （典型 ≈ 行高 35%+）与 CJK 单字框（≈ 行高）。
+    public float MinWordHeightLineRatio { get; set; } = 0.28f;
     public float ConfidenceFloor { get; set; } = 0.3f;
     public int MaxCandidatesPerLine { get; set; } = 30;
 
@@ -60,6 +65,10 @@ public class SelectionOptions
     // 锚点不在任何行内时，允许锚定最近行的最大距离 = max(MaxAnchorDistanceBase, 行高 × 该因子)。
     // 光标落在空白区时防止把不相近的段落误当目标块。
     public float BlockMaxAnchorDistanceFactor { get; set; } = 2.0f;
+
+    // 列聚类左缘容差 = 中位行高 × 该因子：同栏各行的左缘抖动（缩进/项目符号）远小于一行高，
+    // 超过该值的左缘差异视为不同列。用于多栏布局下把生长限制在锚点所在列内。
+    public float BlockColumnClusterToleranceFactor { get; set; } = 1.0f;
 
     public static SelectionOptions Default { get; } = new();
 

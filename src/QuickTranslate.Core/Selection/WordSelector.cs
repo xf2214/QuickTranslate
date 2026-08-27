@@ -36,7 +36,7 @@ public class WordSelector : IWordSelector
         opts = opts ?? SelectionOptions.Default;
 
         var h1 = new List<(WordCandidate Candidate, string LineText)>();
-        var h2 = new List<(WordCandidate Candidate, string LineText, double Distance)>();
+        var h2 = new List<(WordCandidate Candidate, string LineText, PhysicalRect LineBox, double Distance)>();
 
         for (int i = 0; i < ocr.Lines.Count; i++)
         {
@@ -44,13 +44,19 @@ public class WordSelector : IWordSelector
             var candidates = _resolver.Resolve(line, i);
             var effectiveMax = opts.ComputeEffectiveMax(line.Box.Height);
 
+            // 词框最小高度 = max(绝对下限, 行高 × 比例下限)：行内细条碎片词
+            // （det 渗漏/识别碎片产物）高度占行高比例异常低，直接拒绝。
+            int minWordHeight = Math.Max(
+                opts.MinWordHeight,
+                (int)(line.Box.Height * opts.MinWordHeightLineRatio));
+
             int candidatesTaken = 0;
             foreach (var c in candidates)
             {
                 if (candidatesTaken >= opts.MaxCandidatesPerLine)
                     break;
 
-                if (c.Box.Width < opts.MinWordWidth || c.Box.Height < opts.MinWordHeight)
+                if (c.Box.Width < opts.MinWordWidth || c.Box.Height < minWordHeight)
                     continue;
                 if (c.Confidence < opts.ConfidenceFloor)
                     continue;
@@ -80,7 +86,7 @@ public class WordSelector : IWordSelector
                     double distance = ComputeDistance(anchor, c.Box);
                     if (distance < effectiveMax)
                     {
-                        h2.Add((c, line.Text, distance));
+                        h2.Add((c, line.Text, line.Box, distance));
                     }
                 }
             }
@@ -116,9 +122,15 @@ public class WordSelector : IWordSelector
 
         if (h2.Count > 0)
         {
-            // 平局时取中心更近者（而非面积更小），避免等距时选偏词
+            // 排序分四级（日志实测：光标所在行识别失败/无有效候选时，旧纯欧氏距离
+            // 会选中相邻行上水平更近的词——如光标 Y=780 选到 Y=804 下一行的字）：
+            // 1) 候选所属行框到光标的垂直间距小者优先：光标指向的行永远优先于邻行；
+            // 2) 同行内按到词框的水平间距取近；
+            // 3) 平局回退欧氏距离、再到词框中心距离。
             var best = h2
-                .OrderBy(x => x.Distance)
+                .OrderBy(x => VerticalGap(anchor, x.LineBox))
+                .ThenBy(x => HorizontalGap(anchor, x.Candidate.Box))
+                .ThenBy(x => x.Distance)
                 .ThenBy(x => ComputeDistanceToCenter(anchor, x.Candidate.Box))
                 .First();
 
@@ -181,5 +193,21 @@ public class WordSelector : IWordSelector
         double dx = anchor.X - cx;
         double dy = anchor.Y - cy;
         return Math.Sqrt(dx * dx + dy * dy);
+    }
+
+    /// <summary>点到框的垂直间距：框外为到最近边缘的距离，框内为 0。</summary>
+    private static double VerticalGap(PhysicalPoint p, PhysicalRect box)
+    {
+        if (p.Y < box.Top) return box.Top - p.Y;
+        if (p.Y >= box.Bottom) return p.Y - (box.Bottom - 1);
+        return 0;
+    }
+
+    /// <summary>点到框的水平间距：框外为到最近边缘的距离，框内为 0。</summary>
+    private static double HorizontalGap(PhysicalPoint p, PhysicalRect box)
+    {
+        if (p.X < box.Left) return box.Left - p.X;
+        if (p.X >= box.Right) return p.X - (box.Right - 1);
+        return 0;
     }
 }

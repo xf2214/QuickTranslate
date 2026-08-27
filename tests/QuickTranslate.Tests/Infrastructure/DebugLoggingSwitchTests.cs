@@ -18,7 +18,7 @@ public class DebugLoggingSwitchTests
         }
         var filter = new FilteringLoggerProvider(spyProvider, Filter);
 
-        LoggingSwitch.IsDebugEnabled = true;
+        LoggingSwitch.SetDebugEnabled(true);
         try
         {
             var logger = filter.CreateLogger("Test");
@@ -33,7 +33,7 @@ public class DebugLoggingSwitchTests
         }
         finally
         {
-            LoggingSwitch.IsDebugEnabled = false;
+            LoggingSwitch.SetDebugEnabled(false);
         }
     }
 
@@ -49,7 +49,7 @@ public class DebugLoggingSwitchTests
         }
         var filter = new FilteringLoggerProvider(spyProvider, Filter);
 
-        LoggingSwitch.IsDebugEnabled = false;
+        LoggingSwitch.SetDebugEnabled(false);
 
         var logger = filter.CreateLogger("Test");
         logger.LogDebug("test debug message");

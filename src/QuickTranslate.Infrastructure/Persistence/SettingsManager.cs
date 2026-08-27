@@ -69,10 +69,12 @@ public class SettingsManager : ISettingsManager
             _loadedSettings.DebugLogging = settings.DebugLogging;
             _loadedSettings.DebugOverlayMode = settings.DebugOverlayMode;
             _loadedSettings.EnableTextToSpeech = settings.EnableTextToSpeech;
+            _loadedSettings.EnableSelectedTextProbe = settings.EnableSelectedTextProbe;
             _loadedSettings.TranslationProvider = settings.TranslationProvider;
             _loadedSettings.CustomLlmBaseUrl = settings.CustomLlmBaseUrl;
             _loadedSettings.CustomLlmModel = settings.CustomLlmModel;
             _loadedSettings.CustomLlmMaxContextLines = settings.CustomLlmMaxContextLines;
+            _loadedSettings.PopupDisplayStyle = settings.PopupDisplayStyle;
             _loadedSettings.ResolvedApiKey = settings.ResolvedApiKey;
         }
         else

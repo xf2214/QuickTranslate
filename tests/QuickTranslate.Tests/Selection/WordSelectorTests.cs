@@ -388,4 +388,45 @@ public class WordSelectorTests
         Assert.False(result.NoTextFound);
         Assert.Equal("Inner", result.Text);
     }
+
+    [Fact]
+    public void Case20_SliverFragmentBelowLineHeightRatio_Rejected()
+    {
+        // 日志复现：35px 行内出现 23x5 细条碎片词（det 渗漏/识别碎片产物），
+        // 高度占行比 0.14 < 0.28 下限 → 拒绝，不再画出错位选框
+        var line1 = new OcrLine(
+            new PhysicalRect(100, 0, 300, 35),
+            new[] { new OcrWord(new PhysicalRect(123, 15, 23, 5), "Ŀ", 0.9f, 0) });
+        var line2 = new OcrLine(
+            new PhysicalRect(100, 50, 300, 30),
+            new[] { new OcrWord(new PhysicalRect(150, 55, 80, 25), "valid", 0.9f, 1) });
+        var ocr = CreateOcr(line1, line2);
+
+        // 光标在细条附近：细条被拒后应选中第二行的有效词（而非细条本身）
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(140, 30));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("valid", result.Text);
+    }
+
+    [Fact]
+    public void Case21_AnchorOnOwnLine_PrefersOwnLineOverCloserCrossLineWord()
+    {
+        // 日志复现：光标 Y=781 在 A 行框内，但欧氏最近候选在下一行 B。
+        // 新排序先按"所属行到光标的垂直间距"，光标指向的行优先于邻行——
+        // 即使邻行词的欧氏距离更近（旧逻辑会选 B 行词）。
+        var lineA = new OcrLine(
+            new PhysicalRect(600, 768, 400, 24),
+            new[] { new OcrWord(new PhysicalRect(800, 770, 90, 18), "own", 0.9f, 0) });
+        var lineB = new OcrLine(
+            new PhysicalRect(600, 800, 400, 20),
+            new[] { new OcrWord(new PhysicalRect(700, 802, 70, 16), "below", 0.9f, 1) });
+        var ocr = CreateOcr(lineA, lineB);
+
+        // 光标 (770, 781)：A 行内；"below" 欧氏距离 ≈21 更近，但垂直属于下一行
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(770, 781));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("own", result.Text);
+    }
 }

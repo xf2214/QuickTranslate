@@ -37,6 +37,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
     private readonly IStatusIndicatorService? _statusIndicator;
     private readonly IOptions<AppSettings> _settings;
     private readonly ILogger<WordInteractionCoordinator> _logger;
+    private readonly ISelectedTextProbe? _selectedTextProbe;
 
     private volatile OperationSlot? _current;
     private readonly object _stateLock = new();
@@ -49,13 +50,19 @@ public class WordInteractionCoordinator : IInteractionCoordinator
     // 非 const：测试可通过反射调小以避免真实等待。
     private static int SelectionAutoHideMs = 3000;
 
-    // 截图范围按“15 个词宽 × 4 行高”估算：OCR 前未知真实行高，先用行高估值起捕，
+    // 截图范围按"15 个词宽 × 4 行高"估算：OCR 前未知真实行高，先用行高估值起捕，
     // OCR 后若选词触碰截图边缘（可能被截断），用识别到的实际行高重新算尺寸再抓一次。
     private const int TargetWordCount = 15;
     private const int TargetLineCount = 4;
     private const int EstimatedLineHeight = 20;
     private const double AvgWordWidthPerLineHeight = 0.62;
     private const int EdgeClipMargin = 10;
+
+    // 首捕宽度系数：估行高 20px 对大字号/网页标题严重偏小（日志实测行框 30-38px），
+    // 首捕宽 186px 几乎必然横向截断——日志中每次首捕都触发 clipped 重试（二次 OCR
+    // 延迟翻倍），且截边字形产生 'Tra'/'QkTransa' 类碎片词。首捕宽度加倍后绝大多数
+    // 场景一轮完成；重抓逻辑仍以实际行高兜底，只增不减。
+    private const double InitialCaptureWidthFactor = 2.0;
 
     private CancellationTokenSource? _selectionAutoHideCts;
 
@@ -83,7 +90,8 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         IWordPopupService popupService,
         IOptions<AppSettings> settings,
         ILogger<WordInteractionCoordinator> logger,
-        IStatusIndicatorService? statusIndicator = null)
+        IStatusIndicatorService? statusIndicator = null,
+        ISelectedTextProbe? selectedTextProbe = null)
     {
         _appLifecycle = appLifecycle;
         _hotkeyBroker = hotkeyBroker;
@@ -99,6 +107,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         _settings = settings;
         _logger = logger;
 
+        _selectedTextProbe = selectedTextProbe;
         _hotkeyBroker.HotkeyFired += OnHotkeyFired;
     }
 
@@ -161,10 +170,31 @@ public class WordInteractionCoordinator : IInteractionCoordinator
 
         try
         {
+            // 选中文本预探测放在截屏之前：若用户已显式选中文本（浏览器/编辑器等支持 UIA 的场景），
+            // 可零 OCR 误差直接取词，跳过截屏/OCR/选词全链路，节省数百毫秒并避免识别偏差。
+            SelectionResult? probeSel = await TryProbeWordAsync(newSlot, cursor).ConfigureAwait(false);
+            if (probeSel != null)
+            {
+                if (IsStaleOrCanceled(newSlot)) return;
+                // 选中文本命中：跳过截屏/OCR/选词，也跳过 250ms hold（用户显式选中无需展示识别范围）
+                _overlayService.Show(probeSel.Box, mid, dpiX, dpiY);
+                selectionBox = probeSel.Box;
+                long overlayShownAt = Environment.TickCount64;
+                if (IsStaleOrCanceled(newSlot)) return;
+                await TranslateAndDisplayWordAsync(newSlot, probeSel, mid, dpiX, dpiY, overlayShownAt, skipHold: true).ConfigureAwait(false);
+                return;
+            }
+            if (IsStaleOrCanceled(newSlot)) return;
+
             // ===== 截图 + OCR + 选词（最多两次：首次按估值行高，触边时用实际行高扩大重抓）=====
             SelectionResult sel;
+            var initialSize = WordCaptureSize(EstimatedLineHeight);
             using (var firstFrame = await _captureService.CaptureAroundAsync(
-                cursor, WordCaptureSize(EstimatedLineHeight), newSlot.Cts.Token).ConfigureAwait(false))
+                cursor,
+                new PhysicalSize(
+                    (int)Math.Round(initialSize.Width * InitialCaptureWidthFactor),
+                    initialSize.Height),
+                newSlot.Cts.Token).ConfigureAwait(false))
             {
                 captureRegion = firstFrame.Region;
                 if (IsStaleOrCanceled(newSlot)) return;
@@ -180,7 +210,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
 
                 SetState(newSlot, AppState.Selecting);
                 sel = _wordSelector.SelectWord(ocr, cursor, null);
-                LogWordSelection(sel, cursor, dpiX, dpiY, ocr.Lines.Count);
+                LogWordSelection(sel, cursor, dpiX, dpiY, ocr.Lines.Count, captureRegion, "first");
                 if (IsStaleOrCanceled(newSlot)) return;
 
                 // 重抓触发条件：
@@ -198,6 +228,9 @@ public class WordInteractionCoordinator : IInteractionCoordinator
                 bool offCursorWithClippedAnchorLine = offCursor && (nearLineTouchesH || nearLineTouchesV);
                 if (clipped || sel.NoTextFound || offCursorWithClippedAnchorLine)
                 {
+                    _logger.LogDebug(
+                        "WordRetry: reason clipped={Clipped} noText={NoText} offCursor={Off}(nearLineH={H},nearLineV={V})",
+                        clipped, sel.NoTextFound, offCursorWithClippedAnchorLine, nearLineTouchesH, nearLineTouchesV);
                     var computed = WordCaptureSize(anchorLineHeight);
                     bool expandW = sel.NoTextFound || TouchesHorizontalEdge(sel.Box, captureRegion.Value) || (offCursor && nearLineTouchesH);
                     bool expandH = sel.NoTextFound || TouchesVerticalEdge(sel.Box, captureRegion.Value) || (offCursor && nearLineTouchesV);
@@ -216,7 +249,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
                     if (IsStaleOrCanceled(newSlot)) return;
 
                     sel = _wordSelector.SelectWord(retryOcr, cursor, null);
-                    LogWordSelection(sel, cursor, dpiX, dpiY, retryOcr.Lines.Count);
+                    LogWordSelection(sel, cursor, dpiX, dpiY, retryOcr.Lines.Count, captureRegion, "retry");
                     if (IsStaleOrCanceled(newSlot)) return;
                 }
             }
@@ -249,43 +282,11 @@ public class WordInteractionCoordinator : IInteractionCoordinator
 
             _overlayService.Show(sel.Box, mid, dpiX, dpiY);
             selectionBox = sel.Box;
-            long overlayShownAt = Environment.TickCount64;
+            long overlayShownAt2 = Environment.TickCount64;
 
             if (IsStaleOrCanceled(newSlot)) return;
 
-            SetState(newSlot, AppState.Translating);
-            _statusIndicator?.Update("正在翻译…");
-            // 中文词 → 译成英文；非中文（英文等）→ 用户设置的目标语言（默认中文）。
-            // 避免 TargetLanguage=zh-CN 时中文词"中译中"原样回显。
-            var targetLang = ContainsCjk(sel.Text ?? string.Empty)
-                ? "en"
-                : _settings.Value.TargetLanguage;
-            var trans = await _translationRouter.TranslateWordAsync(
-                sel.Text ?? "", targetLang, newSlot.Cts.Token).ConfigureAwait(false);
-
-            if (IsStaleOrCanceled(newSlot)) return;
-
-            // 保证选定框至少可见 SelectionHoldMs，让用户先看清翻译范围再弹结果
-            long elapsed = Environment.TickCount64 - overlayShownAt;
-            int remaining = SelectionHoldMs - (int)elapsed;
-            if (remaining > 0)
-            {
-                try
-                {
-                    await Task.Delay(remaining, newSlot.Cts.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    return;
-                }
-                if (IsStaleOrCanceled(newSlot)) return;
-            }
-
-            SetState(newSlot, AppState.Displaying);
-            _statusIndicator?.Hide();
-            _popupService.Show(sel, trans, mid, sel.Box, dpiX, dpiY);
-            // 自动隐藏从 Popup 出现时开始计时，保证选定框至少与 Popup 同时可见 SelectionAutoHideMs
-            ScheduleSelectionAutoHide(newSlot);
+            await TranslateAndDisplayWordAsync(newSlot, sel, mid, dpiX, dpiY, overlayShownAt2, skipHold: false).ConfigureAwait(false);
         }
         catch (TranslationException te)
         {
@@ -359,20 +360,89 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         }
     }
 
+    private async Task<SelectionResult?> TryProbeWordAsync(OperationSlot slot, PhysicalPoint cursor)
+    {
+        if (!_settings.Value.EnableSelectedTextProbe || _selectedTextProbe is null) return null;
+        try
+        {
+            var result = await _selectedTextProbe.ProbeAsync(cursor, slot.Cts.Token).ConfigureAwait(false);
+            if (result is null) return null;
+            var text = SelectedTextProbePolicy.Normalize(result.Text);
+            if (!SelectedTextProbePolicy.IsAdoptable(text, SelectedTextProbePolicy.WordModeMaxChars)) return null;
+            // 空间相关性校验：文档残留的旧选区远离光标时拒绝采纳，回退 OCR 指向用户正指的词
+            if (!SelectedTextProbePolicy.IsSpatiallyRelevant(result.LineRects, result.UnionBox, cursor, wordMode: true))
+            {
+                _logger.LogDebug("[Probe] Selection not near cursor, fall back to OCR");
+                return null;
+            }
+            return new SelectionResult(text, text, result.UnionBox, SelectionKind.Word, null, slot.Id);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SelectedText probe failed, fallback to OCR");
+            return null;
+        }
+    }
+
+    private async Task TranslateAndDisplayWordAsync(OperationSlot slot, SelectionResult sel, MonitorId mid, uint dpiX, uint dpiY, long overlayShownAt, bool skipHold)
+    {
+        if (IsStaleOrCanceled(slot)) return;
+        SetState(slot, AppState.Translating);
+        _statusIndicator?.Update("正在翻译…");
+        var targetLang = ContainsCjk(sel.Text ?? string.Empty) ? "en" : _settings.Value.TargetLanguage;
+        var trans = await _translationRouter.TranslateWordAsync(sel.Text ?? "", targetLang, slot.Cts.Token).ConfigureAwait(false);
+        if (IsStaleOrCanceled(slot)) return;
+        if (!skipHold)
+        {
+            long elapsed = Environment.TickCount64 - overlayShownAt;
+            int remaining = SelectionHoldMs - (int)elapsed;
+            if (remaining > 0)
+            {
+                try
+                {
+                    await Task.Delay(remaining, slot.Cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                if (IsStaleOrCanceled(slot)) return;
+            }
+        }
+        SetState(slot, AppState.Displaying);
+        _statusIndicator?.Hide();
+        _popupService.Show(sel, trans, mid, sel.Box, dpiX, dpiY);
+        ScheduleSelectionAutoHide(slot);
+    }
+
     private bool IsStaleOrCanceled(OperationSlot slot)
     {
         return slot != Volatile.Read(ref _current) || slot.Cts.IsCancellationRequested;
     }
 
-    private void LogWordSelection(SelectionResult sel, PhysicalPoint cursor, uint dpiX, uint dpiY, int lineCount)
+    private void LogWordSelection(SelectionResult sel, PhysicalPoint cursor, uint dpiX, uint dpiY, int lineCount,
+        PhysicalRect? captureRegion = null, string phase = "first")
     {
-        // 诊断日志：记录选词框物理坐标 + DPI，定位"框尺寸不准"问题
+        // 诊断日志：记录选词框物理坐标 + DPI + 截图范围，定位"检测/选取位置不准"问题
+        string capture = captureRegion.HasValue
+            ? $"{captureRegion.Value.X},{captureRegion.Value.Y} {captureRegion.Value.Width}x{captureRegion.Value.Height}"
+            : "n/a";
         if (!sel.NoTextFound)
         {
             _logger.LogDebug(
-                "WordSelect: Text='{Text}' Box=({X},{Y},{W}x{H}) Cursor=({CX},{CY}) DPI=({DX},{DY}) Lines={LC}",
-                sel.Text, sel.Box.X, sel.Box.Y, sel.Box.Width, sel.Box.Height,
-                cursor.X, cursor.Y, dpiX, dpiY, lineCount);
+                "WordSelect[{Phase}]: Text='{Text}' Box=({X},{Y},{W}x{H}) Cursor=({CX},{CY}) DPI=({DX},{DY}) Lines={LC} Capture={CR}",
+                phase, sel.Text, sel.Box.X, sel.Box.Y, sel.Box.Width, sel.Box.Height,
+                cursor.X, cursor.Y, dpiX, dpiY, lineCount, capture);
+        }
+        else
+        {
+            _logger.LogDebug(
+                "WordSelect[{Phase}]: NoTextFound Cursor=({CX},{CY}) Lines={LC} Capture={CR}",
+                phase, cursor.X, cursor.Y, lineCount, capture);
         }
     }
 

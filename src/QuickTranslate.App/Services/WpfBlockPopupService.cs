@@ -114,11 +114,13 @@ public class WpfBlockPopupService : IBlockPopupService
                              dpiX, dpiY, true);
 
         var (workWdip, workHdip) = GetWorkAreaDipSize(monitorInfo.WorkArea, dpiX, dpiY);
+        // WHY：按当前显示模式估算尺寸（简洁折叠源文，详细含预览），与弹窗展示保持一致
+        bool detailed = _appSettings.Value?.PopupDisplayStyle != "compact";
         // 尺寸按原文/译文行数自适应（340~640 宽），替代旧固定 440x480；
         // 译文用与展示一致的格式化文本估算（去多余空行），避免尺寸与实际内容不符
         var (estW, estH) = PopupSizeEstimator.EstimateBlockPopupSize(
             blockSelection.BlockText, TranslationDisplayFormatter.ForBlock(translation.FullTranslation),
-            workWdip, workHdip);
+            workWdip, workHdip, detailed);
 
         var preferredSize = new PhysicalSize(
             (int)Math.Round(estW * dpiX / 96.0),
@@ -138,10 +140,13 @@ public class WpfBlockPopupService : IBlockPopupService
         _window.Width = dipRect.Width;
         _window.Height = Math.Max(dipRect.Height, Math.Min(140, estH));
 
+        _window.ApplyDisplayMode(detailed);
         _window.ResetContent(blockSelection.BlockText);
         _window.AppendChunk(translation.FullTranslation ?? "");
         _window.UpdateHeader(blockSelection.SelectedLines?.Count ?? 0);
         _window.ApplyTextToSpeech(_textToSpeech, _appSettings.Value.EnableTextToSpeech, _appSettings.Value.TargetLanguage);
+        // 非流式路径：一次呈现即完成，移除光标/翻转 meta 为完成态
+        _window.MarkStreamCompleted();
 
         if (!_window.IsVisible)
         {
@@ -177,10 +182,11 @@ public class WpfBlockPopupService : IBlockPopupService
                              dpiX, dpiY, true);
 
         var (workWdip, workHdip) = GetWorkAreaDipSize(monitorInfo.WorkArea, dpiX, dpiY);
+        bool detailed = _appSettings.Value?.PopupDisplayStyle != "compact";
         // 错误消息渲染在译文区（ResetContent(null) + ShowError 写 TranslationText），故 source 为 null
         var (errW, errH) = PopupSizeEstimator.EstimateBlockPopupSize(
             null, shortMessage,
-            workWdip, workHdip);
+            workWdip, workHdip, detailed);
         var preferredSize = new PhysicalSize(
             (int)Math.Round(errW * dpiX / 96.0),
             (int)Math.Round(errH * dpiY / 96.0));
@@ -198,6 +204,7 @@ public class WpfBlockPopupService : IBlockPopupService
         _window.Width = dipRect.Width;
         _window.Height = Math.Max(dipRect.Height, Math.Min(120, errH));
 
+        _window.ApplyDisplayMode(detailed);
         _window.ResetContent(null);
         _window.ShowError(shortMessage);
         _window.ApplyTextToSpeech(null, false, null);
@@ -216,6 +223,11 @@ public class WpfBlockPopupService : IBlockPopupService
             _window.ReplayEntry();
             _window.Activate();
         }
+    }
+
+    public void MarkStreamCompleted()
+    {
+        RunOnUi(() => _window?.MarkStreamCompleted());
     }
 
     public void HideAll()
@@ -250,11 +262,11 @@ public class WpfBlockPopupService : IBlockPopupService
         PhysicalRect anchorBox, PhysicalRect monitorWorkArea,
         string? sourceText, string? fullTranslationDisplayText,
         double workAreaWidthDip, double workAreaHeightDip,
-        uint dpiX, uint dpiY, PhysicalRect lastPlacedRect)
+        uint dpiX, uint dpiY, PhysicalRect lastPlacedRect, bool detailed = true, bool sourceExpanded = false)
     {
         var (estW, estH) = PopupSizeEstimator.EstimateBlockPopupSize(
             sourceText, fullTranslationDisplayText,
-            workAreaWidthDip, workAreaHeightDip);
+            workAreaWidthDip, workAreaHeightDip, detailed, sourceExpanded);
 
         var preferred = new PhysicalSize(
             (int)Math.Round(estW * dpiX / 96.0),
@@ -320,11 +332,12 @@ public class WpfBlockPopupService : IBlockPopupService
         string displayText = TranslationDisplayFormatter.ForBlock(_window.FullText);
         string? srcText = _window.CurrentSourceText;
 
+        bool detailed = _appSettings.Value?.PopupDisplayStyle != "compact";
         var newRect = ComputeStickyResize(
             _lastAnchorBox, _lastWorkArea,
             srcText, displayText,
             workWdip, workHdip,
-            _lastDpiX, _lastDpiY, _lastPlacedRect);
+            _lastDpiX, _lastDpiY, _lastPlacedRect, detailed, _window.IsSourceExpanded);
 
         // 单调护栏：流式只增不减，宽高都 ≤ 上次（1px 容差）则跳过，防止内容抖动时来回收缩
         if (newRect.Width <= _lastPlacedRect.Width + 1 && newRect.Height <= _lastPlacedRect.Height + 1)

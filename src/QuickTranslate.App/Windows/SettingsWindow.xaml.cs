@@ -118,6 +118,8 @@ public partial class SettingsWindow : Window
         CloseOutsideBox.IsChecked = _appSettings.CloseOnOutsideClick;
         DebugLoggingBox.IsChecked = _appSettings.DebugLogging;
         EnableReadAloudBox.IsChecked = _appSettings.EnableTextToSpeech;
+        var displayStyle = string.IsNullOrWhiteSpace(_appSettings.PopupDisplayStyle) ? "detailed" : _appSettings.PopupDisplayStyle;
+        SelectComboBoxItemByTag(PopupDisplayStyleBox, displayStyle);
 
         // 系统状态
         RefreshSystemStatus();
@@ -318,6 +320,7 @@ public partial class SettingsWindow : Window
         CloseOutsideBox.IsChecked = defaults.CloseOnOutsideClick;
         DebugLoggingBox.IsChecked = defaults.DebugLogging;
         EnableReadAloudBox.IsChecked = defaults.EnableTextToSpeech;
+        SelectComboBoxItemByTag(PopupDisplayStyleBox, defaults.PopupDisplayStyle);
 
         UpdateHotkeyStatusPreview();
         ShowError("");
@@ -425,6 +428,9 @@ public partial class SettingsWindow : Window
             LoggingSwitch.SetDebugEnabled(debugEnabled);
 
             var targetLangItem = TargetLanguageBox.SelectedItem as SWC.ComboBoxItem;
+            var displayStyleItem = PopupDisplayStyleBox.SelectedItem as SWC.ComboBoxItem;
+            var displayStyle = displayStyleItem?.Tag?.ToString() ?? "detailed";
+            if (displayStyle != "compact" && displayStyle != "detailed") displayStyle = "detailed";
 
             var newSettings = new AppSettings
             {
@@ -441,6 +447,7 @@ public partial class SettingsWindow : Window
                 TranslationProvider = providerKind,
                 CustomLlmBaseUrl = CustomLlmBaseUrlBox.Text.Trim(),
                 CustomLlmModel = CustomLlmModelBox.Text.Trim(),
+                PopupDisplayStyle = displayStyle,
                 ResolvedApiKey = _settingsManager.GetApiKey()
             };
 
@@ -459,6 +466,7 @@ public partial class SettingsWindow : Window
             _appSettings.TranslationProvider = newSettings.TranslationProvider;
             _appSettings.CustomLlmBaseUrl = newSettings.CustomLlmBaseUrl;
             _appSettings.CustomLlmModel = newSettings.CustomLlmModel;
+            _appSettings.PopupDisplayStyle = newSettings.PopupDisplayStyle;
             _appSettings.ResolvedApiKey = newSettings.ResolvedApiKey;
 
             _hotkeyBroker.UnregisterAll();

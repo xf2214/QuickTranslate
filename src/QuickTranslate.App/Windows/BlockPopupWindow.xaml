@@ -36,53 +36,92 @@
         </Border.Effect>
         <Grid>
             <Grid.RowDefinitions>
+                <!-- 0: 元信息行（详细模式可见） -->
                 <RowDefinition Height="Auto"/>
+                <!-- 1: 译文（Hero） -->
                 <RowDefinition Height="*"/>
+                <!-- 2: 源文区（ToggleRow + Quote + divider） -->
+                <RowDefinition Height="Auto"/>
+                <!-- 3: 页脚 -->
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <StackPanel Grid.Row="0" Margin="0 0 0 8">
-                <StackPanel Orientation="Horizontal" Margin="0 0 0 6">
-                    <!-- 灰色小胶囊标签：macOS 风格的模式指示 -->
-                    <Border Background="#0F000000" CornerRadius="8" Padding="8 2">
-                        <TextBlock x:Name="BlockHeader"
-                                   FontSize="11"
-                                   FontWeight="SemiBold"
-                                   Foreground="#8E8E93"
-                                   Text="块模式"/>
-                    </Border>
-                </StackPanel>
-
-                <!-- OCR 原文预览（灰字小号，最多 3 行，超出省略）：让用户核对识别范围 -->
-                <TextBlock x:Name="SourceText"
-                           FontSize="11.5"
-                           Foreground="#8E8E93"
-                           TextWrapping="Wrap"
-                           MaxHeight="54"
-                           TextTrimming="CharacterEllipsis"
-                           Visibility="Collapsed"/>
-
-                <!-- 原文预览与译文之间的细分隔线：仅在原文可见时显示，结构更清晰 -->
-                <Rectangle x:Name="SourceDivider"
-                           Height="1"
-                           Fill="#0F000000"
-                           Margin="0 8 0 0"
-                           Visibility="Collapsed"/>
+            <!-- 详细模式元信息行：● 翻译中… / ● 完成 / ● 翻译失败 -->
+            <StackPanel x:Name="MetaRow" Grid.Row="0" Orientation="Horizontal" Margin="0 0 0 6" Visibility="Collapsed">
+                <Ellipse x:Name="MetaDot" Width="6" Height="6" Fill="#007AFF" VerticalAlignment="Center" Margin="0 0 6 0"/>
+                <TextBlock x:Name="MetaText" FontSize="11.5" FontWeight="Medium" Foreground="#6D6D72" Text="翻译中…" VerticalAlignment="Center"/>
             </StackPanel>
 
+            <!-- 译文 ScrollViewer：Compact 15/25  Detailed 14.5/24 通过代码切换 -->
             <ScrollViewer Grid.Row="1"
                           x:Name="ScrollViewer1"
                           MaxHeight="460"
                           VerticalScrollBarVisibility="Auto">
                 <TextBlock x:Name="TranslationText"
-                           FontSize="14"
+                           FontSize="15"
                            Foreground="#1C1C1E"
-                           LineHeight="22"
+                           LineHeight="25"
                            TextWrapping="Wrap"
                            Text=""/>
             </ScrollViewer>
 
-            <StackPanel Grid.Row="2"
+            <!-- 源文区：ToggleRow + Quote Border + hairline divider -->
+            <StackPanel Grid.Row="2" x:Name="SourceSection" Margin="0 6 0 0">
+                <!-- 折叠/展开触发行：Compact 显示“原文 (N 行)”，Detailed 作为右侧 chevron 触发 -->
+                <StackPanel x:Name="ToggleRow"
+                            Orientation="Horizontal"
+                            Visibility="Collapsed"
+                            Cursor="Hand"
+                            Background="Transparent">
+                    <TextBlock x:Name="ToggleChevron"
+                               Text="&#xE76C;"
+                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="10"
+                               Foreground="#8E8E93"
+                               VerticalAlignment="Center"
+                               Margin="0 0 4 0"/>
+                    <TextBlock x:Name="ToggleLabel"
+                               FontSize="12"
+                               Foreground="#8E8E93"
+                               Text="原文 (0 行)"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+                <!-- 浅灰引用块：#F5F5F7 CornerRadius8 Padding11,8 -->
+                <Border x:Name="SourceQuote"
+                        Background="#F5F5F7"
+                        CornerRadius="8"
+                        Padding="11,8"
+                        Margin="0 4 0 0"
+                        Visibility="Collapsed">
+                    <Grid>
+                        <TextBlock x:Name="SourceText"
+                                   FontSize="12"
+                                   Foreground="#6D6D72"
+                                   LineHeight="18"
+                                   TextWrapping="Wrap"
+                                   MaxHeight="54"
+                                   TextTrimming="CharacterEllipsis"
+                                   Text=""/>
+                        <!-- 详细模式右下角展开指示（点击展开到 120） -->
+                        <TextBlock x:Name="SourceExpandChevron"
+                                   HorizontalAlignment="Right"
+                                   VerticalAlignment="Bottom"
+                                   Text="&#xE76C;"
+                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="9"
+                                   Foreground="#8E8E93"
+                                   Visibility="Collapsed"/>
+                    </Grid>
+                </Border>
+                <!-- hairline divider -->
+                <Rectangle x:Name="SourceDivider"
+                           Height="1"
+                           Fill="#1A000000"
+                           Margin="0 8 0 0"
+                           Visibility="Collapsed"/>
+            </StackPanel>
+
+            <StackPanel Grid.Row="3"
                         Orientation="Horizontal"
                         HorizontalAlignment="Right"
                         Margin="0 8 0 0">
@@ -92,7 +131,6 @@
                         Margin="8 0 0 0"
                         Visibility="Collapsed">
                     <StackPanel Orientation="Horizontal">
-                        <!-- Segoe Fluent Icons 音量图标（单色线性，与全局极简风格一致，替代 emoji） -->
                         <TextBlock Text="&#xE767;"
                                    FontFamily="Segoe Fluent Icons"
                                    FontSize="12"

@@ -11,7 +11,7 @@
         WindowStartupLocation="CenterScreen"
         Title="QuickTranslate 设置"
         Width="660"
-        Height="780"
+        Height="700"
         FontFamily="Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI, PingFang SC, sans-serif"
         FontSize="13"
         Foreground="#1D1D1F"
@@ -846,6 +846,35 @@
                               x:Name="ContentScroll">
                     <StackPanel>
 
+                        <!-- STATUS STRIP — 紧凑单页方案 B 顶部状态条 -->
+                        <Border Background="#FFFFFF" BorderBrush="{StaticResource CardBorder}" BorderThickness="1" CornerRadius="10" Padding="16,10,16,11" Margin="0,0,0,14">
+                            <Border.Effect>
+                                <DropShadowEffect Color="#3A3A3C" Opacity="0.05" BlurRadius="12" ShadowDepth="1"/>
+                            </Border.Effect>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="OCR 引擎" FontSize="12" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="OcrEngineName" Text="检测中..." FontSize="12" Foreground="{StaticResource TextPrimary}" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                    <Border x:Name="OcrEngineBadge" CornerRadius="10" Padding="10,3" Background="{StaticResource WarningBg}" Margin="8,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock x:Name="OcrEngineStatus" Text="未知" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource Warning}"/>
+                                    </Border>
+                                </StackPanel>
+                                <Border Width="1" Background="#E8E8ED" Margin="14,2" Height="16" VerticalAlignment="Center"/>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="热键注册" FontSize="12" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="HotkeyStatusText" Text="单词: Alt+1  区域: Alt+2" FontSize="12" Foreground="{StaticResource TextPrimary}" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                    <Border x:Name="HotkeyBadge" CornerRadius="10" Padding="10,3" Background="{StaticResource SuccessBg}" Margin="8,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock Text="已生效" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource Success}"/>
+                                    </Border>
+                                </StackPanel>
+                                <Border Width="1" Background="#E8E8ED" Margin="14,2" Height="16" VerticalAlignment="Center"/>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="程序版本" FontSize="12" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="AppVersionText" Text="v0.1.0" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
                         <!-- S1: 翻译服务 -->
                         <Border Style="{StaticResource SectionCard}">
                             <StackPanel>
@@ -855,7 +884,7 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <Border Grid.Column="0" Style="{StaticResource SectionIcon}" Background="#E7F1FF">
-                                        <!-- Segoe Fluent Icons 锁（E72E，对应 API Key 安全），替代 emoji 保持单色风格 -->
+                                        <!-- Segoe Fluent Icons 锁（E72E，对应 API Key 安全） -->
                                         <TextBlock Text="&#xE72E;" FontFamily="Segoe Fluent Icons" FontSize="13" Foreground="#007AFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <TextBlock Grid.Column="1"
@@ -899,10 +928,13 @@
                                                  Style="{StaticResource StyledTextBox}"
                                                  Margin="0 0 0 2"/>
                                     </Grid>
-                                    <TextBlock Text="OpenAI 兼容端点，例如 https://api.openai.com/v1、https://api.deepseek.com/v1 或本地 http://127.0.0.1:11434/v1（Ollama）。自动补全 /chat/completions。"
+                                    <TextBlock Text="OpenAI 兼容端点，自动补全 /chat/completions"
+                                               ToolTip="OpenAI 兼容端点，例如 https://api.openai.com/v1、https://api.deepseek.com/v1 或本地 http://127.0.0.1:11434/v1（Ollama）。自动补全 /chat/completions。"
                                                Style="{StaticResource SettingHint}"
                                                Margin="96 0 0 8"
-                                               TextWrapping="Wrap"/>
+                                               TextWrapping="NoWrap"
+                                               TextTrimming="CharacterEllipsis"
+                                               MaxHeight="16"/>
 
                                     <Grid Margin="0 0 0 8">
                                         <Grid.ColumnDefinitions>
@@ -917,10 +949,13 @@
                                                  Style="{StaticResource StyledTextBox}"
                                                  Margin="0 0 0 2"/>
                                     </Grid>
-                                    <TextBlock Text="例如 gpt-4o-mini、deepseek-chat、qwen2.5:7b。支持任何 OpenAI 兼容服务（vLLM / Ollama / one-api / 各云厂商）。"
+                                    <TextBlock Text="支持任意 OpenAI 兼容服务"
+                                               ToolTip="例如 gpt-4o-mini、deepseek-chat、qwen2.5:7b。支持任何 OpenAI 兼容服务（vLLM / Ollama / one-api / 各云厂商）。"
                                                Style="{StaticResource SettingHint}"
                                                Margin="96 0 0 10"
-                                               TextWrapping="Wrap"/>
+                                               TextWrapping="NoWrap"
+                                               TextTrimming="CharacterEllipsis"
+                                               MaxHeight="16"/>
 
                                     <!-- 模型连通性测试 -->
                                     <Grid Margin="0 0 0 6">
@@ -980,13 +1015,16 @@
                                             Padding="14 5"
                                             FontSize="12"/>
                                 </Grid>
-                                <TextBlock Text="自定义大模型：填 OpenAI 兼容服务的 Key（本地 Ollama 可填任意非空值）；Qwen-MT：DashScope 控制台 → API-KEY 管理。留空则使用内置演示翻译（占位结果）。"
+                                <TextBlock Text="DPAPI 加密存储，绝不明文落盘"
+                                           ToolTip="自定义大模型：填 OpenAI 兼容服务的 Key（本地 Ollama 可填任意非空值）；Qwen-MT：DashScope 控制台 → API-KEY 管理。留空则使用内置演示翻译（占位结果）。"
                                            Style="{StaticResource SettingHint}"
-                                           TextWrapping="Wrap"/>
+                                           TextWrapping="NoWrap"
+                                           TextTrimming="CharacterEllipsis"
+                                           MaxHeight="16"/>
                             </StackPanel>
                         </Border>
 
-                        <!-- S2: 全局热键 -->
+                        <!-- S2: 翻译与显示（合并原 翻译偏好 + 行为设置） -->
                         <Border Style="{StaticResource SectionCard}">
                             <StackPanel>
                                 <Grid Style="{StaticResource SectionTitleRow}">
@@ -994,8 +1032,139 @@
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
+                                    <Border Grid.Column="0" Style="{StaticResource SectionIcon}" Background="#E6F7EE">
+                                        <TextBlock Text="&#xE774;" FontFamily="Segoe Fluent Icons" FontSize="13" Foreground="#34C759" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <TextBlock Grid.Column="1"
+                                               Text="翻译与显示"
+                                               FontSize="14"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextPrimary}"
+                                               VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Grid Margin="0 0 0 12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="96"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Text="目标语言"
+                                               Style="{StaticResource SettingLabel}"/>
+                                    <ComboBox Grid.Column="1"
+                                              x:Name="TargetLanguageBox"
+                                              Style="{StaticResource StyledComboBox}">
+                                        <ComboBoxItem Content="中文简体 (zh-CN)" Tag="zh-CN"/>
+                                        <ComboBoxItem Content="英语 (en-US)" Tag="en"/>
+                                        <ComboBoxItem Content="日语 (ja-JP)" Tag="ja"/>
+                                        <ComboBoxItem Content="韩语 (ko-KR)" Tag="ko"/>
+                                        <ComboBoxItem Content="德语 (de-DE)" Tag="de"/>
+                                        <ComboBoxItem Content="法语 (fr-FR)" Tag="fr"/>
+                                        <ComboBoxItem Content="西班牙语 (es-ES)" Tag="es"/>
+                                        <ComboBoxItem Content="俄语 (ru-RU)" Tag="ru"/>
+                                    </ComboBox>
+                                </Grid>
+
+                                <Grid Margin="0 0 0 12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="96"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Text="翻译质量"
+                                               Style="{StaticResource SettingLabel}"
+                                               VerticalAlignment="Top"
+                                               Margin="0 4 0 0"/>
+                                    <StackPanel Grid.Column="1" Orientation="Vertical">
+                                        <StackPanel Orientation="Horizontal">
+                                            <RadioButton x:Name="QualityFast"
+                                                         Content="Fast · 速度优先"
+                                                         GroupName="Quality"
+                                                         Style="{StaticResource QualityRadio}"
+                                                         Tag="Fast"/>
+                                            <RadioButton x:Name="QualityBalanced"
+                                                         Content="Balanced · 均衡"
+                                                         GroupName="Quality"
+                                                         Style="{StaticResource QualityRadio}"
+                                                         Tag="Balanced"/>
+                                            <RadioButton x:Name="QualityBest"
+                                                         Content="Best · 最佳质量"
+                                                         GroupName="Quality"
+                                                         Style="{StaticResource QualityRadio}"
+                                                         Tag="Best"/>
+                                        </StackPanel>
+                                        <TextBlock Text="Fast 响应最快、用量少；Best 输出更准确但稍慢。Balanced 取折中。"
+                                                   ToolTip="Fast 响应最快、用量少；Best 输出更准确但稍慢。Balanced 取折中。"
+                                                   Style="{StaticResource SettingHint}"
+                                                   TextWrapping="NoWrap"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   MaxHeight="16"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid Margin="0 0 0 0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="96"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Text="弹窗显示样式"
+                                               Style="{StaticResource SettingLabel}"
+                                               VerticalAlignment="Center"/>
+                                    <ComboBox Grid.Column="1"
+                                              x:Name="PopupDisplayStyleBox"
+                                              Style="{StaticResource StyledComboBox}">
+                                        <ComboBoxItem Content="简洁" Tag="compact"/>
+                                        <ComboBoxItem Content="详细" Tag="detailed"/>
+                                    </ComboBox>
+                                </Grid>
+                                <TextBlock Text="简洁隐藏元信息并使用图标按钮"
+                                           ToolTip="详细显示来源标签与文字按钮，简洁隐藏元信息并使用图标按钮；下次弹窗生效。"
+                                           Style="{StaticResource SettingHint}"
+                                           Margin="96 4 0 12"
+                                           TextWrapping="NoWrap"
+                                           TextTrimming="CharacterEllipsis"
+                                           MaxHeight="16"/>
+
+                                <TextBlock Text="选项"
+                                           Foreground="{StaticResource TextPrimary}"
+                                           FontSize="13"
+                                           Margin="0,2,0,8"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <CheckBox x:Name="StartOnBootBox"
+                                                  Content="开机启动"
+                                                  Style="{StaticResource CompactCheckBox}"/>
+                                        <CheckBox x:Name="CloseOutsideBox"
+                                                  Content="点击外部自动关闭弹窗"
+                                                  Style="{StaticResource CompactCheckBox}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1">
+                                        <CheckBox x:Name="EnableReadAloudBox"
+                                                  Content="启用朗读"
+                                                  Style="{StaticResource CompactCheckBox}"/>
+                                        <CheckBox x:Name="DebugLoggingBox"
+                                                  Content="Debug 日志"
+                                                  Style="{StaticResource CompactCheckBox}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- S3: 全局热键 -->
+                        <Border Style="{StaticResource SectionCard}" Margin="0 0 0 0">
+                            <StackPanel>
+                                <Grid Style="{StaticResource SectionTitleRow}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
                                     <Border Grid.Column="0" Style="{StaticResource SectionIcon}" Background="#F3EDFF">
-                                        <TextBlock Text="⌨️" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        <TextBlock Text="&#xE765;" FontFamily="Segoe Fluent Icons" FontSize="13" Foreground="#7C5CE0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <TextBlock Grid.Column="1"
                                                Text="全局热键"
@@ -1039,230 +1208,13 @@
                                                              VerticalAlignment="Center"/>
                                 </Grid>
 
-                                <TextBlock Text="提示：按「录制」后直接在键盘按下新的热键组合，松开即保存到输入框。"
+                                <TextBlock Text="按「录制」后直接按下新热键组合，松开即保存"
+                                           ToolTip="提示：按「录制」后直接在键盘按下新的热键组合，松开即保存到输入框。"
                                            Style="{StaticResource SettingHint}"
                                            Margin="0 8 0 0"
-                                           TextWrapping="Wrap"/>
-                            </StackPanel>
-                        </Border>
-
-                        <!-- S3: 翻译偏好 -->
-                        <Border Style="{StaticResource SectionCard}">
-                            <StackPanel>
-                                <Grid Style="{StaticResource SectionTitleRow}">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <Border Grid.Column="0" Style="{StaticResource SectionIcon}" Background="#E6F7EE">
-                                        <!-- Segoe Fluent Icons 地球（E774，目标语言），替代 emoji 保持单色风格 -->
-                                        <TextBlock Text="&#xE774;" FontFamily="Segoe Fluent Icons" FontSize="13" Foreground="#34C759" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    </Border>
-                                    <TextBlock Grid.Column="1"
-                                               Text="翻译偏好"
-                                               FontSize="14"
-                                               FontWeight="SemiBold"
-                                               Foreground="{StaticResource TextPrimary}"
-                                               VerticalAlignment="Center"/>
-                                </Grid>
-
-                                <Grid Margin="0 0 0 12">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="96"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0"
-                                               Text="目标语言"
-                                               Style="{StaticResource SettingLabel}"/>
-                                    <ComboBox Grid.Column="1"
-                                              x:Name="TargetLanguageBox"
-                                              Style="{StaticResource StyledComboBox}">
-                                        <ComboBoxItem Content="中文简体 (zh-CN)" Tag="zh-CN"/>
-                                        <ComboBoxItem Content="英语 (en-US)" Tag="en"/>
-                                        <ComboBoxItem Content="日语 (ja-JP)" Tag="ja"/>
-                                        <ComboBoxItem Content="韩语 (ko-KR)" Tag="ko"/>
-                                        <ComboBoxItem Content="德语 (de-DE)" Tag="de"/>
-                                        <ComboBoxItem Content="法语 (fr-FR)" Tag="fr"/>
-                                        <ComboBoxItem Content="西班牙语 (es-ES)" Tag="es"/>
-                                        <ComboBoxItem Content="俄语 (ru-RU)" Tag="ru"/>
-                                    </ComboBox>
-                                </Grid>
-
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="96"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0"
-                                               Text="翻译质量"
-                                               Style="{StaticResource SettingLabel}"
-                                               VerticalAlignment="Top"
-                                               Margin="0 4 0 0"/>
-                                    <StackPanel Grid.Column="1" Orientation="Vertical" Margin="0 0 0 0">
-                                        <StackPanel Orientation="Horizontal">
-                                            <RadioButton x:Name="QualityFast"
-                                                         Content="Fast · 速度优先"
-                                                         GroupName="Quality"
-                                                         Style="{StaticResource QualityRadio}"
-                                                         Tag="Fast"/>
-                                            <RadioButton x:Name="QualityBalanced"
-                                                         Content="Balanced · 均衡"
-                                                         GroupName="Quality"
-                                                         Style="{StaticResource QualityRadio}"
-                                                         Tag="Balanced"/>
-                                            <RadioButton x:Name="QualityBest"
-                                                         Content="Best · 最佳质量"
-                                                         GroupName="Quality"
-                                                         Style="{StaticResource QualityRadio}"
-                                                         Tag="Best"/>
-                                        </StackPanel>
-                                        <TextBlock Text="Fast 响应最快、用量少；Best 输出更准确但稍慢。Balanced 取折中。"
-                                                   Style="{StaticResource SettingHint}"
-                                                   TextWrapping="Wrap"/>
-                                    </StackPanel>
-                                </Grid>
-                            </StackPanel>
-                        </Border>
-
-                        <!-- S4: 行为设置 -->
-                        <Border Style="{StaticResource SectionCard}">
-                            <StackPanel>
-                                <Grid Style="{StaticResource SectionTitleRow}">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <Border Grid.Column="0" Style="{StaticResource SectionIcon}" Background="#FFF4E5">
-                                        <!-- Segoe Fluent Icons 齿轮（E713，行为设置），替代 emoji 保持单色风格 -->
-                                        <TextBlock Text="&#xE713;" FontFamily="Segoe Fluent Icons" FontSize="13" Foreground="#FF9500" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    </Border>
-                                    <TextBlock Grid.Column="1"
-                                               Text="行为设置"
-                                               FontSize="14"
-                                               FontWeight="SemiBold"
-                                               Foreground="{StaticResource TextPrimary}"
-                                               VerticalAlignment="Center"/>
-                                </Grid>
-
-                                <Grid Margin="0 0 0 0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="96"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0"
-                                               Text="选项"
-                                               Style="{StaticResource SettingLabel}"
-                                               VerticalAlignment="Top"/>
-                                    <StackPanel Grid.Column="1">
-                                        <CheckBox x:Name="StartOnBootBox"
-                                                  Content="开机启动（系统重启后自动后台运行）"
-                                                  Style="{StaticResource CompactCheckBox}"/>
-                                        <CheckBox x:Name="CloseOutsideBox"
-                                                  Content="点击翻译窗口外部自动关闭 Popup"
-                                                  Style="{StaticResource CompactCheckBox}"/>
-                                        <CheckBox x:Name="EnableReadAloudBox"
-                                                  Content="启用朗读功能（翻译完成后播报结果）"
-                                                  Style="{StaticResource CompactCheckBox}"/>
-                                        <CheckBox x:Name="DebugLoggingBox"
-                                                  Content="启用 Debug 级别日志（排查问题时打开）"
-                                                  Style="{StaticResource CompactCheckBox}"/>
-                                    </StackPanel>
-                                </Grid>
-                            </StackPanel>
-                        </Border>
-
-                        <!-- S5: 系统状态 -->
-                        <Border Style="{StaticResource SectionCard}" Margin="0 0 0 0">
-                            <StackPanel>
-                                <Grid Style="{StaticResource SectionTitleRow}">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <Border Grid.Column="0" Style="{StaticResource SectionIcon}" Background="#E8F6FE">
-                                        <TextBlock Text="ℹ️" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    </Border>
-                                    <TextBlock Grid.Column="1"
-                                               Text="系统状态"
-                                               FontSize="14"
-                                               FontWeight="SemiBold"
-                                               Foreground="{StaticResource TextPrimary}"
-                                               VerticalAlignment="Center"/>
-                                </Grid>
-
-                                <!-- OCR 引擎 -->
-                                <Grid Style="{StaticResource StatusRow}">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="96"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0"
-                                               Text="OCR 引擎"
-                                               Style="{StaticResource SettingLabel}"/>
-                                    <TextBlock Grid.Column="1"
-                                               x:Name="OcrEngineName"
-                                               Text="检测中..."
-                                               VerticalAlignment="Center"
-                                               Foreground="{StaticResource TextPrimary}"/>
-                                    <Border Grid.Column="2"
-                                            x:Name="OcrEngineBadge"
-                                            CornerRadius="10"
-                                            Padding="10 3"
-                                            Background="{StaticResource WarningBg}"
-                                            VerticalAlignment="Center">
-                                        <TextBlock x:Name="OcrEngineStatus"
-                                                   Text="未知"
-                                                   FontSize="11"
-                                                   FontWeight="SemiBold"
-                                                   Foreground="{StaticResource Warning}"/>
-                                    </Border>
-                                </Grid>
-
-                                <!-- 当前热键注册状态 -->
-                                <Grid Style="{StaticResource StatusRow}">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="96"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0"
-                                               Text="热键注册"
-                                               Style="{StaticResource SettingLabel}"/>
-                                    <TextBlock Grid.Column="1"
-                                               x:Name="HotkeyStatusText"
-                                               Text="单词: Alt+1  区域: Alt+2"
-                                               VerticalAlignment="Center"
-                                               Foreground="{StaticResource TextPrimary}"/>
-                                    <Border Grid.Column="2"
-                                            x:Name="HotkeyBadge"
-                                            CornerRadius="10"
-                                            Padding="10 3"
-                                            Background="{StaticResource SuccessBg}"
-                                            VerticalAlignment="Center">
-                                        <TextBlock Text="已生效"
-                                                   FontSize="11"
-                                                   FontWeight="SemiBold"
-                                                   Foreground="{StaticResource Success}"/>
-                                    </Border>
-                                </Grid>
-
-                                <!-- 版本信息 -->
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="96"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0"
-                                               Text="程序版本"
-                                               Style="{StaticResource SettingLabel}"/>
-                                    <TextBlock Grid.Column="1"
-                                               x:Name="AppVersionText"
-                                               Text="v0.1.0"
-                                               VerticalAlignment="Center"
-                                               Foreground="{StaticResource TextSecondary}"
-                                               FontSize="12"/>
-                                </Grid>
+                                           TextWrapping="NoWrap"
+                                           TextTrimming="CharacterEllipsis"
+                                           MaxHeight="16"/>
                             </StackPanel>
                         </Border>
 

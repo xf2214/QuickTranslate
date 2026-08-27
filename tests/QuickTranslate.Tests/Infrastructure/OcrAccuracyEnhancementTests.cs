@@ -108,6 +108,47 @@ public class OcrAccuracyEnhancementTests
         Assert.True(dst.GetPixel(10, 5).R < 30);
     }
 
+    [Fact]
+    public void EnhanceForRec_ColoredTextOnLightBg_KeepsContrast()
+    {
+        // 日志实测根因：彩色文字（如橙 #E68222）与白底 BT.601 亮度接近
+        // （文字灰度 ≈152，浅灰），旧亮度灰度几乎抹掉对比 → rec 整行乱码。
+        // 背景色距离法应把色度差异还原为深字浅底。
+        using var src = new Bitmap(20, 10, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(src))
+        {
+            g.Clear(Color.White);
+            g.FillRectangle(new SolidBrush(Color.FromArgb(230, 126, 34)), 4, 2, 12, 6);
+        }
+
+        using var dst = PaddleOcrV6Engine.EnhanceForRec(src, out bool inverted);
+
+        Assert.False(inverted);
+        Assert.True(dst.GetPixel(10, 5).R < 80,
+            $"彩色文字应呈深色（旧亮度灰度约 152），实际 {dst.GetPixel(10, 5).R}");
+        Assert.True(dst.GetPixel(0, 0).R > 240, "背景应保持浅色");
+    }
+
+    [Fact]
+    public void EnhanceForRec_DarkBackgroundWithBlackText_PolarityNormalized()
+    {
+        // 深蓝底黑字：旧实现按均值反色后背景仍偏暗（中间调）；新实现按"离背景远 = 文字"
+        // 统一极性，任何底色都输出浅底深字。
+        using var src = new Bitmap(20, 10, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(src))
+        {
+            g.Clear(Color.FromArgb(0, 120, 215));
+            g.FillRectangle(Brushes.Black, 4, 2, 12, 6);
+        }
+
+        using var dst = PaddleOcrV6Engine.EnhanceForRec(src, out bool inverted);
+
+        Assert.True(inverted); // 源为深色背景（诊断语义保留）
+        Assert.True(dst.GetPixel(0, 0).R > 200, $"深蓝背景应归一化为浅色，实际 {dst.GetPixel(0, 0).R}");
+        Assert.True(dst.GetPixel(10, 5).R < 80, "黑色文字应保持深色");
+        Assert.Equal(dst.GetPixel(10, 5).R, dst.GetPixel(10, 5).G); // 灰度：R=G=B
+    }
+
     // ==================== det 后处理：闭运算与行高扩展 ====================
 
     private static float[] BuildPredMap(int w, int h, params (int X, int Y, int W, int H, float Val)[] blobs)

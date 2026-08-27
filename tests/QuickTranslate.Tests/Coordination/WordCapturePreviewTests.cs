@@ -123,9 +123,10 @@ public class WordCapturePreviewTests
             new PhysicalRect(0, 0, 720, 320), Mid));
         await Task.Delay(30);
 
-        // 估值行高 20：宽 = 15 × 0.62 × 20 = 186，高 = 4 × 20 = 80
+        // 估值行高 20：宽 = 15 × 0.62 × 20 × 首捕系数 2.0 = 372，高 = 4 × 20 = 80
+        // （首捕宽度加倍：估行高对大字号偏小，186px 几乎必然横向截断触发二次 OCR）
         Assert.NotEmpty(capture.CaptureAroundSizes);
-        Assert.Equal(186, capture.CaptureAroundSizes[0].Width);
+        Assert.Equal(372, capture.CaptureAroundSizes[0].Width);
         Assert.Equal(80, capture.CaptureAroundSizes[0].Height);
 
         ocr.RecognizeTcs.SetResult(CreateOcrResult(new PhysicalRect(0, 0, 720, 320)));

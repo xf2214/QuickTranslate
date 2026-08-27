@@ -61,7 +61,8 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         IReadOnlyList<OcrWord> Words,
         string Strategy,
         float Angle,
-        float Confidence);
+        float Confidence,
+        PhysicalRect RecBox);
 
     private static double BoxIou(PhysicalRect a, PhysicalRect b)
     {
@@ -79,6 +80,10 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
     // 焦点带内最多识别的行数：rec ~75ms/行是主要耗时，块生长实际只会用到
     // 锚点附近的行，远离光标的行识别了也不会被选中，按到带中心距离取最近 N 行。
     private const int MaxLinesToRecognize = 8;
+
+    // 主墨水带裁剪的上下 padding（像素）：保留少量字形上下伸部余量，
+    // 避免贴边裁切抗锯齿过渡带。
+    private const int RecBandPaddingPx = 2;
 
     public string EngineName => "PP-OCRv6-ONNX";
     public bool IsAvailable => _modelReady;
@@ -593,7 +598,9 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             if (recCacheHits > 0)
                 _logger.LogDebug("RecCache: {Hits}/{Total} lines reused from same-frame line cache", recCacheHits, detBoxes.Count);
 
-            var lineResults = new (string? Text, IReadOnlyList<OcrWord> Words, string Strategy, float Angle, float Confidence)[detBoxes.Count];
+            // RecBox = 词框/行框坐标系实际对应的框（原 det 框或主墨水带裁剪后的子框，
+            // 帧局部坐标）；词框坐标由它平移而来，组装 OcrLine 时必须用它而非原 det 框。
+            var lineResults = new (string? Text, IReadOnlyList<OcrWord> Words, string Strategy, float Angle, float Confidence, PhysicalRect RecBox)[detBoxes.Count];
             var classifierTotal = TimeSpan.Zero;
             var recognizerTotal = TimeSpan.Zero;
 
@@ -609,44 +616,88 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                     {
                         var ce = cachedEntry!;
                         if (ce.Text != null)
-                            lineResults[lineIdx] = (ce.Text, ce.Words, ce.Strategy, ce.Angle, ce.Confidence);
+                            lineResults[lineIdx] = (ce.Text, ce.Words, ce.Strategy, ce.Angle, ce.Confidence, ce.RecBox);
                         continue;
                     }
 
                     var lineBmp = lineBmps[lineIdx];
                     if (lineBmp == null) continue;
 
-                    // ===== rec 输入增强：灰度去 ClearType 彩边；深色行（暗色主题）反色 =====
-                    // rec/cls 训练分布以浅底深字为主，白字黑底先反色回训练分布，
-                    // 再统一灰度化消除亚像素渲染的红/蓝边缘伪影。
+                    // ===== rec 输入增强：背景色距离灰度化（保留色度对比 + 自动浅底深字极性）=====
                     using var enhancedBmp = EnhanceForRec(lineBmp, out bool darkInverted);
                     if (darkInverted)
-                        _logger.LogDebug("RecEnhance: dark line inverted (line {Idx})", lineIdx);
+                        _logger.LogDebug("RecEnhance: dark background normalized (line {Idx})", lineIdx);
 
-                    // ===== CLASSIFIER (optional) =====
-                    var clsStart = sw.Elapsed;
-                    float clsAngle = 0f;
-                    bool clsNeedRotate = false;
-                    if (holder.ClsSession != null)
+                    // ===== 主墨水带垂直裁剪 =====
+                    // det 框高度归一化会把行框撑大，紧凑行距时邻行墨水会渗入裁剪图；
+                    // 混入的邻行内容让 cls/rec 读到"一行半"而输出乱码（日志实测：
+                    // 'ive commnte'），词框也会被致密的邻行渗漏带劫持压成细条。
+                    // 先按行墨水剖面定位本行文字的主导墨水带（InkBandSelector，
+                    // 含短密渗漏带防劫持规则），仅对带区（± RecBandPaddingPx）跑 cls/rec。
+                    int bandTop = 0, bandBottom = enhancedBmp.Height;
+                    var bandRowInk = ComputeRowInkOnLightBackground(enhancedBmp);
+                    var dominantBand = InkBandSelector.SelectDominant(
+                        bandRowInk, InkBandSelector.DefaultNoiseFloor(enhancedBmp.Height));
+                    if (dominantBand.HasValue)
                     {
-                        var clsInput = PreprocessCls(enhancedBmp);
-                        try
+                        int padTop = Math.Max(0, dominantBand.Value.Top - RecBandPaddingPx);
+                        int padBottom = Math.Min(enhancedBmp.Height, dominantBand.Value.Bottom + RecBandPaddingPx);
+                        if (padBottom - padTop < enhancedBmp.Height * 9 / 10)
                         {
-                            (clsAngle, clsNeedRotate) = RunClassifier(holder.ClsSession, clsInput);
-                        }
-                        finally
-                        {
-                            // [池化] chw 归还：RunClassifier 内 using 已释放 outputs，数组再无引用。
-                            ArrayPool<float>.Shared.Return(clsInput);
+                            _logger.LogDebug(
+                                "RecBandCrop: rows [0,{H}) -> [{T},{B}) (line {Idx})",
+                                enhancedBmp.Height, padTop, padBottom, lineIdx);
+                            bandTop = padTop;
+                            bandBottom = padBottom;
                         }
                     }
-                    classifierTotal += sw.Elapsed - clsStart;
 
+                    bool bandCropped = bandTop > 0 || bandBottom < enhancedBmp.Height;
+                    var recBox = box;
+
+                    Bitmap? bandBmp = null;
                     Bitmap? orientedBmp = null;
                     try
                     {
-                        if (clsNeedRotate) orientedBmp = Rotate180(enhancedBmp);
-                        var recSource = orientedBmp ?? enhancedBmp;
+                        Bitmap baseSource = enhancedBmp;
+                        if (bandCropped)
+                        {
+                            bandBmp = CropBitmap(
+                                enhancedBmp,
+                                new PhysicalRect(0, bandTop, enhancedBmp.Width, bandBottom - bandTop));
+                            if (bandBmp != null)
+                            {
+                                baseSource = bandBmp;
+                                // 词框坐标系同步收缩：后续投影切分/比例兜底/OcrLine 都以 recBox 为基准
+                                recBox = new PhysicalRect(box.X, box.Y + bandTop, box.Width, bandBottom - bandTop);
+                            }
+                            else
+                            {
+                                bandCropped = false; // 裁剪失败退回整框
+                            }
+                        }
+
+                        // ===== CLASSIFIER (optional) =====
+                        var clsStart = sw.Elapsed;
+                        float clsAngle = 0f;
+                        bool clsNeedRotate = false;
+                        if (holder.ClsSession != null)
+                        {
+                            var clsInput = PreprocessCls(baseSource);
+                            try
+                            {
+                                (clsAngle, clsNeedRotate) = RunClassifier(holder.ClsSession, clsInput);
+                            }
+                            finally
+                            {
+                                // [池化] chw 归还：RunClassifier 内 using 已释放 outputs，数组再无引用。
+                                ArrayPool<float>.Shared.Return(clsInput);
+                            }
+                        }
+                        classifierTotal += sw.Elapsed - clsStart;
+
+                        if (clsNeedRotate) orientedBmp = Rotate180(baseSource);
+                        var recSource = orientedBmp ?? baseSource;
 
                         // ===== RECOGNIZER =====
                         var recStart = sw.Elapsed;
@@ -669,7 +720,7 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                         {
                             // 空结果同样入缓存：避免带扩展重试时空行再跑一遍 rec
                             SetRecLineCache(frame.Bitmap, frame.Region, box,
-                                new RecLineCacheEntry(box, null, Array.Empty<OcrWord>(), "none", clsAngle, recConfidence));
+                                new RecLineCacheEntry(box, null, Array.Empty<OcrWord>(), "none", clsAngle, recConfidence, recBox));
                             continue;
                         }
 
@@ -679,10 +730,12 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                         // 3) 加权比例法兜底（字符区间估计，置信度最低）。
                         // 1/2 由 TrySegmentOrConstrained 串联：位图墨水投影只做一次，
                         // 回退到受约束切分时不再重复全像素遍历。
+                        // 注意 localBox 用 recBox（主墨水带裁剪后的子框）而非原 det 框，
+                        // 否则词框 X/Y 平移会整体偏移一个 bandTop。
                         IReadOnlyList<OcrWord> words;
                         string wordStrategy;
                         if (ProjectionWordSegmenter.TrySegmentOrConstrained(
-                                recSource, recText, box, frame.Region, clsNeedRotate, lineIdx,
+                                recSource, recText, recBox, frame.Region, clsNeedRotate, lineIdx,
                                 _isPlausibleWord, out var segWords, out var segDetail))
                         {
                             words = segWords;
@@ -692,17 +745,18 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                         {
                             // 比例法兜底的词框需屏幕绝对坐标（与投影/受约束切分一致）
                             var lineScreenBox = new PhysicalRect(
-                                box.X + frame.Region.X, box.Y + frame.Region.Y, box.Width, box.Height);
+                                recBox.X + frame.Region.X, recBox.Y + frame.Region.Y, recBox.Width, recBox.Height);
                             words = BuildWords(recText, lineScreenBox, lineIdx);
                             wordStrategy = "proportional";
                         }
-                        lineResults[lineIdx] = (recText, words, wordStrategy, clsAngle, recConfidence);
+                        lineResults[lineIdx] = (recText, words, wordStrategy, clsAngle, recConfidence, recBox);
                         SetRecLineCache(frame.Bitmap, frame.Region, box,
-                            new RecLineCacheEntry(box, recText, words, wordStrategy, clsAngle, recConfidence));
+                            new RecLineCacheEntry(box, recText, words, wordStrategy, clsAngle, recConfidence, recBox));
                     }
                     finally
                     {
                         orientedBmp?.Dispose();
+                        bandBmp?.Dispose();
                     }
                 }
             }
@@ -724,15 +778,30 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 // “未检测到可翻译的单词 / 单词识别不可用”。因此：
                 //   - CropBitmap 用局部 box（它相对 frame.Bitmap 裁剪）；
                 //   - OcrLine/OcrWord 用平移到屏幕绝对坐标的 screenBox（frame.Region 是屏幕坐标）。
-                var box = detBoxes[lineIdx];
+                // 注意用 RecBox（主墨水带裁剪后的实际识别框），词框坐标系与它一致。
+                var recBox = res.RecBox;
                 var screenBox = new PhysicalRect(
-                    box.X + frame.Region.X,
-                    box.Y + frame.Region.Y,
-                    box.Width,
-                    box.Height);
+                    recBox.X + frame.Region.X,
+                    recBox.Y + frame.Region.Y,
+                    recBox.Width,
+                    recBox.Height);
 
-                _logger.LogDebug("WordBox: strategy={Strategy} words={Count} confidence={Confidence:F3} line={Idx}",
-                    res.Strategy, res.Words.Count, res.Confidence, lineIdx);
+                if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
+                {
+                    // 逐词明细（文本+屏幕绝对框）：定位"检测/选取位置不准"的关键证据。
+                    // Debug 关闭时零开销（IsEnabled 守卫，字符串不构建）。
+                    var detail = string.Join(" | ",
+                        res.Words.Select(w => $"'{w.Text}'({w.Box.X},{w.Box.Y} {w.Box.Width}x{w.Box.Height})"));
+                    _logger.LogDebug(
+                        "WordBox: strategy={Strategy} words={Count} confidence={Confidence:F3} line={Idx} lineBox=({X},{Y} {W}x{H}) detail=[{Detail}]",
+                        res.Strategy, res.Words.Count, res.Confidence, lineIdx,
+                        screenBox.X, screenBox.Y, screenBox.Width, screenBox.Height, detail);
+                }
+                else
+                {
+                    _logger.LogDebug("WordBox: strategy={Strategy} words={Count} confidence={Confidence:F3} line={Idx}",
+                        res.Strategy, res.Words.Count, res.Confidence, lineIdx);
+                }
                 lines.Add(new OcrLine(screenBox, res.Words, res.Text, res.Angle, res.Confidence));
             }
 
@@ -1400,9 +1469,18 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
     // ==================== UTILS ====================
 
     /// <summary>
-    /// rec/cls 输入增强：1) 灰度化消除 ClearType 亚像素渲染的红/蓝彩边伪影；
-    /// 2) 行裁剪为深色底（暗色主题）时反色成浅底深字，对齐 rec 训练分布。
-    /// 深/浅判定用平均亮度（裁剪图背景占绝对多数，均值稳定）。
+    /// rec/cls 输入增强：背景色距离灰度化。
+    /// 旧实现按 BT.601 亮度做灰度：对"彩色文字/渐变底"（文字与背景亮度接近、
+    /// 色度差异大）会把对比度抹到接近零，rec 只能输出乱码（日志实测：营销页彩色
+    /// 标题整行乱认 GtHub/tols/omunty，且随截图亚像素相位随机波动——同一区域
+    /// 多次按压时好时坏）。
+    /// 新实现：以逐通道中位数估计背景色（背景像素在行裁剪中占绝对多数，中位数稳定），
+    /// 每像素取与背景色的最大通道差 d = max(|r-br|,|g-bg|,|b-bb|)，按鲁棒峰值
+    /// （d 的 98 分位）拉伸后反转输出——d 大（离背景远 = 文字）输出深色：
+    ///   1) 同时保留亮度对比与色度对比，彩色文字不再被抹掉；
+    ///   2) 天然保证"浅底深字"极性，暗色主题无需显式反色分支；
+    ///   3) ClearType 彩边在色距下同样表现为"离背景远"，去彩边目标保持。
+    /// inverted 仅作诊断语义保留：true = 源裁剪为深色背景（均值亮度 &lt; 127）。
     /// </summary>
     internal static Bitmap EnhanceForRec(Bitmap src, out bool inverted)
     {
@@ -1417,26 +1495,61 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             var srcBytes = new byte[srcData.Stride * h];
             Marshal.Copy(srcData.Scan0, srcBytes, 0, srcBytes.Length);
 
-            // 第一遍：BT.601 亮度（0.299R + 0.587G + 0.114B）+ 均值统计
-            var gray = new byte[w * h];
-            long sum = 0;
-            for (int y = 0; y < h; y++)
+            // 第一遍：RGB 逐通道直方图（背景色中位数）+ 亮度均值（inverted 诊断标志）
+            int total = w * h;
+            var histB = new int[256];
+            var histG = new int[256];
+            var histR = new int[256];
+            long lumaSum = 0;
+            for (int i = 0; i < total; i++)
             {
-                int rowOff = y * srcData.Stride;
-                int gOff = y * w;
-                for (int x = 0; x < w; x++)
+                int j = i * 4;
+                byte b = srcBytes[j], g = srcBytes[j + 1], r = srcBytes[j + 2];
+                histB[b]++;
+                histG[g]++;
+                histR[r]++;
+                lumaSum += (77 * r + 150 * g + 29 * b) >> 8;
+            }
+
+            byte bgB = MedianOf(histB, total);
+            byte bgG = MedianOf(histG, total);
+            byte bgR = MedianOf(histR, total);
+            inverted = (double)lumaSum / total < 127;
+
+            // 第二遍：色距 d = max(|r-br|,|g-bg|,|b-bb|) + d 直方图
+            var dist = new byte[total];
+            var histD = new int[256];
+            for (int i = 0; i < total; i++)
+            {
+                int j = i * 4;
+                int db = Math.Abs(srcBytes[j] - bgB);
+                int dg = Math.Abs(srcBytes[j + 1] - bgG);
+                int dr = Math.Abs(srcBytes[j + 2] - bgR);
+                int d = Math.Max(db, Math.Max(dg, dr));
+                if (d > 255) d = 255;
+                dist[i] = (byte)d;
+                histD[d]++;
+            }
+
+            // 鲁棒拉伸上限：d 的 98 分位（避免孤立噪点把上限撑爆导致文字变浅）；
+            // 过小（<16）说明整幅近乎单色（无文字），直接输出纯浅底。
+            long p98Target = (long)(total * 0.98);
+            int p98 = 0;
+            long acc = 0;
+            for (int v = 0; v < 256; v++)
+            {
+                acc += histD[v];
+                if (acc >= p98Target)
                 {
-                    int i = rowOff + x * 4;
-                    byte b = srcBytes[i], g = srcBytes[i + 1], r = srcBytes[i + 2];
-                    byte lum = (byte)((77 * r + 150 * g + 29 * b) >> 8);
-                    gray[gOff + x] = lum;
-                    sum += lum;
+                    p98 = v;
+                    break;
                 }
             }
 
-            inverted = (double)sum / (w * h) < 127;
+            float scale = p98 >= 16 ? 255f / p98 : 0f;
 
-            // 第二遍：写回灰度（深色行先反色）
+            // 第三遍：写回灰度。out = 255 − min(255, d×scale)：
+            // 背景（d≈0）→ 浅 255；文字（d 大）→ 深。任何源极性统一为浅底深字。
             var dstBytes = new byte[dstData.Stride * h];
             for (int y = 0; y < h; y++)
             {
@@ -1444,11 +1557,12 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 int gOff = y * w;
                 for (int x = 0; x < w; x++)
                 {
-                    byte v = inverted ? (byte)(255 - gray[gOff + x]) : gray[gOff + x];
+                    int v = 255 - (int)Math.Min(255f, dist[gOff + x] * scale);
+                    byte val = (byte)v;
                     int i = rowOff + x * 4;
-                    dstBytes[i] = v;
-                    dstBytes[i + 1] = v;
-                    dstBytes[i + 2] = v;
+                    dstBytes[i] = val;
+                    dstBytes[i + 1] = val;
+                    dstBytes[i + 2] = val;
                     dstBytes[i + 3] = 255;
                 }
             }
@@ -1460,6 +1574,52 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             dst.UnlockBits(dstData);
         }
         return dst;
+    }
+
+    /// <summary>直方图中位数（下中位）：累计计数首次达到总数一半时的桶值。</summary>
+    private static byte MedianOf(int[] hist, int total)
+    {
+        long half = (long)(total + 1) / 2;
+        long acc = 0;
+        for (int v = 0; v < 256; v++)
+        {
+            acc += hist[v];
+            if (acc >= half)
+                return (byte)v;
+        }
+        return 255;
+    }
+
+    /// <summary>
+    /// 统计浅底深字灰度图（EnhanceForRec 输出已保证极性）每行暗像素数，
+    /// 供主墨水带选择（<see cref="InkBandSelector"/>）。阈值 128：
+    /// 背景被归一化为浅色（≥128），文字为深色（&lt;128）。
+    /// </summary>
+    private static int[] ComputeRowInkOnLightBackground(Bitmap gray)
+    {
+        int w = gray.Width, h = gray.Height;
+        var rowInk = new int[h];
+        var data = gray.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            var bytes = new byte[data.Stride * h];
+            Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);
+            for (int y = 0; y < h; y++)
+            {
+                int rowOff = y * data.Stride;
+                int count = 0;
+                for (int x = 0; x < w; x++)
+                {
+                    if (bytes[rowOff + x * 4] < 128) count++;
+                }
+                rowInk[y] = count;
+            }
+        }
+        finally
+        {
+            gray.UnlockBits(data);
+        }
+        return rowInk;
     }
 
     private static Bitmap? CropBitmap(Bitmap src, PhysicalRect box)

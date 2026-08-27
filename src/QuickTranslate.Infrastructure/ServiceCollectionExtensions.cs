@@ -53,6 +53,14 @@ internal sealed class SettingsInitializationService : IHostedService
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // SettingsManager 的 DI 工厂负责播种 LoadTask（首次解析即启动异步加载）。
+        // 历史上只有设置窗口/托盘菜单会解析它 —— 冷启动时无人播种，本服务会在
+        // 下一行静默返回：设置从未加载、IOptions 永远是默认值、Debug 日志级别
+        // 锁死默认 Information。此处显式解析一次，保证
+        // “settings ready before first hotkey”不变量真正成立。
+        if (_state.LoadTask is null)
+            _sp.GetRequiredService<SettingsManager>();
+
         if (_state.LoadTask is null) return;
         try
         {
@@ -74,6 +82,10 @@ internal sealed class SettingsInitializationService : IHostedService
                 cur.CloseOnOutsideClick = loaded.CloseOnOutsideClick;
                 cur.DebugLogging = loaded.DebugLogging;
                 cur.DebugOverlayMode = loaded.DebugOverlayMode;
+
+                // 日志器可能在 Load 完成前就已按默认值创建（Serilog 级别锁死 Information，
+                // 见 LoggerConfigurator 注释）。加载完成后把落盘的 Debug 开关同步到运行时。
+                LoggingSwitch.SetDebugEnabled(loaded.DebugLogging);
                 cur.EnableTextToSpeech = loaded.EnableTextToSpeech;
                 cur.TranslationProvider = loaded.TranslationProvider;
                 cur.CustomLlmBaseUrl = loaded.CustomLlmBaseUrl;
@@ -165,7 +177,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILoggerProvider>(sp =>
         {
             var appSettings = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<AppSettings>>().Value;
-            LoggingSwitch.IsDebugEnabled = appSettings.DebugLogging;
+            // 设置为异步加载：此处可能读到默认值（false），SettingsInitializationService
+            // 在 Load 完成后会再次 SetDebugEnabled 同步落盘值。
+            LoggingSwitch.SetDebugEnabled(appSettings.DebugLogging);
             var innerFactory = sp.GetRequiredService<ILoggerFactory>();
             var inner = new SerilogAppLoggingProvider(innerFactory);
             return new FilteringLoggerProvider(inner, level =>

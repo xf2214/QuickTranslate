@@ -45,6 +45,9 @@ public class AppSettings
     public bool DebugOverlayMode { get; set; } = false;
     public bool EnableTextToSpeech { get; set; } = false;
 
+    /// <summary>热键触发时优先尝试 UIA 选中文本探测（可选中文本场景零 OCR 误差），失败静默回退 OCR。</summary>
+    public bool EnableSelectedTextProbe { get; set; } = true;
+
     // ===== 自定义大模型接入（OpenAI 兼容）=====
     public TranslationProviderKind TranslationProvider { get; set; } = TranslationProviderKind.CustomOpenAi;
 
@@ -68,4 +71,8 @@ public class AppSettings
     public bool IsCustomLlmConfigured =>
         !string.IsNullOrWhiteSpace(CustomLlmBaseUrl) &&
         !string.IsNullOrWhiteSpace(CustomLlmModel);
+
+    /// <summary>弹窗显示样式：detailed 详细 / compact 简洁；持久化到 settings.json，随弹窗每次 Show 读取。</summary>
+    // WHY：详细模式展示元信息彩点与文字按钮，简洁模式隐藏元信息行并用图标按钮以节省纵向空间。
+    public string PopupDisplayStyle { get; set; } = "detailed";
 }

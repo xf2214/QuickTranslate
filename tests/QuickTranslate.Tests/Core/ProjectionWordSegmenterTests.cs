@@ -702,4 +702,79 @@ public class ProjectionWordSegmenterTests : IDisposable
         Assert.Single(words);
         Assert.Equal("xqzu", words[0].Text);
     }
+
+    [Fact]
+    public void Case27_LowContrastText_ProducesSegments()
+    // 低对比度文字（灰字/浅主题，如 #999 on white / #AAA on #F0F0F0）：
+    // 均值×0.6 阈值可能高于文字灰度 → 全图零墨水，投影与受约束切分双双失效，
+    // 引擎只能退化到按字符比例估框的 proportional 兜底（框高撑满整行、位置粗糙）。
+    // 二值化应在零墨水时逐级降低阈值系数重试，让低对比度文字也走精确投影切分。
+    {
+        var (bmp, _) = DrawWords(new[] { "commit" }, height: 65, darkTheme: false);
+        // 重画为灰字：DrawWords 用黑字绘制，这里直接改用低对比度重绘
+        _bitmaps.Remove(bmp);
+        bmp.Dispose();
+
+        var font = new Font("Segoe UI", 32f, FontStyle.Regular, GraphicsUnit.Pixel);
+        var grayBmp = new Bitmap(200, 65, PixelFormat.Format32bppArgb);
+        _bitmaps.Add(grayBmp);
+        using (var g = Graphics.FromImage(grayBmp))
+        {
+            g.TextRenderingHint = TextRenderingHint.SystemDefault;
+            g.Clear(Color.White);
+            using var brush = new SolidBrush(Color.FromArgb(153, 153, 153)); // #999999
+            g.DrawString("commit", font, brush, 10f, 8f);
+        }
+
+        var frameRegion = new PhysicalRect(0, 0, grayBmp.Width, grayBmp.Height);
+        var localBox = new PhysicalRect(0, 0, grayBmp.Width, grayBmp.Height);
+
+        bool ok = ProjectionWordSegmenter.TrySegmentOrConstrained(
+            grayBmp, "commit", localBox, frameRegion, false, 0, out var words, out var detail);
+
+        Assert.True(ok, $"低对比度文字应能切分，实际 detail='{detail}'");
+        Assert.Single(words);
+        Assert.Equal("commit", words[0].Text);
+        // 精确投影的词框经过垂直收紧：高度明显小于整行（proportional 兜底会撑满行高）
+        Assert.True(words[0].Box.Height < localBox.Height * 0.8,
+            $"收紧后框高 {words[0].Box.Height} 应明显小于行高 {localBox.Height}");
+    }
+
+    [Fact]
+    public void Case28_MixedCjkTokenWithPunctuation_CjkRunSplitPerChar()
+    // 回归（真实轨迹）：混排 token 如 "快速识别." 走 run 拆分路径时，
+    // CJK run 未做逐字切分 → 光标指向单个汉字却选中整个词组框，
+    // 与纯 CJK token 的逐字精度不一致。CJK run 必须同样逐字均分。
+    {
+        var font = new Font("Microsoft YaHei", 28f, FontStyle.Regular, GraphicsUnit.Pixel);
+        var bmp = new Bitmap(220, 44, PixelFormat.Format32bppArgb);
+        _bitmaps.Add(bmp);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            g.TextRenderingHint = TextRenderingHint.AntiAlias;
+            using var brush = new SolidBrush(Color.Black);
+            g.DrawString("快速识别.", font, brush, 10f, 4f);
+        }
+        var frameRegion = new PhysicalRect(100, 200, bmp.Width, bmp.Height);
+        var localBox = new PhysicalRect(0, 0, bmp.Width, bmp.Height);
+
+        bool ok = ProjectionWordSegmenter.TrySegmentOrConstrained(
+            bmp, "快速识别.", localBox, frameRegion, false, 0, out var words, out _);
+
+        Assert.True(ok);
+        // 快/速/识/别 四个单字框 + 句点独立框 = 5 个词
+        Assert.Equal(5, words.Count);
+        Assert.Equal("快", words[0].Text);
+        Assert.Equal("速", words[1].Text);
+        Assert.Equal("识", words[2].Text);
+        Assert.Equal("别", words[3].Text);
+        Assert.Equal(".", words[4].Text);
+        // 单字框互不重叠、宽度接近（CJK 等宽）
+        for (int i = 0; i < 3; i++)
+            Assert.True(words[i].Box.Right <= words[i + 1].Box.Left + 1,
+                $"字框 {i} 与下一框重叠");
+        Assert.True(Math.Abs(words[0].Box.Width - words[3].Box.Width) <= 8,
+            $"首末字宽差异过大: {words[0].Box.Width} vs {words[3].Box.Width}");
+    }
 }

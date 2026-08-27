@@ -102,10 +102,12 @@ public class WpfWordPopupService : IWordPopupService
 
         // 尺寸随内容自适应（区分 CJK/ASCII 字宽），替代旧固定 320x150：
         // 短译文不再有大片空白，长译文自动换行增高并受工作区钳制。
-        // 用与弹窗展示一致的格式化文本估算（词典释义含多行），避免高度估小
+        // 用与弹窗展示一致的格式化文本估算（词典释义含多行），避免高度估小；
+        // 词头估算需包含音标后缀（词典命中展示在词头行），否则长单词换行高度被低估
         var displayText = TranslationDisplayFormatter.ForWord(translation.TargetText, translation.FromDictionary);
+        var headerForEstimate = BuildHeaderForEstimate(selection.Text, displayText, translation.FromDictionary);
         var (estW, estH) = PopupSizeEstimator.EstimateWordPopupSize(
-            selection.Text, displayText,
+            headerForEstimate, displayText,
             monitorInfo.WorkArea.Width * 96.0 / dpiX,
             monitorInfo.WorkArea.Height * 96.0 / dpiY);
 
@@ -121,8 +123,19 @@ public class WpfWordPopupService : IWordPopupService
         window.Width = dipRect.Width;
         window.Height = Math.Max(dipRect.Height, estH);
 
+        var style = _appSettings.Value.PopupDisplayStyle;
+        bool detailed = !string.Equals(style, "compact", StringComparison.OrdinalIgnoreCase);
+        window.ApplyDisplayMode(detailed);
         window.ApplyContent(selection, translation);
         window.ApplyTextToSpeech(_textToSpeech, _appSettings.Value.EnableTextToSpeech, _appSettings.Value.TargetLanguage);
+
+        // 最终防线：ApplyContent 后按真实渲染测量校正高度。
+        // 结构化词典视图/元信息行等动态布局不受估算常数漂移影响，只增不减（钳制工作区 45%），
+        // 杜绝"底部按钮显示不全"。宽度不变，定位沿用 Place 结果。
+        double desiredH = window.MeasureDesiredContentHeight();
+        double maxHDip = Math.Max(140, monitorInfo.WorkArea.Height * 96.0 / dpiY * 0.45);
+        window.Height = Math.Clamp(Math.Max(estH, Math.Ceiling(desiredH)), 110, maxHDip);
+
         window.SetLastLayoutDipRect(dipRect);
 
         if (!window.IsVisible)
@@ -139,6 +152,24 @@ public class WpfWordPopupService : IWordPopupService
             // 已可见时复用：取消进行中的退场动画并复播进场
             window.ReplayEntry();
         }
+    }
+
+    /// <summary>词典命中的音标行展示在词头行，估算词头宽度/换行时必须把它算进文本。</summary>
+    private static string BuildHeaderForEstimate(string? word, string displayText, bool fromDictionary)
+    {
+        if (string.IsNullOrWhiteSpace(word))
+        {
+            return string.Empty;
+        }
+
+        if (!fromDictionary || displayText.Length == 0)
+        {
+            return word;
+        }
+
+        var nl = displayText.IndexOf('\n');
+        var firstLine = (nl > 0 ? displayText[..nl] : displayText).Trim();
+        return $"{word}  {firstLine}";
     }
 
     public void ShowError(MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY, string shortMessage, Guid operationId)
@@ -196,6 +227,9 @@ public class WpfWordPopupService : IWordPopupService
         window.Width = dipRect.Width;
         window.Height = Math.Max(dipRect.Height, 120);
 
+        var style2 = _appSettings.Value.PopupDisplayStyle;
+        bool detailed2 = !string.Equals(style2, "compact", StringComparison.OrdinalIgnoreCase);
+        window.ApplyDisplayMode(detailed2);
         window.ShowError(shortMessage);
         window.ApplyTextToSpeech(null, false, null);
         window.SetLastLayoutDipRect(dipRect);

@@ -17,6 +17,7 @@ public static class PopupSizeEstimator
     private const double WordLineHeight = 22;       // 与 XAML LineHeight 同步
     private const double WordHeaderLineHeight = 24; // 18px 标题换行时的行高
     private const int WordHeaderMaxLines = 3;       // 与 XAML WordHeader MaxHeight 一致
+    private const double WordMetaAllowance = 22;    // 详细模式元信息行(MetaRow)高度含底边距
 
     // Block 弹窗基准（紧凑化后 Padding=11）
     private const int BlockMinW = 340;
@@ -25,6 +26,11 @@ public static class PopupSizeEstimator
     private const double BlockVertChrome = 152;
     private const double BlockLineHeight = 22;      // 与 XAML LineHeight 同步
     private const double BlockSrcFont = 11.5;       // 源文小号灰字字号，与高度估算一致
+    private const double BlockSrcLineHeight = 18;   // SourceText LineHeight，与 XAML 同步
+    private const double BlockQuotePadV = 16;       // SourceQuote Padding 上下 8*2
+    private const double BlockQuoteMaxCollapsed = 54;  // 折叠时引用块 MaxHeight（3 行）
+    private const double BlockQuoteMaxExpanded = 120;  // 展开时引用块 MaxHeight
+    private const double BlockQuoteExpandedSlack = 6;  // 展开态实测余量：chevron 行高与布局取整（防 1px 级裁切）
     private const int BlockInnerPadTotal = 34;      // 内边距总和（width - 34 为可用内宽）
     private const int BlockSelMargin = 12;          // 选宽余量，对齐词弹窗的 +12 策略
 
@@ -72,9 +78,12 @@ public static class PopupSizeEstimator
         return Math.Max(1, total);
     }
 
-    /// <summary>词弹窗尺寸：宽度取 min(单词宽度, 上限)，译文过长换行；高度随行数增长并钳制工作区。</summary>
+    /// <summary>词弹窗尺寸：宽度取 min(单词宽度, 上限)，译文过长换行；高度随行数增长并钳制工作区。
+    /// metaVisible：详细模式的元信息行（● 词典/缓存/在线）会占一行高度，必须计入，
+    /// 否则全 Auto 行网格无星号吸收器，底部按钮会被推出窗口外。</summary>
     public static (int Width, int Height) EstimateWordPopupSize(
-        string? header, string? body, double workAreaWidth, double workAreaHeight)
+        string? header, string? body, double workAreaWidth, double workAreaHeight,
+        bool metaVisible = false)
     {
         var maxW = (int)Math.Min(WordMaxW, Math.Max(WordMinW, workAreaWidth * 0.5));
         var minW = (int)Math.Min(WordMinW, maxW);
@@ -102,7 +111,7 @@ public static class PopupSizeEstimator
 
         var effInner = width - WordHorizPadding;
         var lines = CountDisplayLines(body, WordBodyFont, effInner);
-        var height = (int)Math.Ceiling(WordVertChrome + lines * WordLineHeight);
+        var height = (int)Math.Ceiling(WordVertChrome + (metaVisible ? WordMetaAllowance : 0) + lines * WordLineHeight);
 
         // 选中文本是一整句时标题会换行（最多 WordHeaderMaxLines 行）：首行已含在 VertChrome 里，补算额外行
         var headerLines = Math.Min(WordHeaderMaxLines, CountDisplayLines(header, WordHeaderFont, effInner));
@@ -113,9 +122,14 @@ public static class PopupSizeEstimator
         return (width, height);
     }
 
-    /// <summary>块弹窗尺寸：宽度 340~640（工作区 60%），高度按行数估算并钳制工作区 60%。</summary>
+    /// <summary>
+    /// 块弹窗尺寸：宽度 340~640（工作区 60%），高度按行数估算并钳制工作区 60%。
+    /// sourceExpanded：简洁/详细模式下"原文"引用块处于展开态时，其区域高度必须计入，
+    /// 否则窗口偏矮、底部按钮区被推出窗口外（实测 gap=-35px 的裁切根因）。
+    /// </summary>
     public static (int Width, int Height) EstimateBlockPopupSize(
-        string? sourceText, string? translationText, double workAreaWidth, double workAreaHeight)
+        string? sourceText, string? translationText, double workAreaWidth, double workAreaHeight,
+        bool detailed = true, bool sourceExpanded = false)
     {
         var maxW = (int)Math.Min(BlockMaxW, Math.Max(BlockMinW, workAreaWidth * 0.6));
         var minW = Math.Min(BlockMinW, maxW);
@@ -142,14 +156,37 @@ public static class PopupSizeEstimator
         }
 
         var innerW = width - BlockInnerPadTotal;
-        // 源文（小号灰字，最多 3 行）+ 译文主体；两者都可能含换行，按段累计行数
-        var srcLines = Math.Min(3, CountDisplayLines(sourceText, BlockSrcFont, innerW));
-        if (string.IsNullOrWhiteSpace(sourceText)) srcLines = 0;
+        // 源文区域高度：引用块 MaxHeight 是确定性的（折叠 54 / 展开 120，XAML 同步），
+        // 按区域高度计而非行数——展开态必须计入，否则底部按钮被推出窗口
+        // WHY：简洁模式源文默认整体折叠（Collapsed），仅展开时计入；详细模式常显但折叠限 3 行
+        int srcLines = string.IsNullOrWhiteSpace(sourceText)
+            ? 0
+            : Math.Min(CountDisplayLines(sourceText, BlockSrcFont, innerW), 10);
+        double srcRegionH;
+        if (srcLines == 0)
+        {
+            srcRegionH = 0;
+        }
+        else if (!detailed)
+        {
+            srcRegionH = sourceExpanded
+                ? Math.Min(srcLines * BlockSrcLineHeight, BlockQuoteMaxExpanded) + BlockQuotePadV + BlockQuoteExpandedSlack
+                : 0;
+        }
+        else
+        {
+            var cap = sourceExpanded ? BlockQuoteMaxExpanded : BlockQuoteMaxCollapsed;
+            srcRegionH = Math.Min(srcLines * BlockSrcLineHeight, cap) + BlockQuotePadV
+                + (sourceExpanded ? BlockQuoteExpandedSlack : 0);
+        }
         var bodyLines = CountDisplayLines(translationText, BlockBodyFont, innerW);
 
-        var height = (int)Math.Ceiling(BlockVertChrome + srcLines * 17 + bodyLines * BlockLineHeight);
+        // 简洁模式无元信息行，纵向 chrome 略短
+        var vertChrome = detailed ? BlockVertChrome : BlockVertChrome - 32;
+        var height = (int)Math.Ceiling(vertChrome + srcRegionH + bodyLines * BlockLineHeight);
         var maxH = (int)Math.Max(240, workAreaHeight * 0.6);
-        height = Math.Clamp(height, 200, maxH);
+        var minH = detailed ? 200 : 160;
+        height = Math.Clamp(height, minH, maxH);
         return (width, height);
     }
 }

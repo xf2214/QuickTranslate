@@ -72,6 +72,28 @@ public class DefaultBlockSelector : IBlockSelector
         int medianRight = ComputeMedianRight(ocr.Lines);
         int medianLineWidth = ComputeMedianLineWidth(ocr.Lines);
 
+        // 列聚类：多栏布局下把块生长限制在锚点所在列内，防止垂直相邻的另一栏文本被吸入同一段。
+        // 容差 = 中位行高 × 因子：同栏各行的左缘抖动（缩进/项目符号）远小于一行高，
+        // 超过该值的左缘差异视为不同列。
+        double columnTolerance = medianLineHeight * opts.BlockColumnClusterToleranceFactor;
+        var columnClusters = ClusterByLeftEdge(ocr.Lines, columnTolerance);
+        // 多栏守卫：仅当「簇数 ≥ 2 且 含 ≥2 行的簇 ≥ 2」时认定多栏成立。
+        // 原因：居中排版的左缘小步长漂移若被误判为多列会零回归破坏；
+        // 单栏（聚成一簇）或碎片化（大量单行簇）都不启用列限制，保持旧版行为。
+        bool multiColumn = false;
+        int anchorClusterIndex = -1;
+        if (columnClusters.Count >= 2)
+        {
+            int multiRowClusterCount = 0;
+            foreach (var c in columnClusters) if (c.Count >= 2) multiRowClusterCount++;
+            if (multiRowClusterCount >= 2)
+            {
+                anchorClusterIndex = FindAnchorClusterIndex(columnClusters, anchorLine);
+                if (anchorClusterIndex >= 0)
+                    multiColumn = true;
+            }
+        }
+
         PhysicalRect union = anchorLine.Box;
         // 核心列并集：只由正文宽度行（≤ coreWidthLimit）累积。水平连通性判定基于它，
         // 防止超宽行把 union 撑宽后将水平不连续的附近文本（另一栏/隔开的文本）桥接进来。
@@ -84,6 +106,9 @@ public class DefaultBlockSelector : IBlockSelector
         {
             if (selected.Count >= opts.BlockMaxLinesPerBlock) break;
             OcrLine candidate = ocr.Lines[i];
+            // 列聚类约束（多栏时）：候选不在锚点列 → 停止生长（break 保持段末/缩进等既有语义不变）
+            if (multiColumn && !IsInAnchorCluster(candidate, columnClusters[anchorClusterIndex]))
+                break;
             // 上方候选是段末短行（且块内已有全宽行）：它是上一段落的结尾 → 停在边界前，不纳入
             if (IsShortTail(candidate, medianRight, medianLineWidth, opts) && HasFullWidthLine(selected, medianRight, medianLineWidth, opts))
                 break;
@@ -106,6 +131,9 @@ public class DefaultBlockSelector : IBlockSelector
         {
             if (selected.Count >= opts.BlockMaxLinesPerBlock) break;
             OcrLine candidate = ocr.Lines[i];
+            // 列聚类约束（多栏时）：候选不在锚点列 → 停止生长
+            if (multiColumn && !IsInAnchorCluster(candidate, columnClusters[anchorClusterIndex]))
+                break;
             // 块当前末行是段末短行（且块内已有全宽行）：段落已结束 → 不再吸入下一段落
             if (IsShortTail(selected[^1], medianRight, medianLineWidth, opts) && HasFullWidthLine(selected, medianRight, medianLineWidth, opts))
                 break;
@@ -298,5 +326,58 @@ public class DefaultBlockSelector : IBlockSelector
         int right = Math.Max(a.Right, b.Right);
         int bottom = Math.Max(a.Bottom, b.Bottom);
         return new PhysicalRect(x, y, right - x, bottom - y);
+    }
+
+    // 列聚类：按左缘 minX 升序后做链式贪心聚类（相邻排序差 > 容差才开新簇），O(n log n)。
+    // 链式比较的意义：居中排版的左缘常呈小步长单调漂移，若与簇基准（最小 minX）比较会随
+    // 累积漂移链式碎裂成大量单行簇；只看相邻差即可把缓漂移稳定聚成一列，而真正的跨栏
+    // 左缘跳变（远大于一行高）仍会被切断。
+    private static List<ColumnCluster> ClusterByLeftEdge(IReadOnlyList<OcrLine> lines, double tolerance)
+    {
+        if (lines.Count == 0) return new List<ColumnCluster>(0);
+        var sorted = lines.OrderBy(l => l.Box.Left).ToList();
+        var clusters = new List<ColumnCluster>(sorted.Count);
+        var current = new ColumnCluster();
+        current.Lines.Add(sorted[0]);
+        clusters.Add(current);
+        for (int i = 1; i < sorted.Count; i++)
+        {
+            var line = sorted[i];
+            // 链式比较：与前一行（当前簇最后加入者）的左缘差 ≤ 容差则同列
+            if (Math.Abs(line.Box.Left - current.Lines[^1].Box.Left) <= tolerance)
+            {
+                current.Lines.Add(line);
+            }
+            else
+            {
+                current = new ColumnCluster();
+                current.Lines.Add(line);
+                clusters.Add(current);
+            }
+        }
+        return clusters;
+    }
+
+    // 锚点簇定位：按成员引用归属（与 IsInAnchorCluster 一致），避免数值重判在簇内
+    // 漂移超出容差时把同簇成员误判为异簇。
+    private static int FindAnchorClusterIndex(List<ColumnCluster> clusters, OcrLine anchorLine)
+    {
+        for (int i = 0; i < clusters.Count; i++)
+        {
+            if (clusters[i].Lines.Contains(anchorLine)) return i;
+        }
+        return -1;
+    }
+
+    private static bool IsInAnchorCluster(OcrLine candidate, ColumnCluster anchorCluster)
+    {
+        return anchorCluster.Lines.Contains(candidate);
+    }
+
+    // 列簇：Lines 为簇内行集合（用于多栏守卫计数、锚点簇定位与成员归属判定）
+    private sealed class ColumnCluster
+    {
+        public List<OcrLine> Lines { get; } = new();
+        public int Count => Lines.Count;
     }
 }

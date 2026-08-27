@@ -208,9 +208,12 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
 
     private void RaiseKeyStateChanged(KeyStateChangedEventArgs args)
     {
-        if (Application.Current?.Dispatcher != null)
+        // 长按 400ms 判定对时序敏感：BeginInvoke 异步会导致 Down/Up 在 UI 线程的
+        // 队列中乱序，短按也可能在 400ms 后才处理 Down 而误触发 HoldStart。
+        // 改为同步 Invoke 确保 Down/Up 顺序与物理按键一致，Hold 计时才能准确区分点按与长按。
+        if (Application.Current?.Dispatcher != null && !Application.Current.Dispatcher.CheckAccess())
         {
-            Application.Current.Dispatcher.BeginInvoke(() => KeyStateChanged?.Invoke(this, args));
+            Application.Current.Dispatcher.Invoke(() => KeyStateChanged?.Invoke(this, args));
         }
         else
         {

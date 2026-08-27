@@ -10,6 +10,7 @@ using QuickTranslate.Core.Options;
 using QuickTranslate.Infrastructure;
 using QuickTranslate.Infrastructure.Services;
 using QuickTranslate.Platform;
+using QuickTranslate.Platform.Automation;
 using QuickTranslate.Platform.Hotkeys;
 using QuickTranslate.TextToSpeech;
 
@@ -49,6 +50,7 @@ public static class AppHost
                 services.AddSingleton<IWordPopupService, WpfWordPopupService>();
                 services.AddSingleton<IBlockPopupService, WpfBlockPopupService>();
                 services.AddSingleton<IStatusIndicatorService, WpfStatusIndicatorService>();
+                services.AddSingleton<ISelectedTextProbe, UiAutomationSelectedTextProbe>();
                 services.AddTextToSpeech();
             })
             .ConfigureLogging((context, logging) =>

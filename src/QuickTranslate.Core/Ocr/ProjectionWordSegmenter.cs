@@ -24,6 +24,9 @@ public static class ProjectionWordSegmenter
     // 列墨水数低于该阈值视为空列（抑制孤立噪点）：max(1, 行高 × 0.02)
     private const float InkNoiseFactor = 0.02f;
 
+    // 低对比度重试的最小对比度（|极值 - 均值| 低于此值视为真空白，不重试）
+    private const int MinRetryInkContrast = 30;
+
     // 段最小宽度（像素）
     private const int MinSegmentWidth = 2;
 
@@ -498,6 +501,23 @@ public static class ProjectionWordSegmenter
         int tightTop, int tightBottom, float confidence, int lineIndex,
         Func<string, bool>? isPlausibleWord)
     {
+        // 混排 token 的 CJK run（如 "识别." 中拆出的 "识别"）：与整段纯 CJK token
+        // 一致地逐字均分生成单字框，让光标精准命中所指汉字——否则邻接标点的
+        // 中文词组会整段粗选，与纯 CJK 路径（BuildWordsFromSegments 主循环）精度不一致。
+        if (token.Length > 1 && IsPureCjk(token))
+        {
+            int span = endX - startX;
+            for (int ci = 0; ci < token.Length; ci++)
+            {
+                int cx1 = startX + (int)Math.Round((double)span * ci / token.Length);
+                int cx2 = startX + (int)Math.Round((double)span * (ci + 1) / token.Length);
+                if (cx2 <= cx1) cx2 = cx1 + 1;
+                result.Add(BuildWord(cx1, cx2, token[ci].ToString(), rotated180, bmpW,
+                    localBox, frameRegion, lineY, tightTop, tightBottom, confidence, lineIndex));
+            }
+            return 0; // 逐字切分非“丢空格修复”，不计入 unfused 统计
+        }
+
         if (!TrySplitFusedToken(token, startX, endX, profile, noiseFloor, isPlausibleWord, out var parts))
         {
             result.Add(BuildWord(startX, endX, token, rotated180, bmpW,
@@ -953,23 +973,58 @@ public static class ProjectionWordSegmenter
         // 极性检测：暗像素过半 → 暗色主题（暗底亮字），反转前景定义
         bool darkBackground = darkCount * 2 > totalPixels;
         double meanGray = (double)graySum / totalPixels;
-        // 阈值 = 均值 × 0.6：文字是少数高对比像素，背景主导均值
-        int threshold = Math.Clamp((int)Math.Round(meanGray * 0.6), 8, 247);
 
         var colInk = new int[w];
         var rowInk = new int[h];
-        for (int y = 0; y < h; y++)
+
+        long CountInk(int rawThreshold)
         {
-            int rowBase = y * w;
-            for (int x = 0; x < w; x++)
+            Array.Clear(colInk);
+            Array.Clear(rowInk);
+            long total = 0;
+            // 阈值 = 均值 × 系数：文字是少数高对比像素，背景主导均值
+            int threshold = Math.Clamp(rawThreshold, 8, 247);
+            for (int y = 0; y < h; y++)
             {
-                int gray = grays[rowBase + x];
-                bool isInk = darkBackground ? gray >= 256 - threshold : gray <= threshold;
-                if (isInk)
+                int rowBase = y * w;
+                for (int x = 0; x < w; x++)
                 {
-                    colInk[x]++;
-                    rowInk[y]++;
+                    int gray = grays[rowBase + x];
+                    bool isInk = darkBackground ? gray >= 256 - threshold : gray <= threshold;
+                    if (isInk)
+                    {
+                        colInk[x]++;
+                        rowInk[y]++;
+                        total++;
+                    }
                 }
+            }
+            return total;
+        }
+
+        // 首选阈值 = 均值×0.6（文字是少数高对比像素，背景主导均值）
+        long totalInk = CountInk((int)Math.Round(meanGray * 0.6));
+        if (totalInk == 0)
+        {
+            // 低对比度文字（灰字/浅主题，如 #999 on white）：文字灰度可能高于 均值×0.6
+            // → 全图零墨水，投影与受约束切分双双失效，引擎只能退化到按字符比例估框的粗框。
+            // 取「极性端极值 与 背景均值 的中点」为阈值：对任意对比度自适应
+            // （亮底暗字取最暗像素、暗底亮字取最亮像素）。仅作用于本死分支；
+            // 极值与均值过近视为真空白，保持零墨水。
+            byte extreme = grays[0];
+            for (int i = 1; i < totalPixels; i++)
+            {
+                if (darkBackground ? grays[i] > extreme : grays[i] < extreme)
+                    extreme = grays[i];
+            }
+
+            int contrast = darkBackground ? (int)(extreme - meanGray) : (int)(meanGray - extreme);
+            if (contrast >= MinRetryInkContrast)
+            {
+                int midThreshold = darkBackground
+                    ? 256 - (int)Math.Round((extreme + meanGray) / 2.0)
+                    : (int)Math.Round((extreme + meanGray) / 2.0);
+                totalInk = CountInk(midThreshold);
             }
         }
 
@@ -980,55 +1035,19 @@ public static class ProjectionWordSegmenter
     /// 垂直收紧：返回行内主墨水带的 [top, bottom)，无墨水时退化为整行。
     /// det 框高度归一化会把矮行框垂直撑大（minH ≈ 26px），紧凑行距时邻行墨水
     /// 会渗入裁剪图；若取全部墨水的首末行，词框会连带上/下边缘的邻行内容。
-    /// 因此选取墨量最大的连续墨水带（本行文字），排除被空行隔开的邻行渗漏。
+    /// 带选择逻辑（含"短密渗漏带防劫持"）统一在 <see cref="InkBandSelector"/>：
+    /// 先按高度过滤再取墨水总量最大者，防止致密碎片带劫持主行
+    /// （日志实测：38px 行框内 6px 致密邻行碎片曾把整行词框压成 9px 高条带）。
     /// </summary>
     private static (int Top, int Bottom) ComputeVerticalTighten(InkProfile profile)
     {
         int noiseFloor = ComputeNoiseFloor(profile.Height);
-        // 带内允许桥接的连续空行数：字形抗锯齿/细笔画行墨量可能低于噪声阈值，
-        // 完全按空行切带会把同一行文字碎片化；邻行渗漏与本行之间通常隔 ≥2 空行。
-        const int maxBridgeRows = 1;
+        var band = InkBandSelector.SelectDominant(profile.RowInk, noiseFloor);
+        if (!band.HasValue)
+            return (0, profile.Height);
 
-        int bestStart = -1, bestEnd = -1;
-        long bestInk = 0;
-        int curStart = -1, curEnd = -1;
-        long curInk = 0;
-        int emptyRun = 0;
-
-        void FlushBand()
-        {
-            if (curStart >= 0 && curInk > bestInk)
-            {
-                bestInk = curInk;
-                bestStart = curStart;
-                bestEnd = curEnd;
-            }
-            curStart = -1;
-            curInk = 0;
-        }
-
-        for (int y = 0; y < profile.Height; y++)
-        {
-            if (profile.RowInk[y] >= noiseFloor)
-            {
-                if (curStart < 0) curStart = y;
-                curEnd = y;
-                curInk += profile.RowInk[y];
-                emptyRun = 0;
-            }
-            else if (curStart >= 0)
-            {
-                emptyRun++;
-                if (emptyRun > maxBridgeRows)
-                    FlushBand();
-            }
-        }
-        FlushBand();
-
-        if (bestStart < 0) return (0, profile.Height);
-
-        int top = Math.Max(0, bestStart - VerticalPadding);
-        int bottom = Math.Min(profile.Height, bestEnd + 1 + VerticalPadding);
+        int top = Math.Max(0, band.Value.Top - VerticalPadding);
+        int bottom = Math.Min(profile.Height, band.Value.Bottom + VerticalPadding);
         return (top, bottom);
     }
 

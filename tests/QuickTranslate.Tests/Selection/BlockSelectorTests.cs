@@ -497,4 +497,102 @@ public class BlockSelectorTests
         Assert.Equal(3, result.SelectedLines.Count);
         Assert.Contains(result.SelectedLines, l => l.Text == "para three");
     }
+
+    // === 列聚类约束新增用例（多栏防跨栏吸入 + 居中/单栏零回归） ===
+
+    [Fact]
+    public void Case33_TwoColumn_LeftAnchor_OnlyLeftColumn()
+    {
+        // 双栏布局：左栏 minX≈100，右栏 minX≈900，锚点在左栏中部 → 只含左栏，右栏零吸入
+        var left1 = MakeLine(100, 100, 400, 30, "Left 1");
+        var left2 = MakeLine(100, 145, 400, 30, "Left 2");
+        var left3 = MakeLine(100, 190, 400, 30, "Left 3");
+        var right1 = MakeLine(900, 100, 400, 30, "Right 1");
+        var right2 = MakeLine(900, 145, 400, 30, "Right 2");
+        var right3 = MakeLine(900, 190, 400, 30, "Right 3");
+        // 左栏集中在前，右栏在后：块生长在索引上连续，跨栏首个右栏行即触发列聚类 break
+        var ocr = CreateOcr(left1, left2, left3, right1, right2, right3);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(200, 160));
+
+        Assert.Equal(3, result.SelectedLines.Count);
+        Assert.All(result.SelectedLines, l => Assert.StartsWith("Left", l.Text));
+        Assert.DoesNotContain(result.SelectedLines, l => l.Text.StartsWith("Right"));
+    }
+
+    [Fact]
+    public void Case34_CenteredText_GuardDisablesClustering()
+    {
+        // 多栏守卫·居中文本不回归：居中排版的左缘呈小步长漂移（每行 +8px），
+        // 链式聚类（相邻差 ≤ 容差即同列）会把它们稳定聚成一列 → 多栏守卫不成立
+        // （单列），不启用列限制；同时小步长也不会触发既有首行缩进停止，
+        // 5 行应全部合并——与旧版行为一致。
+        var c1 = MakeLine(500, 100, 800, 30, "Center 1");
+        var c2 = MakeLine(508, 145, 800, 30, "Center 2");
+        var c3 = MakeLine(516, 190, 800, 30, "Center 3");
+        var c4 = MakeLine(524, 235, 800, 30, "Center 4");
+        var c5 = MakeLine(532, 280, 800, 30, "Center 5");
+        var ocr = CreateOcr(c1, c2, c3, c4, c5);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(800, 200));
+        Assert.Equal(5, result.SelectedLines.Count);
+
+        // 对比：极小容差下相邻差(8) > 容差(0.3)，每行各自成簇（全是单行簇），
+        // 多栏守卫（含≥2行的簇 ≥2）判定不成立，同样不启用列限制，仍应全量合并
+        var tightOpts = new SelectionOptions { BlockColumnClusterToleranceFactor = 0.01f };
+        var tightResult = _selector.SelectBlock(ocr, new PhysicalPoint(800, 200), tightOpts);
+        Assert.Equal(5, tightResult.SelectedLines.Count);
+    }
+
+    [Fact]
+    public void Case35_SingleColumn_NoRegression()
+    {
+        // 单栏零变化：minX 相近的普通段落，选块结果与旧逻辑一致（全部合并）
+        var l1 = MakeLine(100, 100, 800, 30, "Single 1");
+        var l2 = MakeLine(102, 145, 800, 30, "Single 2");
+        var l3 = MakeLine(98, 190, 800, 30, "Single 3");
+        var ocr = CreateOcr(l1, l2, l3);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(500, 160));
+
+        Assert.Equal(3, result.SelectedLines.Count);
+        Assert.Equal("Single 1\nSingle 2\nSingle 3", result.BlockText);
+    }
+
+    [Fact]
+    public void Case36_TwoColumn_RightAnchor_OnlyRightColumn()
+    {
+        // 锚点在右栏 → 只长右栏
+        var left1 = MakeLine(100, 100, 400, 30, "Left 1");
+        var left2 = MakeLine(100, 145, 400, 30, "Left 2");
+        var left3 = MakeLine(100, 190, 400, 30, "Left 3");
+        var right1 = MakeLine(900, 100, 400, 30, "Right 1");
+        var right2 = MakeLine(900, 145, 400, 30, "Right 2");
+        var right3 = MakeLine(900, 190, 400, 30, "Right 3");
+        var ocr = CreateOcr(left1, left2, left3, right1, right2, right3);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(1000, 160));
+
+        Assert.Equal(3, result.SelectedLines.Count);
+        Assert.All(result.SelectedLines, l => Assert.StartsWith("Right", l.Text));
+        Assert.DoesNotContain(result.SelectedLines, l => l.Text.StartsWith("Left"));
+    }
+
+    [Fact]
+    public void Case37_IndentedFirstLineWithinTolerance_StillInSameCluster()
+    {
+        // 簇内缩进容错：首行缩进行（minX 大 ~1 行高以内）仍在同簇正常纳入
+        var l1 = MakeLine(100, 100, 800, 30, "Para line 1");
+        var l2 = MakeLine(100, 145, 800, 30, "Para line 2");
+        var indented = MakeLine(120, 190, 780, 30, "Indented first");
+        var l4 = MakeLine(100, 235, 800, 30, "Para line 4");
+        var ocr = CreateOcr(l1, l2, indented, l4);
+
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(500, 110));
+
+        // 缩进 20px < 容差 30px，同簇；块应至少包含前 3 行（是否含 l4 取决于段落边界，但缩进行必须在内）
+        Assert.Contains(result.SelectedLines, l => l.Text == "Indented first");
+        Assert.Contains(result.SelectedLines, l => l.Text == "Para line 1");
+        Assert.Contains(result.SelectedLines, l => l.Text == "Para line 2");
+    }
 }

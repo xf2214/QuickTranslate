@@ -208,12 +208,10 @@ public class BlockInteractionCoordinator : IDisposable
 
     private static bool IsCandidateForDragExpand(OcrLine cand, PhysicalRect coreUnion, int medianH)
     {
+        // 显式拖选：用户明确拖到该 Y 的行就应选中，不应因段落/栏的水平护栏被过滤；
+        // 仅保留高度比护栏（过滤异常高/矮的 UI 栏），水平位置完全放开。
         double ratio = cand.Box.Height / (double)medianH;
         if (ratio < 0.65 || ratio > 1.5) return false;
-        if (cand.Box.Right <= coreUnion.Left || cand.Box.Left >= coreUnion.Right) return false;
-        double overlap = Math.Max(0, Math.Min(cand.Box.Right, coreUnion.Right) - Math.Max(cand.Box.Left, coreUnion.Left)) / (double)Math.Min(cand.Box.Width, coreUnion.Width);
-        int leftDelta = Math.Abs(cand.Box.Left - coreUnion.Left);
-        if (!(overlap >= 0.5 || leftDelta <= 1.5 * medianH)) return false;
         return true;
     }
 
