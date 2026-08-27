@@ -226,22 +226,35 @@ public class BlockInteractionCoordinator : IDisposable
         {
             _anchorPoint = anchor;
             _hasExpandedCapture = false;
-            // If we have a last block/ocr from pipeline, reuse it; otherwise need to wait for pipeline
-            if (_dragOcr != null && _dragOcr.Lines.Count > 0)
+            // 复用判定：仅当锚点仍在上次 OCR 截图区域内才复用，避免“指针在 A 处、框显示在 B 处”的偏移
+            bool canReuseOcr = _dragOcr != null && _dragOcr.Lines.Count > 0
+                               && !_dragCaptureRegion.IsEmpty && _dragCaptureRegion.Contains(anchor);
+            if (canReuseOcr)
             {
                 // Initialize dragging with existing OCR
-                _lastExpandedUnion = ExpandSelectedLines(_dragOcr.Lines, _anchorPoint.Y, _anchorPoint.Y);
+                _lastExpandedUnion = ExpandSelectedLines(_dragOcr!.Lines, _anchorPoint.Y, _anchorPoint.Y);
                 if (_lastExpandedUnion.IsEmpty)
                     _lastExpandedUnion = _dragInitialUnion;
-            }
-            else if (_dragInitialUnion.IsEmpty == false)
-            {
-                _lastExpandedUnion = _dragInitialUnion;
+                _logger.LogDebug("HoldStart: reuse _dragOcr lines={LC} capture={CR} initialUnion={Box}", _dragOcr!.Lines.Count, _dragCaptureRegion, _lastExpandedUnion);
             }
             else
             {
-                // Fallback: small box around anchor
-                _lastExpandedUnion = new PhysicalRect(anchor.X - 20, anchor.Y - 10, 40, 20);
+                if (_dragOcr != null)
+                    _logger.LogDebug("HoldStart: discard stale _dragOcr lines={LC} capture={CR} anchor={Anchor}", _dragOcr.Lines.Count, _dragCaptureRegion, anchor);
+                if (_dragInitialUnion.IsEmpty == false && _dragCaptureRegion.Contains(anchor))
+                {
+                    _lastExpandedUnion = _dragInitialUnion;
+                    _logger.LogDebug("HoldStart: reuse _dragInitialUnion {Box}", _lastExpandedUnion);
+                }
+                else
+                {
+                    // Fallback: small box around anchor until new OCR arrives
+                    _lastExpandedUnion = new PhysicalRect(anchor.X - 20, anchor.Y - 10, 40, 20);
+                    _logger.LogDebug("HoldStart: fallback small box {Box} (no OCR yet or anchor out of capture)", _lastExpandedUnion);
+                }
+                // 失效旧 OCR，避免拖动期间 ExpandSelectedLines 命中远处旧行
+                _dragOcr = null;
+                _dragBlock = null;
             }
             _isDragging = true;
         }
@@ -292,6 +305,10 @@ public class BlockInteractionCoordinator : IDisposable
                 _lastExpandedUnion = block.UnionBox;
                 _dragCaptureRegion = ocr.CaptureRegion;
             }
+            _logger.LogDebug("Drag pipeline OCR done: lines={LC} blockLines={BL} union={Box} capture={CR}",
+                ocr.Lines.Count, block.SelectedLines.Count, block.UnionBox, ocr.CaptureRegion);
+            foreach (var line in ocr.Lines)
+                _logger.LogDebug("  DragOcrLine: ({X},{Y},{W}x{H}) Text={Text}", line.Box.X, line.Box.Y, line.Box.Width, line.Box.Height, TruncateForLog(line.Text, 40));
             _overlayService.Show(block.UnionBox, mid, dpiX, dpiY, preview: true);
             _dragOverlayShownAt = Environment.TickCount64;
         }
@@ -380,14 +397,20 @@ public class BlockInteractionCoordinator : IDisposable
         StopDragTimer();
         try
         {
-            var timer = new DispatcherTimer(DispatcherPriority.Normal);
+            // HoldStart runs on hotkey hook thread (threadpool, no Dispatcher loop) — must
+            // create timer on the UI dispatcher, otherwise ticks never fire (systematic root cause).
+            var dispatcher = System.Windows.Application.Current?.Dispatcher
+                             ?? Dispatcher.CurrentDispatcher;
+            var timer = new DispatcherTimer(DispatcherPriority.Normal, dispatcher);
             timer.Interval = TimeSpan.FromMilliseconds(16);
             timer.Tick += OnDragTick;
             _dragTimer = timer;
             timer.Start();
+            _logger.LogDebug("Drag timer started on dispatcher {Hash}", dispatcher.GetHashCode());
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogDebug(ex, "Drag timer failed to start");
             // Fallback for non-WPF thread (tests): no timer, manual ticks only
             _dragTimer = null;
         }
@@ -425,7 +448,16 @@ public class BlockInteractionCoordinator : IDisposable
 
     internal async Task TriggerDragTickAsync()
     {
-        if (!_isDragging || _dragOcr == null) return;
+        if (!_isDragging)
+        {
+            _logger.LogDebug("Drag tick: not dragging, skip");
+            return;
+        }
+        if (_dragOcr == null)
+        {
+            _logger.LogDebug("Drag tick: _dragOcr null, waiting for OCR");
+            return;
+        }
         var cur = _cursorService.GetPhysicalCursorPos(out var mid);
         var mi = _monitorService.TryGetMonitorFromPoint(cur);
         if (mi != null)
@@ -438,9 +470,19 @@ public class BlockInteractionCoordinator : IDisposable
         {
             _dragMonitorId = mid;
         }
-        if (cur.Y <= _anchorPoint.Y) return;
+        _logger.LogDebug("Drag tick: anchorY={AY} curY={CY} dragOcrLines={LC}", _anchorPoint.Y, cur.Y, _dragOcr.Lines.Count);
+        if (cur.Y <= _anchorPoint.Y)
+        {
+            _logger.LogDebug("Drag tick: curY <= anchorY, no expand");
+            return;
+        }
         var expanded = ExpandSelectedLines(_dragOcr.Lines, _anchorPoint.Y, cur.Y);
-        if (expanded.IsEmpty) return;
+        _logger.LogDebug("Drag tick: expanded={Box} from anchorY={AY} dragY={DY} lines={LC}", expanded, _anchorPoint.Y, cur.Y, _dragOcr.Lines.Count);
+        if (expanded.IsEmpty)
+        {
+            _logger.LogDebug("Drag tick: expanded empty");
+            return;
+        }
         PhysicalRect last;
         lock (_dragLock) { last = _lastExpandedUnion; }
         bool changed = !expanded.Equals(last);
@@ -449,6 +491,10 @@ public class BlockInteractionCoordinator : IDisposable
             lock (_dragLock) { _lastExpandedUnion = expanded; }
             _overlayService.Update(expanded, _dragMonitorId, _dragDpiX, _dragDpiY);
             _logger.LogDebug("Drag tick expanded to {Box}", expanded);
+        }
+        else
+        {
+            _logger.LogDebug("Drag tick: no change vs last {Last}", last);
         }
 
         // Task4: capture expansion to 1600x1200 once when drag exceeds initial frame bottom
