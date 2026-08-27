@@ -120,42 +120,127 @@ public class BlockInteractionCoordinator : IDisposable
 
     public static PhysicalRect ExpandSelectedLines(IReadOnlyList<OcrLine> lines, int anchorY, int dragY)
     {
+        // 兼容旧测试：仍以 Y 为锚点，重载到带 X 的版本（X=0 近似）
+        return ExpandSelectedLines(lines, new PhysicalPoint(0, anchorY), dragY);
+    }
+
+    public static PhysicalRect ExpandSelectedLines(IReadOnlyList<OcrLine> lines, PhysicalPoint anchor, int dragY)
+    {
         if (lines.Count == 0) return PhysicalRect.Empty;
-        var anchorLine = FindAnchorLine(lines, anchorY);
+        var anchorLine = FindAnchorLine(lines, anchor);
         if (anchorLine == null) return PhysicalRect.Empty;
-        if (dragY <= anchorY)
+        if (dragY <= anchor.Y)
         {
             return anchorLine.Box;
         }
-        var anchorTop = anchorLine.Box.Top;
+        // 行扩展策略：按 Y 排序后从锚点行向下收集，所有候选需通过段落启发式的
+        // 轻量护栏（垂直间隙、高度比、水平相交），避免把下一段落或另一栏文本误吸入；
+        // 同时受 dragY + snap 截断，保证“拖到哪选到哪”的显式语义。
+        var sorted = lines.OrderBy(l => l.Box.Top).ToList();
+        int anchorIdx = sorted.FindIndex(l => ReferenceEquals(l, anchorLine) || l.Box.Equals(anchorLine.Box));
+        if (anchorIdx < 0) anchorIdx = 0;
+        int medianH = ComputeMedianHeightForExpand(sorted, anchorLine);
         int snap = anchorLine.Box.Height / 2;
-        var selected = new List<OcrLine>();
-        foreach (var line in lines)
+        double dragLimit = dragY + snap;
+        var selected = new List<OcrLine> { anchorLine };
+        PhysicalRect union = anchorLine.Box;
+        PhysicalRect coreUnion = anchorLine.Box;
+        for (int i = anchorIdx + 1; i < sorted.Count; i++)
         {
-            if (line.Box.Top < anchorTop) continue;
-            if (line.Box.Top <= dragY + snap)
-            {
-                selected.Add(line);
-            }
+            var cand = sorted[i];
+            if (cand.Box.Top > dragLimit) break;
+            // 仅向下：跳过锚点上方行
+            if (cand.Box.Top < anchorLine.Box.Top) continue;
+            // 显式拖选：忽略段落垂直间隙护栏（用户明确拖到该 Y 就应选中），仅保留高度比与水平相交护栏，避免跨栏误吸
+            if (!IsCandidateForDragExpand(cand, coreUnion, medianH)) continue;
+            union = UnionRect(union, cand.Box);
+            if (IsCoreWidth(cand, sorted, anchorLine))
+                coreUnion = UnionRect(coreUnion, cand.Box);
+            selected.Add(cand);
         }
-        if (selected.Count == 0) return anchorLine.Box;
         return UnionRect(selected);
+    }
+
+    private static int ComputeMedianHeightForExpand(List<OcrLine> sorted, OcrLine anchorLine)
+    {
+        if (sorted.Count < 3) return anchorLine.Box.Height;
+        var heights = sorted.Select(l => l.Box.Height).OrderBy(h => h).ToList();
+        return heights[heights.Count / 2];
+    }
+
+    private static bool TryComputeMedianGapForExpand(List<OcrLine> sorted, out int medianGap)
+    {
+        medianGap = 0;
+        if (sorted.Count < 3) return false;
+        var gaps = new List<int>(sorted.Count - 1);
+        for (int i = 1; i < sorted.Count; i++)
+        {
+            var prev = sorted[i - 1].Box;
+            var cur = sorted[i].Box;
+            if (cur.Right <= prev.Left || cur.Left >= prev.Right) continue;
+            gaps.Add(Math.Max(0, cur.Top - prev.Bottom));
+        }
+        if (gaps.Count < 2) return false;
+        gaps.Sort();
+        medianGap = gaps[(gaps.Count - 1) / 2];
+        return true;
+    }
+
+    private static bool IsCoreWidth(OcrLine cand, List<OcrLine> all, OcrLine anchorLine)
+    {
+        int widthBaseline = Math.Max(anchorLine.Box.Width, all.Select(l => l.Box.Width).OrderBy(w => w).ToList()[all.Count / 2]);
+        int coreLimit = (int)Math.Round(widthBaseline * 1.2);
+        return cand.Box.Width <= coreLimit;
+    }
+
+    private static bool IsCandidateForExpand(OcrLine cand, PhysicalRect union, PhysicalRect coreUnion, int medianH, double gapLimit)
+    {
+        double ratio = cand.Box.Height / (double)medianH;
+        if (ratio < 0.65 || ratio > 1.5) return false;
+        if (cand.Box.Right <= coreUnion.Left || cand.Box.Left >= coreUnion.Right) return false;
+        int vGap = cand.Box.Top - union.Bottom;
+        if (vGap > gapLimit) return false;
+        double overlap = Math.Max(0, Math.Min(cand.Box.Right, coreUnion.Right) - Math.Max(cand.Box.Left, coreUnion.Left)) / (double)Math.Min(cand.Box.Width, coreUnion.Width);
+        int leftDelta = Math.Abs(cand.Box.Left - coreUnion.Left);
+        if (!(overlap >= 0.5 || leftDelta <= 1.5 * medianH)) return false;
+        return true;
+    }
+
+    private static bool IsCandidateForDragExpand(OcrLine cand, PhysicalRect coreUnion, int medianH)
+    {
+        double ratio = cand.Box.Height / (double)medianH;
+        if (ratio < 0.65 || ratio > 1.5) return false;
+        if (cand.Box.Right <= coreUnion.Left || cand.Box.Left >= coreUnion.Right) return false;
+        double overlap = Math.Max(0, Math.Min(cand.Box.Right, coreUnion.Right) - Math.Max(cand.Box.Left, coreUnion.Left)) / (double)Math.Min(cand.Box.Width, coreUnion.Width);
+        int leftDelta = Math.Abs(cand.Box.Left - coreUnion.Left);
+        if (!(overlap >= 0.5 || leftDelta <= 1.5 * medianH)) return false;
+        return true;
     }
 
     private static OcrLine? FindAnchorLine(IReadOnlyList<OcrLine> lines, int anchorY)
     {
+        return FindAnchorLine(lines, new PhysicalPoint(0, anchorY));
+    }
+
+    private static OcrLine? FindAnchorLine(IReadOnlyList<OcrLine> lines, PhysicalPoint anchor)
+    {
         foreach (var line in lines)
         {
-            if (anchorY >= line.Box.Top && anchorY < line.Box.Bottom)
+            if (anchor.Y >= line.Box.Top && anchor.Y < line.Box.Bottom
+                && anchor.X >= line.Box.Left && anchor.X < line.Box.Right)
+                return line;
+        }
+        foreach (var line in lines)
+        {
+            if (anchor.Y >= line.Box.Top && anchor.Y < line.Box.Bottom)
                 return line;
         }
         // nearest by distance to rect
         double best = double.MaxValue;
         OcrLine? bestLine = null;
-        var pt = new PhysicalPoint(0, anchorY);
         foreach (var line in lines)
         {
-            double d = DistanceToRect(pt, line.Box);
+            double d = DistanceToRect(anchor, line.Box);
             if (d < best)
             {
                 best = d;
@@ -179,6 +264,15 @@ public class BlockInteractionCoordinator : IDisposable
         }
         if (!any) return PhysicalRect.Empty;
         return new PhysicalRect(minX, minY, maxR - minX, maxB - minY);
+    }
+
+    private static PhysicalRect UnionRect(PhysicalRect a, PhysicalRect b)
+    {
+        int x = Math.Min(a.X, b.X);
+        int y = Math.Min(a.Y, b.Y);
+        int right = Math.Max(a.Right, b.Right);
+        int bottom = Math.Max(a.Bottom, b.Bottom);
+        return new PhysicalRect(x, y, right - x, bottom - y);
     }
 
     private static double DistanceToRect(PhysicalPoint p, PhysicalRect box)
@@ -232,7 +326,7 @@ public class BlockInteractionCoordinator : IDisposable
             if (canReuseOcr)
             {
                 // Initialize dragging with existing OCR
-                _lastExpandedUnion = ExpandSelectedLines(_dragOcr!.Lines, _anchorPoint.Y, _anchorPoint.Y);
+                _lastExpandedUnion = ExpandSelectedLines(_dragOcr!.Lines, _anchorPoint, _anchorPoint.Y);
                 if (_lastExpandedUnion.IsEmpty)
                     _lastExpandedUnion = _dragInitialUnion;
                 _logger.LogDebug("HoldStart: reuse _dragOcr lines={LC} capture={CR} initialUnion={Box}", _dragOcr!.Lines.Count, _dragCaptureRegion, _lastExpandedUnion);
@@ -476,7 +570,7 @@ public class BlockInteractionCoordinator : IDisposable
             _logger.LogDebug("Drag tick: curY <= anchorY, no expand");
             return;
         }
-        var expanded = ExpandSelectedLines(_dragOcr.Lines, _anchorPoint.Y, cur.Y);
+        var expanded = ExpandSelectedLines(_dragOcr.Lines, _anchorPoint, cur.Y);
         _logger.LogDebug("Drag tick: expanded={Box} from anchorY={AY} dragY={DY} lines={LC}", expanded, _anchorPoint.Y, cur.Y, _dragOcr.Lines.Count);
         if (expanded.IsEmpty)
         {
@@ -497,14 +591,14 @@ public class BlockInteractionCoordinator : IDisposable
             _logger.LogDebug("Drag tick: no change vs last {Last}", last);
         }
 
-        // Task4: capture expansion to 1600x1200 once when drag exceeds initial frame bottom
-        if (!_hasExpandedCapture && !_dragCaptureRegion.IsEmpty && cur.Y > _dragCaptureRegion.Bottom - 20 && _dragCaptureRegion.Width < 1600)
+        // Task4: capture expansion to 1200x1200 only vertical when drag exceeds initial frame bottom
+        if (!_hasExpandedCapture && !_dragCaptureRegion.IsEmpty && cur.Y > _dragCaptureRegion.Bottom - 20 && _dragCaptureRegion.Height < 1200)
         {
             // optimistic guard to avoid concurrent re-entry; reset on failure to allow retry
             _hasExpandedCapture = true;
             try
             {
-                var newSize = new PhysicalSize(1600, 1200);
+                var newSize = new PhysicalSize(1200, 1200);
                 var frame = await _retryCoordinator.Capture.CaptureAroundAsync(_anchorPoint, newSize).ConfigureAwait(false);
                 var newFrameRegion = frame.Region;
                 var band = MakeBand(_anchorPoint, 600);
@@ -516,7 +610,7 @@ public class BlockInteractionCoordinator : IDisposable
                     _dragCaptureRegion = newOcr.CaptureRegion.IsEmpty ? newFrameRegion : newOcr.CaptureRegion;
                 }
                 if (_dragFrame != null) { ((IDisposable)_dragFrame).Dispose(); _dragFrame = null; }
-                var expandedAfter = ExpandSelectedLines(newOcr.Lines, _anchorPoint.Y, cur.Y);
+                var expandedAfter = ExpandSelectedLines(newOcr.Lines, _anchorPoint, cur.Y);
                 if (!expandedAfter.IsEmpty && !expandedAfter.Equals(_lastExpandedUnion))
                 {
                     lock (_dragLock) { _lastExpandedUnion = expandedAfter; }
@@ -575,7 +669,7 @@ public class BlockInteractionCoordinator : IDisposable
             _hasExpandedCapture = false;
             if (_dragOcr != null)
             {
-                _lastExpandedUnion = ExpandSelectedLines(_dragOcr.Lines, anchor.Y, anchor.Y);
+                _lastExpandedUnion = ExpandSelectedLines(_dragOcr.Lines, anchor, anchor.Y);
                 if (_lastExpandedUnion.IsEmpty) _lastExpandedUnion = _dragInitialUnion;
             }
             else

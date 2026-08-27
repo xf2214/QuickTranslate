@@ -114,9 +114,9 @@ public class BlockDragOverlayTests
     }
 
     [Fact]
-    public void DragBeyondFrame_ExpandsCaptureTo1600()
+    public void DragBeyondFrame_ExpandsCaptureTo1200()
     {
-        // initial frame 1200x720 centered at anchor (200,200): region 0..1200 x -160..560? Simplify: region (0,0,1200,720) bottom=720
+        // initial frame 1200x720 bottom=720, drag beyond bottom triggers vertical expansion to 1200x1200
         var initialLines = new List<OcrLine>
         {
             MakeLine(10,100,200,20,"line0"),
@@ -129,7 +129,7 @@ public class BlockDragOverlayTests
             MakeLine(10,750,200,20,"line_new"),
         };
         var initialOcr = new OcrLayoutResult(new PhysicalRect(0,0,1200,720), initialLines, new OcrTimings(TimeSpan.Zero,TimeSpan.Zero,TimeSpan.Zero,TimeSpan.Zero,TimeSpan.Zero), DateTimeOffset.Now, 96,96,"Fake");
-        var expandedOcr = new OcrLayoutResult(new PhysicalRect(0,0,1600,1200), expandedLines, new OcrTimings(TimeSpan.Zero,TimeSpan.Zero,TimeSpan.Zero,TimeSpan.Zero,TimeSpan.Zero), DateTimeOffset.Now, 96,96,"Fake");
+        var expandedOcr = new OcrLayoutResult(new PhysicalRect(0,0,1200,1200), expandedLines, new OcrTimings(TimeSpan.Zero,TimeSpan.Zero,TimeSpan.Zero,TimeSpan.Zero,TimeSpan.Zero), DateTimeOffset.Now, 96,96,"Fake");
 
         var coord = CreateCoordinator(out var cursor, out var monitors, out var capture, out var ocr, out var selector, out var overlay, out var popup, out var translator, out var escHook, out var broker);
 
@@ -139,10 +139,10 @@ public class BlockDragOverlayTests
 
         // Queue expanded OCR for recognition after capture
         ocr.QueuedResults.Enqueue(expandedOcr);
-        // Capture mock will return 1600x1200 frame via func
+        // Capture mock will return 1200x1200 frame via func (only vertical expansion)
         capture.CaptureAroundFunc = (anchor, size) =>
         {
-            // verify requested size is 1600x1200
+            // verify requested size is 1200x1200
             return FrameFor(new PhysicalRect(0,0,size.Width,size.Height));
         };
 
@@ -154,7 +154,7 @@ public class BlockDragOverlayTests
 
         Assert.True(capture.CaptureAroundSizes.Count >= 1);
         var lastSize = capture.CaptureAroundSizes.Last();
-        Assert.Equal(1600, lastSize.Width);
+        Assert.Equal(1200, lastSize.Width);
         Assert.Equal(1200, lastSize.Height);
         // new lines included
         Assert.Contains(overlay.UpdateCalls, u => u.Box.Bottom >= 770);
