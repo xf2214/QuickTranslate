@@ -179,11 +179,11 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
                     var (mods, key) = kvp.Value;
                     if ((int)key != vk)
                         continue;
-                    if (!CheckModifiers(mods))
-                        continue;
 
                     if (isDown)
                     {
+                        if (!CheckModifiers(mods))
+                            continue;
                         if (_downTimes.ContainsKey(id))
                             continue; // ignore auto-repeat
                         _downTimes[id] = DateTime.UtcNow;
@@ -192,6 +192,8 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
                     }
                     else if (isUp)
                     {
+                        // Up 不校验修饰键：用户常先松 Alt 再松 2，此时 CheckModifiers(Alt) 已为 false，
+                        // 若仍校验会导致 Up 丢失 → 计时器永不取消 → 短按也被误判为长按
                         if (!_downTimes.TryGetValue(id, out var downTime))
                             continue;
                         _downTimes.Remove(id);
