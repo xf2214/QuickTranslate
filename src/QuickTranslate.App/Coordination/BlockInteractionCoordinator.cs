@@ -62,6 +62,8 @@ public class BlockInteractionCoordinator : IDisposable
     private PhysicalRect _dragCaptureRegion;
     private bool _hasExpandedCapture;
     private ScreenFrame? _dragFrame;
+    private int _lastDragY = int.MinValue;
+    private bool _pendingUpdate;
 
     // 翻译前让区域选定框至少可见的时长（毫秒）：瞬时翻译时避免框一闪而过
     private const int SelectionHoldMs = 250;
@@ -491,14 +493,17 @@ public class BlockInteractionCoordinator : IDisposable
         {
             // HoldStart runs on hotkey hook thread (threadpool, no Dispatcher loop) — must
             // create timer on the UI dispatcher, otherwise ticks never fire (systematic root cause).
+            // 32ms (30fps) + snap/2 节流已足够跟手，16ms 在 WPF 布局竞争下反而堆积 BeginInvoke 队列导致卡顿
             var dispatcher = System.Windows.Application.Current?.Dispatcher
                              ?? Dispatcher.CurrentDispatcher;
-            var timer = new DispatcherTimer(DispatcherPriority.Normal, dispatcher);
-            timer.Interval = TimeSpan.FromMilliseconds(16);
+            var timer = new DispatcherTimer(DispatcherPriority.Render, dispatcher);
+            timer.Interval = TimeSpan.FromMilliseconds(32);
             timer.Tick += OnDragTick;
             _dragTimer = timer;
+            _lastDragY = int.MinValue;
+            _pendingUpdate = false;
             timer.Start();
-            _logger.LogDebug("Drag timer started on dispatcher {Hash}", dispatcher.GetHashCode());
+            _logger.LogDebug("Drag timer started 32ms on dispatcher {Hash}", dispatcher.GetHashCode());
         }
         catch (Exception ex)
         {
@@ -541,15 +546,9 @@ public class BlockInteractionCoordinator : IDisposable
     internal async Task TriggerDragTickAsync()
     {
         if (!_isDragging)
-        {
-            _logger.LogDebug("Drag tick: not dragging, skip");
             return;
-        }
         if (_dragOcr == null)
-        {
-            _logger.LogDebug("Drag tick: _dragOcr null, waiting for OCR");
             return;
-        }
         var cur = _cursorService.GetPhysicalCursorPos(out var mid);
         var mi = _monitorService.TryGetMonitorFromPoint(cur);
         if (mi != null)
@@ -562,31 +561,46 @@ public class BlockInteractionCoordinator : IDisposable
         {
             _dragMonitorId = mid;
         }
-        _logger.LogDebug("Drag tick: anchorY={AY} curY={CY} dragOcrLines={LC}", _anchorPoint.Y, cur.Y, _dragOcr.Lines.Count);
-        if (cur.Y <= _anchorPoint.Y)
+
+        // 节流：仅当 Y 变化 ≥ max(5, snap/2) 才重算 Expand，避免静止时无谓计算
+        int snapForThrottle = _dragOcr.Lines.Count > 0 ? _dragOcr.Lines[0].Box.Height / 2 : 10;
+        int throttleThreshold = Math.Max(5, snapForThrottle / 2);
+        bool shouldExpand = _lastDragY == int.MinValue || Math.Abs(cur.Y - _lastDragY) >= throttleThreshold || cur.Y <= _anchorPoint.Y;
+        if (shouldExpand)
         {
-            _logger.LogDebug("Drag tick: curY <= anchorY, no expand");
-            return;
-        }
-        var expanded = ExpandSelectedLines(_dragOcr.Lines, _anchorPoint, cur.Y);
-        _logger.LogDebug("Drag tick: expanded={Box} from anchorY={AY} dragY={DY} lines={LC}", expanded, _anchorPoint.Y, cur.Y, _dragOcr.Lines.Count);
-        if (expanded.IsEmpty)
-        {
-            _logger.LogDebug("Drag tick: expanded empty");
-            return;
-        }
-        PhysicalRect last;
-        lock (_dragLock) { last = _lastExpandedUnion; }
-        bool changed = !expanded.Equals(last);
-        if (changed)
-        {
-            lock (_dragLock) { _lastExpandedUnion = expanded; }
-            _overlayService.Update(expanded, _dragMonitorId, _dragDpiX, _dragDpiY);
-            _logger.LogDebug("Drag tick expanded to {Box}", expanded);
-        }
-        else
-        {
-            _logger.LogDebug("Drag tick: no change vs last {Last}", last);
+            _lastDragY = cur.Y;
+            if (cur.Y <= _anchorPoint.Y)
+            {
+                // 回到锚点上方不扩展，但仍需检查捕获扩展（下方逻辑）
+            }
+            else
+            {
+                var expanded = ExpandSelectedLines(_dragOcr.Lines, _anchorPoint, cur.Y);
+                if (!expanded.IsEmpty)
+                {
+                    PhysicalRect last;
+                    lock (_dragLock) { last = _lastExpandedUnion; }
+                    bool changed = !expanded.Equals(last);
+                    if (changed)
+                    {
+                        lock (_dragLock) { _lastExpandedUnion = expanded; }
+                        if (!_pendingUpdate)
+                        {
+                            _pendingUpdate = true;
+                            try
+                            {
+                                _overlayService.Update(expanded, _dragMonitorId, _dragDpiX, _dragDpiY);
+                            }
+                            finally
+                            {
+                                _pendingUpdate = false;
+                            }
+                        }
+                        if (_logger.IsEnabled(LogLevel.Debug))
+                            _logger.LogDebug("Drag tick expanded to {Box} curY={CY}", expanded, cur.Y);
+                    }
+                }
+            }
         }
 
         // Task4: capture expansion to 1200x1200 only vertical when drag exceeds initial frame bottom
