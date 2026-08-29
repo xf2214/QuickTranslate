@@ -1492,10 +1492,14 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
         var srcData = src.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
         var dstData = dst.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+        byte[]? srcBytes = null;
+        byte[]? dist = null;
+        byte[]? dstBytes = null;
         try
         {
-            var srcBytes = new byte[srcData.Stride * h];
-            Marshal.Copy(srcData.Scan0, srcBytes, 0, srcBytes.Length);
+            int srcLen = srcData.Stride * h;
+            srcBytes = ArrayPool<byte>.Shared.Rent(srcLen);
+            Marshal.Copy(srcData.Scan0, srcBytes, 0, srcLen);
 
             // 第一遍：RGB 逐通道直方图（背景色中位数）+ 亮度均值（inverted 诊断标志）
             int total = w * h;
@@ -1518,8 +1522,8 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             byte bgR = MedianOf(histR, total);
             inverted = (double)lumaSum / total < 127;
 
-            // 第二遍：色距 d = max(|r-br|,|g-bg|,|b-bb|) + d 直方图
-            var dist = new byte[total];
+            // 第二遍：色距 d = max(|r-br|,|g-bg|,|b-bb|) + d 直方图（dist 池化复用）
+            dist = ArrayPool<byte>.Shared.Rent(total);
             var histD = new int[256];
             for (int i = 0; i < total; i++)
             {
@@ -1552,7 +1556,8 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
             // 第三遍：写回灰度。out = 255 − min(255, d×scale)：
             // 背景（d≈0）→ 浅 255；文字（d 大）→ 深。任何源极性统一为浅底深字。
-            var dstBytes = new byte[dstData.Stride * h];
+            int dstLen = dstData.Stride * h;
+            dstBytes = ArrayPool<byte>.Shared.Rent(dstLen);
             for (int y = 0; y < h; y++)
             {
                 int rowOff = y * dstData.Stride;
@@ -1568,10 +1573,13 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                     dstBytes[i + 3] = 255;
                 }
             }
-            Marshal.Copy(dstBytes, 0, dstData.Scan0, dstBytes.Length);
+            Marshal.Copy(dstBytes, 0, dstData.Scan0, dstLen);
         }
         finally
         {
+            if (srcBytes != null) ArrayPool<byte>.Shared.Return(srcBytes);
+            if (dist != null) ArrayPool<byte>.Shared.Return(dist);
+            if (dstBytes != null) ArrayPool<byte>.Shared.Return(dstBytes);
             src.UnlockBits(srcData);
             dst.UnlockBits(dstData);
         }
