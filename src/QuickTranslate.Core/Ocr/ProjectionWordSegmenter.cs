@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
@@ -935,26 +936,32 @@ public static class ProjectionWordSegmenter
         int h = bmp.Height;
 
         var data = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        int byteCount = Math.Abs(data.Stride) * h;
+        byte[] rented = ArrayPool<byte>.Shared.Rent(byteCount);
         try
         {
-            var bytes = new byte[Math.Abs(data.Stride) * h];
-            Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);
-            return AnalyzePixels(bytes, data.Stride, w, h);
+            Marshal.Copy(data.Scan0, rented, 0, byteCount);
+            return AnalyzePixels(rented.AsSpan(0, byteCount), data.Stride, w, h);
         }
         finally
         {
+            ArrayPool<byte>.Shared.Return(rented);
             bmp.UnlockBits(data);
         }
     }
 
-    private static InkProfile AnalyzePixels(byte[] bytes, int stride, int w, int h)
+    private static InkProfile AnalyzePixels(ReadOnlySpan<byte> bytes, int stride, int w, int h)
     {
         // 单遍统计：灰度和、暗像素数、每像素灰度值（第二遍按阈值计数）
         long graySum = 0;
         int totalPixels = w * h;
         int darkCount = 0;
-        var grays = new byte[totalPixels];
-
+        byte[] rentedGrays = ArrayPool<byte>.Shared.Rent(totalPixels);
+        // Use array directly (not Span) so the local CountInk lambda can capture it
+        // (Span is a ref struct and cannot be captured in a lambda).
+        byte[] grays = rentedGrays;
+        try
+        {
         for (int y = 0; y < h; y++)
         {
             int rowBase = y * stride;
@@ -1029,6 +1036,11 @@ public static class ProjectionWordSegmenter
         }
 
         return new InkProfile(colInk, rowInk, w, h);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rentedGrays);
+        }
     }
 
     /// <summary>
