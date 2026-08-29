@@ -1324,8 +1324,10 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
     private const int RecH = 48;
     private const int RecMinW = 48;
     // 模型导出为动态宽度（TRT 配置最大 3200）。官方静态推理用 320 + 补黑，
-    // 但超宽行压缩到 320 会失真；这里放宽到 1280 保证长句纵横比不失真。
-    private const int RecMaxW = 1280;
+    // 但超宽行压缩到 320 会失真；GitHub 项目描述类长行 839×17 → naturalW 2369
+    // 在 1280 下被压缩 0.54 倍导致丢字（日志 520,1070,839×17 → kdaeade 0.473），
+    // 放宽至 2560 保证 1200 宽以内的段落行不失真（仍 <3200 上限）。
+    private const int RecMaxW = 2560;
 
     private static (float[] Input, int Width) PreprocessRec(Bitmap src)
     {
