@@ -871,7 +871,11 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
     private static readonly float[] DetMean = new[] { 0.485f, 0.456f, 0.406f };
     private static readonly float[] DetStd = new[] { 0.229f, 0.224f, 0.225f };
-    private const int DetMaxSideLen = 960;
+    // 自适应 det 输入上限：大截图（≥800）用 800 节省 ~30% det 耗时（1200×720 块 → 800 边长面积约 0.44×），
+    // 小截图（<800，如 372×80 单词）保持 960 以保留小字号召回。
+    private const int DetMaxSideLenLarge = 800;
+    private const int DetMaxSideLenSmall = 960;
+    private const int AdaptiveThreshold = 800;
 
     // HWC→CHW 归一化查表：每字节一次浮点乘减与除法预烘焙成 256 项查表，
     // 转换循环退化为纯内存拷贝，大帧预处理从 ~20ms 降到 ~5ms。
@@ -897,11 +901,15 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
     {
         int srcW = src.Width, srcH = src.Height;
 
-        // Resize so long side <= DetMaxSideLen, keeping aspect ratio
+        // 自适应上限：大截图 (max(srcW,srcH)≥800) 用 800，小截图用 960。
+        // 大 1200×720 块 → 800 上限 det 输入面积 800×480=384k vs 960×576=553k，节省 ~30%；
+        // 小 372×80 单词保持 960 时不降采样，保留小字号召回。
+        // Resize so long side <= limit, keeping aspect ratio
         // 与上游 PaddleOCR 一致：只把大图缩放到边长上限，小帧保持原生分辨率（ratio ≤ 1）。
         // 旧实现会把小截图放大到长边 960（Word 起捕 300x100 → 960x320，面积约 10 倍），
         // det 每次多付 ~300ms；放大不带来任何信息量，只会增加计算量。
-        float ratio = Math.Min(1f, Math.Min((float)DetMaxSideLen / srcW, (float)DetMaxSideLen / srcH));
+        int limit = (srcW >= AdaptiveThreshold || srcH >= AdaptiveThreshold) ? DetMaxSideLenLarge : DetMaxSideLenSmall;
+        float ratio = Math.Min(1f, Math.Min((float)limit / srcW, (float)limit / srcH));
         int resizeW = Math.Max(1, (int)Math.Round(srcW * ratio));
         int resizeH = Math.Max(1, (int)Math.Round(srcH * ratio));
 
