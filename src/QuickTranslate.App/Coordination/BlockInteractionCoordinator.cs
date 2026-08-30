@@ -325,27 +325,18 @@ public class BlockInteractionCoordinator : IDisposable
                                && !_dragCaptureRegion.IsEmpty && _dragCaptureRegion.Contains(anchor);
             if (canReuseOcr)
             {
-                // Initialize dragging with existing OCR
-                _lastExpandedUnion = ExpandSelectedLines(_dragOcr!.Lines, _anchorPoint, _anchorPoint.Y);
-                if (_lastExpandedUnion.IsEmpty)
-                    _lastExpandedUnion = _dragInitialUnion;
-                _logger.LogDebug("HoldStart: reuse _dragOcr lines={LC} capture={CR} initialUnion={Box}", _dragOcr!.Lines.Count, _dragCaptureRegion, _lastExpandedUnion);
+                // 长按初框固定为锚点处小预览（40×20），避免直接显示整行宽导致“框偏移”观感；
+                // 拖动后 ExpandSelectedLines 再按行扩展，松开时才显示最终块
+                _lastExpandedUnion = new PhysicalRect(anchor.X - 20, anchor.Y - 10, 40, 20);
+                _logger.LogDebug("HoldStart: reuse _dragOcr lines={LC} capture={CR} initialUnion small {Box}", _dragOcr!.Lines.Count, _dragCaptureRegion, _lastExpandedUnion);
             }
             else
             {
                 if (_dragOcr != null)
                     _logger.LogDebug("HoldStart: discard stale _dragOcr lines={LC} capture={CR} anchor={Anchor}", _dragOcr.Lines.Count, _dragCaptureRegion, anchor);
-                if (_dragInitialUnion.IsEmpty == false && _dragCaptureRegion.Contains(anchor))
-                {
-                    _lastExpandedUnion = _dragInitialUnion;
-                    _logger.LogDebug("HoldStart: reuse _dragInitialUnion {Box}", _lastExpandedUnion);
-                }
-                else
-                {
-                    // Fallback: small box around anchor until new OCR arrives
-                    _lastExpandedUnion = new PhysicalRect(anchor.X - 20, anchor.Y - 10, 40, 20);
-                    _logger.LogDebug("HoldStart: fallback small box {Box} (no OCR yet or anchor out of capture)", _lastExpandedUnion);
-                }
+                // 长按初框统一为锚点小预览，保持与复用路径一致的跟手体验
+                _lastExpandedUnion = new PhysicalRect(anchor.X - 20, anchor.Y - 10, 40, 20);
+                _logger.LogDebug("HoldStart: fallback small box {Box} (anchor preview)", _lastExpandedUnion);
                 // 失效旧 OCR，避免拖动期间 ExpandSelectedLines 命中远处旧行
                 _dragOcr = null;
                 _dragBlock = null;
@@ -396,14 +387,14 @@ public class BlockInteractionCoordinator : IDisposable
                 _dragOcr = ocr;
                 _dragBlock = block;
                 _dragInitialUnion = block.UnionBox;
-                _lastExpandedUnion = block.UnionBox;
+                // 保持长按初框为锚点小预览，不立即切到整块，避免“框偏移”跳变；拖动后由 ExpandSelectedLines 按行扩展
                 _dragCaptureRegion = ocr.CaptureRegion;
             }
-            _logger.LogDebug("Drag pipeline OCR done: lines={LC} blockLines={BL} union={Box} capture={CR}",
-                ocr.Lines.Count, block.SelectedLines.Count, block.UnionBox, ocr.CaptureRegion);
+            _logger.LogDebug("Drag pipeline OCR done: lines={LC} blockLines={BL} union={Box} capture={CR} keep small preview {Small}",
+                ocr.Lines.Count, block.SelectedLines.Count, block.UnionBox, ocr.CaptureRegion, _lastExpandedUnion);
             foreach (var line in ocr.Lines)
                 _logger.LogDebug("  DragOcrLine: ({X},{Y},{W}x{H}) Text={Text}", line.Box.X, line.Box.Y, line.Box.Width, line.Box.Height, TruncateForLog(line.Text, 40));
-            _overlayService.Show(block.UnionBox, mid, dpiX, dpiY, preview: true);
+            // 保持小预览，不立即切整块，避免跳变；拖动后按行扩展
             _dragOverlayShownAt = Environment.TickCount64;
         }
         catch (OperationCanceledException) { }
