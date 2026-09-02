@@ -46,7 +46,12 @@ public static class AppHost
                 services.AddSingleton<WordInteractionCoordinator>();
                 services.AddSingleton<IInteractionCoordinator>(sp => sp.GetRequiredService<WordInteractionCoordinator>());
                 services.AddSingleton<BlockInteractionCoordinator>();
-                services.AddSingleton<ISelectionOverlayService, WpfSelectionOverlayService>();
+                // 具体类型注册为主 + 接口映射到同一单例：StartupDisplayProbe 直接解析
+                // WpfSelectionOverlayService（预热/拓扑清理），必须与 ISelectionOverlayService
+                // 消费方拿到同一实例。历史 Bug：仅注册接口时 GetRequiredService<具体类> 抛
+                // "No service for type ... has been registered"，启动即崩。
+                services.AddSingleton<WpfSelectionOverlayService>();
+                services.AddSingleton<ISelectionOverlayService>(sp => sp.GetRequiredService<WpfSelectionOverlayService>());
                 services.AddSingleton<IWordPopupService, WpfWordPopupService>();
                 services.AddSingleton<IBlockPopupService, WpfBlockPopupService>();
                 services.AddSingleton<IStatusIndicatorService, WpfStatusIndicatorService>();
@@ -59,6 +64,17 @@ public static class AppHost
             .Build();
 
         RunModelVersionVerification(host.Services);
+        try
+        {
+            // 显示器探测/预热是优化与诊断层，失败不致命（物理定位本身不依赖预热）
+            StartupDisplayProbe.Run(host.Services);
+        }
+        catch (Exception ex)
+        {
+            using var tempLoggerFactory = LoggerFactory.Create(b => { });
+            tempLoggerFactory.CreateLogger(nameof(AppHost)).LogWarning(
+                ex, "StartupDisplayProbe failed on startup (non-fatal)");
+        }
         WireBlockHotkey(host.Services);
         WireWordHotkey(host.Services);
         WarmUpInBackground(host.Services);

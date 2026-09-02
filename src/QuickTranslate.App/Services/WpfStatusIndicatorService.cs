@@ -57,10 +57,12 @@ public class WpfStatusIndicatorService : IStatusIndicatorService
                 anchorBox.X + anchorBox.Width / 2.0 - estW / 2.0,
                 work.Left, Math.Max(work.Left, work.Right - estW));
 
-            var dip = _dpiMapper.ToDip(new PhysicalRect(
-                (int)phyX, (int)phyY, (int)estW, (int)estH), dpiX, dpiY);
-            window.Left = dip.X;
-            window.Top = dip.Y;
+            // 物理像素定位（SizeToContent 窗口：不固定 DIP 宽高，内容自适应尺寸）：
+            // 绕开 WPF DIP 换算依赖窗口创建时刻 DPI 认知的时序问题（高缩放/混合 DPI 错位）
+            WindowPhysicalPlacement.SetPhysicalBounds(
+                window,
+                new PhysicalRect((int)phyX, (int)phyY, (int)estW, (int)estH),
+                dpiX, dpiY, padDip: 0, topmost: true, setDipSize: false);
 
             if (!window.IsVisible)
             {

@@ -214,6 +214,171 @@ public class RealOcrRecognitionTests
         return new ScreenFrame(bmp, new PhysicalRect(100, 100, w, h), MonitorId.Empty);
     }
 
+    /// <summary>渲染多行段落（模拟块选截图），scale 模拟 DPI：1.0=96dpi 基准，1.5=144dpi，2.0=192dpi。
+    /// fontPx/lineGapPx 为 96dpi 逻辑像素，内部乘 scale 得物理像素。targetW/targetH 撑到块选首捕的物理帧尺寸，文本块在帧内居中。</summary>
+    private static ScreenFrame RenderParagraphFrame(string[] lines, double scale,
+        int fontPx = 20, int lineGapPx = 12, int? targetW = null, int? targetH = null)
+    {
+        int physFontPx = (int)Math.Round(fontPx * scale);
+        int lineGap = (int)Math.Round(lineGapPx * scale);
+
+        using var probe = new Bitmap(4, 4, PixelFormat.Format32bppArgb);
+        using var font = new Font("Segoe UI", physFontPx, FontStyle.Regular, GraphicsUnit.Pixel);
+        using (var mg = Graphics.FromImage(probe))
+        {
+            mg.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+        }
+
+        float maxW = 0, lineH = 0;
+        using (var mg = Graphics.FromImage(probe))
+        {
+            foreach (var line in lines)
+            {
+                var s = mg.MeasureString(line, font);
+                maxW = Math.Max(maxW, s.Width);
+                lineH = Math.Max(lineH, s.Height);
+            }
+        }
+
+        int textW = (int)Math.Ceiling(maxW);
+        int textH = (int)Math.Ceiling(lineH) * lines.Length + lineGap * (lines.Length - 1);
+        int w = Math.Max(targetW ?? textW, textW);
+        int h = Math.Max(targetH ?? textH, textH);
+        int offsetX = (w - textW) / 2;
+        int offsetY = (h - textH) / 2;
+        var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            g.Clear(Color.White);
+            using var brush = new SolidBrush(Color.Black);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                g.DrawString(lines[i], font, brush, offsetX, offsetY + (lineH + lineGap) * i);
+            }
+        }
+        return new ScreenFrame(bmp, new PhysicalRect(100, 100, w, h), MonitorId.Empty);
+    }
+
+    /// <summary>
+    /// DPI 尺度不变性回归：同一逻辑内容在 96dpi 基准（1.0x）与高 DPI 尺度（1.5x/2.0x，
+    /// 模拟 144/192 缩放屏的物理渲染 + DpiScale 放大后的截图尺寸）下，
+    /// det→rec 全链路识别结果应保持等价（每行文本命中）。
+    /// 帧尺寸撑到块选首捕的物理尺寸（1200x720 × scale），确保 det 进入
+    /// 「大截图 ≥800 → 长边缩到 800」降采样路径——这正是高 DPI 下降采样倍率
+    /// 从 1.5x 涨到 2.25x/3x、Bilinear 欠采样导致笔画混叠的高危路径。
+    /// </summary>
+    [Theory]
+    [InlineData(1.5)]
+    [InlineData(2.0)]
+    public async Task RecognizeAsync_HighDpiScale_ParagraphRecognitionEquivalent(double scale)
+    {
+        if (!ModelsPresent)
+        {
+            _out.WriteLine($"SKIP: models not present under {ModelsDir}");
+            return;
+        }
+
+        var lines = new[]
+        {
+            "The quick brown fox jumps over the lazy dog near the river bank,",
+            "and the dog barks loudly at the fox every single morning while",
+            "the river flows quietly under the old wooden bridge by the mill"
+        };
+
+        using var engine = CreateEngine();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        await engine.WarmUpAsync(cts.Token);
+
+        // 基准：96dpi 尺度渲染，帧撑到块选首捕物理尺寸 1200x720
+        using var frame96 = RenderParagraphFrame(lines, 1.0, targetW: 1200, targetH: 720);
+        var r96 = await engine.RecognizeAsync(frame96, cts.Token);
+        var text96 = string.Join("\n", r96.Lines.Select(l => l.Text));
+        _out.WriteLine($"[1.0x] frame={frame96.Bitmap.Width}x{frame96.Bitmap.Height} lines={r96.LineCount}");
+        _out.WriteLine($"[1.0x] recognized: '{text96}'");
+
+        // 基准本身必须识别正确（否则对比无意义）
+        Assert.True(r96.LineCount >= 3, $"baseline should detect 3 lines, got {r96.LineCount}");
+        foreach (var expected in new[] { "quick brown fox", "lazy dog", "river bank", "old wooden bridge" })
+        {
+            Assert.Contains(expected, text96, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // 高 DPI 尺度：同内容物理放大（模拟高缩放屏 + DpiScale 放大后的截图）
+        using var frameHidpi = RenderParagraphFrame(lines, scale,
+            targetW: (int)Math.Round(1200 * scale), targetH: (int)Math.Round(720 * scale));
+        _out.WriteLine($"[{scale}x] frame={frameHidpi.Bitmap.Width}x{frameHidpi.Bitmap.Height}");
+        var rHi = await engine.RecognizeAsync(frameHidpi, cts.Token);
+        var textHi = string.Join("\n", rHi.Lines.Select(l => l.Text));
+        _out.WriteLine($"[{scale}x] lines={rHi.LineCount} recognized: '{textHi}'");
+
+        // 尺度不变性：高 DPI 尺度下同样识别出全部关键内容
+        Assert.True(rHi.LineCount >= 3, $"high-dpi scale {scale} should detect 3 lines, got {rHi.LineCount}");
+        foreach (var expected in new[] { "quick brown fox", "lazy dog", "river bank", "old wooden bridge" })
+        {
+            Assert.Contains(expected, textHi, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>
+    /// 200%（DPI=192）块选乱码回归：小字（12px 逻辑 → 24px 物理）+ 紧凑行距的真实 UI 场景。
+    /// 历史根因：块选首捕经 DpiScale 放大到 2400x1440 后，PreprocessDet 固定 800 长边上限
+    /// 造成 3x 降采样（96 DPI 仅 1.5x）；GDI+ Bilinear 缩小无低通预滤波，2px 宽细笔画
+    /// 被欠采样采断 → det 框破碎/漂移 → rec 读到"一行半"输出乱码。
+    /// 修复：PreprocessDet 缩小改用 HighQualityBicubic（内置盒式预滤波）。
+    /// </summary>
+    [Fact]
+    public async Task RecognizeAsync_HighDpi200_SmallTextCompactLines_NotGarbled()
+    {
+        if (!ModelsPresent)
+        {
+            _out.WriteLine($"SKIP: models not present under {ModelsDir}");
+            return;
+        }
+
+        var lines = new[]
+        {
+            "The quick brown fox jumps over the lazy dog near the river bank today,",
+            "and the dog barks loudly at the fox every single morning while the birds",
+            "sing sweetly in the tall green trees beside the quiet flowing river stream"
+        };
+
+        using var engine = CreateEngine();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        await engine.WarmUpAsync(cts.Token);
+
+        // 基准 96dpi：12px 逻辑字、紧凑行距（4px）、块选首捕帧 1200x720
+        // （det 降采样 1.5x，Bilinear 尚可 → 应正确识别）
+        using var frame96 = RenderParagraphFrame(lines, 1.0, fontPx: 12, lineGapPx: 4, targetW: 1200, targetH: 720);
+        var r96 = await engine.RecognizeAsync(frame96, cts.Token);
+        var text96 = string.Join("\n", r96.Lines.Select(l => l.Text));
+        _out.WriteLine($"[96dpi] frame={frame96.Bitmap.Width}x{frame96.Bitmap.Height} lines={r96.LineCount}");
+        _out.WriteLine($"[96dpi] recognized: '{text96}'");
+
+        // 200%：同逻辑内容物理放大（24px 物理字、8px 物理行距）、帧 2400x1440
+        // （det 降采样 3x——历史 Bug 触发路径）
+        using var frame200 = RenderParagraphFrame(lines, 2.0, fontPx: 12, lineGapPx: 4, targetW: 2400, targetH: 1440);
+        var r200 = await engine.RecognizeAsync(frame200, cts.Token);
+        var text200 = string.Join("\n", r200.Lines.Select(l => l.Text));
+        _out.WriteLine($"[200%] frame={frame200.Bitmap.Width}x{frame200.Bitmap.Height} lines={r200.LineCount}");
+        _out.WriteLine($"[200%] recognized: '{text200}'");
+
+        var keywords = new[] { "quick brown fox", "lazy dog", "river bank", "barks loudly" };
+
+        // 尺度不变性：200% 下小字紧凑行距同样应识别出全部关键内容（无乱码/丢行）
+        Assert.True(r200.LineCount >= 3, $"200% should detect 3 lines, got {r200.LineCount}");
+        foreach (var expected in keywords)
+        {
+            Assert.Contains(expected, text200, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // 参考基准（96dpi 本身应正确；若基准本身识别失败则测试环境异常，单独报告）
+        if (r96.LineCount < 3 || keywords.Any(k => !text96.Contains(k, StringComparison.OrdinalIgnoreCase)))
+        {
+            _out.WriteLine("WARN: 96dpi baseline itself imperfect (font too small for det) — see diagnostics");
+        }
+    }
+
     [Fact]
     public async Task RecognizeAsync_FocusBand_OnlyBandedLine_AndDetCacheHitsOnSameCrop()
     {
@@ -248,12 +413,20 @@ public class RealOcrRecognitionTests
         Assert.Equal(1, r2.LineCount);
         Assert.Contains("gamma delta", text2, StringComparison.OrdinalIgnoreCase);
 
-        // 回到上半帧带：裁剪区与缓存一致 → det 缓存命中，不再推理
+        // 紧接重复同一下半帧带：det 缓存单槽（r2 已覆盖 r1 的槽），
+        // 本次与 r2 裁剪区一致 → 缓存命中，det 推理被跳过（耗时≈0）
+        var r2b = await engine.RecognizeAsync(frame, bottomBand, cts.Token);
+        _out.WriteLine($"BottomBand again: det={r2b.Timings.Detector.TotalMilliseconds:F0}ms");
+        Assert.Equal(1, r2b.LineCount);
+        Assert.True(r2b.Timings.Detector < r2.Timings.Detector,
+            "det cache should hit on the immediately preceding identical crop (detector skipped)");
+
+        // 回到上半帧带：单槽缓存已被 r2 占用（历史缺陷暴露：旧断言依赖 r1 槽仍在 +
+        // det 耗时偶然波动，r3 从未真正命中缓存）。此处验证重跑结果与 r1 一致
         var r3 = await engine.RecognizeAsync(frame, topBand, cts.Token);
         _out.WriteLine($"TopBand again: det={r3.Timings.Detector.TotalMilliseconds:F0}ms");
         Assert.Equal(1, r3.LineCount);
-        Assert.True(r3.Timings.Detector < r1.Timings.Detector,
-            "det cache should hit on identical crop (detector skipped)");
+        Assert.Contains("alpha beta", string.Join(" ", r3.Lines.Select(l => l.Text)), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

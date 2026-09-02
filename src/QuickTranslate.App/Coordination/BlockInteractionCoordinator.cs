@@ -595,16 +595,18 @@ public class BlockInteractionCoordinator : IDisposable
         }
 
         // Task4: capture expansion to 1200x1200 only vertical when drag exceeds initial frame bottom
-        if (!_hasExpandedCapture && !_dragCaptureRegion.IsEmpty && cur.Y > _dragCaptureRegion.Bottom - 20 && _dragCaptureRegion.Height < 1200)
+        // 96-DPI 基准常量按拖选所在屏 DPI 缩放，高 DPI 屏上逻辑范围与 96-DPI 屏一致
+        if (!_hasExpandedCapture && !_dragCaptureRegion.IsEmpty && cur.Y > _dragCaptureRegion.Bottom - DpiScale.Px(20, _dragDpiY)
+            && _dragCaptureRegion.Height < DpiScale.Px(1200, _dragDpiY))
         {
             // optimistic guard to avoid concurrent re-entry; reset on failure to allow retry
             _hasExpandedCapture = true;
             try
             {
-                var newSize = new PhysicalSize(1200, 1200);
+                var newSize = new PhysicalSize(DpiScale.Px(1200, _dragDpiX), DpiScale.Px(1200, _dragDpiY));
                 var frame = await _retryCoordinator.Capture.CaptureAroundAsync(_anchorPoint, newSize).ConfigureAwait(false);
                 var newFrameRegion = frame.Region;
-                var band = MakeBand(_anchorPoint, 600);
+                var band = MakeBand(_anchorPoint, DpiScale.Px(600, _dragDpiY));
                 var newOcr = await _retryCoordinator.Ocr.RecognizeAsync(frame, band).ConfigureAwait(false);
                 ((IDisposable)frame).Dispose();
                 lock (_dragLock)

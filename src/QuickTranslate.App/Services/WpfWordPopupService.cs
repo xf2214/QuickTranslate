@@ -118,9 +118,10 @@ public class WpfWordPopupService : IWordPopupService
         var physicalRect = PopupPlacement.Place(anchorBox, monitorInfo.WorkArea, popupPreferredSize);
         var dipRect = _dpiMapper.ToDip(physicalRect, dpiX, dpiY);
 
-        window.Left = dipRect.X;
-        window.Top = dipRect.Y;
-        window.Width = dipRect.Width;
+        // 物理像素定位：绕开 WPF DIP 换算依赖窗口创建时刻 DPI 认知的时序问题
+        // （高缩放单屏/混合 DPI/运行中改分辨率时 DIP 定位按错误比例缩放）
+        WindowPhysicalPlacement.SetPhysicalBounds(window, physicalRect, dpiX, dpiY, padDip: 0, topmost: false);
+        // DIP 高度下限特调：物理定位后窗口 DPI 已与目标屏一致，DIP 换算自洽
         window.Height = Math.Max(dipRect.Height, estH);
 
         var style = _appSettings.Value.PopupDisplayStyle;
@@ -222,9 +223,8 @@ public class WpfWordPopupService : IWordPopupService
         var physicalRect = PopupPlacement.Place(anchorBox, monitorInfo.WorkArea, popupPreferredSize);
         var dipRect = _dpiMapper.ToDip(physicalRect, dpiX, dpiY);
 
-        window.Left = dipRect.X;
-        window.Top = dipRect.Y;
-        window.Width = dipRect.Width;
+        // 物理像素定位：与 ShowCore 同一策略，绕开 DIP 换算的 DPI 认知时序问题
+        WindowPhysicalPlacement.SetPhysicalBounds(window, physicalRect, dpiX, dpiY, padDip: 0, topmost: false);
         window.Height = Math.Max(dipRect.Height, 120);
 
         var style2 = _appSettings.Value.PopupDisplayStyle;

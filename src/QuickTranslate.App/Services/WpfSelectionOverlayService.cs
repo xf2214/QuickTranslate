@@ -168,4 +168,58 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
         }
         return result;
     }
+
+    /// <summary>
+    /// 启动预热：为每块监视器提前创建 overlay 窗口（EnsureHandle + 1x1 物理定位，不可见），
+    /// 让 WPF 窗口 DPI 与所在屏同步。首次热键触发时零创建延迟、零 DPI 认知错位。
+    /// </summary>
+    public void WarmupForMonitors(IReadOnlyList<MonitorInfo> monitors)
+    {
+        RunOnUi(() =>
+        {
+            foreach (var monitor in monitors)
+            {
+                var mid = monitor.Id;
+                if (_windows.TryGetValue(mid, out var entry) &&
+                    PerMonitorDpiHelpers.AreClose(entry.dpiX, monitor.DpiX) &&
+                    PerMonitorDpiHelpers.AreClose(entry.dpiY, monitor.DpiY))
+                {
+                    continue; // 已预热且 DPI 一致
+                }
+
+                if (_windows.TryGetValue(mid, out entry))
+                {
+                    entry.window.Close();
+                    _windows.Remove(mid);
+                }
+
+                var window = new SelectionOverlayWindow();
+                // EnsureHandle 只创建不显示；1x1 定位到屏内左上角使窗口获得该屏 DPI
+                WindowPhysicalPlacement.SetPhysicalBounds(
+                    window, new PhysicalRect(monitor.Bounds.X, monitor.Bounds.Y, 1, 1),
+                    monitor.DpiX, monitor.DpiY, padDip: 0);
+                _windows[mid] = (window, monitor.DpiX, monitor.DpiY);
+            }
+        });
+    }
+
+    /// <summary>
+    /// 显示拓扑变更后清理失效监视器的缓存窗口（拔屏/换屏防隐藏窗口泄漏与陈旧 DPI 窗口）。
+    /// 同一屏仅改缩放时 MonitorId 不变、DPI 变，仍由 Show 时的 AreClose 比对重建。
+    /// </summary>
+    public void PruneExcept(IReadOnlyCollection<MonitorId> activeIds)
+    {
+        RunOnUiAsync(() =>
+        {
+            List<MonitorId> stale = _windows.Keys.Where(k => !activeIds.Contains(k)).ToList();
+            foreach (var key in stale)
+            {
+                if (_windows.TryGetValue(key, out var entry))
+                {
+                    entry.window.Close();
+                    _windows.Remove(key);
+                }
+            }
+        });
+    }
 }

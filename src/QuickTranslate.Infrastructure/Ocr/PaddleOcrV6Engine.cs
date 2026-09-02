@@ -904,11 +904,19 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         // 自适应上限：大截图 (max(srcW,srcH)≥800) 用 800，小截图用 960。
         // 大 1200×720 块 → 800 上限 det 输入面积 800×480=384k vs 960×576=553k，节省 ~30%；
         // 小 372×80 单词保持 960 时不降采样，保留小字号召回。
-        // Resize so long side <= limit, keeping aspect ratio
         // 与上游 PaddleOCR 一致：只把大图缩放到边长上限，小帧保持原生分辨率（ratio ≤ 1）。
         // 旧实现会把小截图放大到长边 960（Word 起捕 300x100 → 960x320，面积约 10 倍），
         // det 每次多付 ~300ms；放大不带来任何信息量，只会增加计算量。
+        //
+        // 高 DPI 降采样比下限（0.5）：高缩放屏（如 200%）下块选首捕经 DpiScale 放大到
+        // 2400x1440，固定 800 上限意味着 3x 降采样（96 DPI 仅 1.5x）——GDI+ 缩小的
+        // 预滤波有限，3x 下细笔画欠采样断裂，且 pred map 量化步长放大到 12 物理px/px
+        // （96 DPI 为 6px/px），det 框误差与行间隙同量级 → 行框吃进邻行 → rec 读到
+        // "一行半"输出乱码（历史回归：200% 屏块选乱码/选块内容错）。
+        // 上限提升到 longSide/2（ratio 下限 0.5）后误差与采样质量回到 96 DPI 量级；
+        // 96/150 DPI 帧 ratio≥0.5 完全不受影响。
         int limit = (srcW >= AdaptiveThreshold || srcH >= AdaptiveThreshold) ? DetMaxSideLenLarge : DetMaxSideLenSmall;
+        limit = Math.Max(limit, (int)Math.Ceiling(Math.Max(srcW, srcH) / 2.0));
         float ratio = Math.Min(1f, Math.Min((float)limit / srcW, (float)limit / srcH));
         int resizeW = Math.Max(1, (int)Math.Round(srcW * ratio));
         int resizeH = Math.Max(1, (int)Math.Round(srcH * ratio));
@@ -923,7 +931,9 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         using var resized = new Bitmap(inputW, inputH, PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(resized))
         {
-            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+            // HighQualityBicubic：缩小方向内置盒式预滤波（Bilinear 为纯点采样，
+            // 高倍缩小会欠采样采断细笔画——200% 屏 3x 降采样乱码的成因之一）
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
             g.Clear(Color.Black);
             g.DrawImage(src, new Rectangle(0, 0, resizeW, resizeH), 0, 0, srcW, srcH, GraphicsUnit.Pixel);
         }

@@ -34,11 +34,14 @@ public class BlockRetryCoordinator
     {
         int count = 0;
         var opts = SelectionOptions.Default;
-        PhysicalSize size = new(1200, 720);
+        // 96-DPI 基准首捕尺寸与焦点带：高 DPI 屏（150%/200% 缩放）上按监视器 DPI 缩放，
+        // 保证首捕/焦点带的逻辑大小与 96-DPI 屏一致（96 DPI 下缩放系数为 1，行为不变）
+        PhysicalSize size = new(DpiScale.Px(InitialCaptureWidth, dpiX), DpiScale.Px(InitialCaptureHeight, dpiY));
         // 焦点带：以光标为中心的垂直带，只识别带内的行。
         // 截图里的工具栏/侧栏/远处代码等无关行不再消耗 rec 耗时（每行 ~100ms），
         // 也不进块选择候选，同时改善“句子不准”与“严重卡顿”。
-        int bandHalf = FocusBandHalfHeight;
+        int bandHalf = DpiScale.Px(FocusBandHalfHeight, dpiY);
+        int edgeRetry = DpiScale.Px(opts.BlockEdgeRetryThreshold, dpiY);
 
         using (var frame = await Capture.CaptureAroundAsync(anchor, size, ct).ConfigureAwait(false))
         {
@@ -52,8 +55,8 @@ public class BlockRetryCoordinator
             // 直到块不再触带、带已覆盖整帧或达到扩展上限。
             for (int expand = 0; expand < MaxBandExpansions && !block.NoBlockFound; expand++)
             {
-                bool touchBandTop = block.UnionBox.Top - band.Top < opts.BlockEdgeRetryThreshold;
-                bool touchBandBottom = band.Bottom - block.UnionBox.Bottom < opts.BlockEdgeRetryThreshold;
+                bool touchBandTop = block.UnionBox.Top - band.Top < edgeRetry;
+                bool touchBandBottom = band.Bottom - block.UnionBox.Bottom < edgeRetry;
                 if (!touchBandTop && !touchBandBottom) break;
                 if (band.Top <= frame.Region.Top && band.Bottom >= frame.Region.Bottom)
                     break; // 当前带已覆盖整帧，再扩无意义
@@ -70,11 +73,11 @@ public class BlockRetryCoordinator
             if (block.NoBlockFound) return (ocr, block, count);
 
             var captureRegion = frame.Region;
-            bool touchTop = block.UnionBox.Top - captureRegion.Top < opts.BlockEdgeRetryThreshold;
-            bool touchBottom = captureRegion.Bottom - block.UnionBox.Bottom < opts.BlockEdgeRetryThreshold;
+            bool touchTop = block.UnionBox.Top - captureRegion.Top < edgeRetry;
+            bool touchBottom = captureRegion.Bottom - block.UnionBox.Bottom < edgeRetry;
             // 左右触边只在锚点行本身被截断时才值得重抓：
             // 无关宽行（UI 栏等）触边不影响目标句子的完整性，避免整块双倍 OCR 加重卡顿。
-            bool anchorClippedHorizontally = AnchorLineTouchesHorizontalEdge(block, anchor, captureRegion, opts.BlockEdgeRetryThreshold);
+            bool anchorClippedHorizontally = AnchorLineTouchesHorizontalEdge(block, anchor, captureRegion, edgeRetry);
             if (!touchTop && !touchBottom && !anchorClippedHorizontally) return (ocr, block, count);
             size = new PhysicalSize((int)Math.Round(size.Width * 1.4), (int)Math.Round(size.Height * 1.4));
         }
@@ -90,7 +93,10 @@ public class BlockRetryCoordinator
         }
     }
 
-    // 焦点带初始半高 280px（带宽 560 ≈ 720p 截图的 78%）：句子/常见段落一次完成，
+    // 96-DPI 基准首捕尺寸（物理像素），运行时经 DpiScale 按监视器 DPI 缩放
+    private const int InitialCaptureWidth = 1200;
+    private const int InitialCaptureHeight = 720;
+    // 96-DPI 基准焦点带初始半高 280px（带宽 560 ≈ 720p 截图的 78%）：句子/常见段落一次完成，
     // 更长的段落通过触带扩展（同帧再识别，×1.6）补齐。
     private const int FocusBandHalfHeight = 280;
     private const int MaxBandExpansions = 2;

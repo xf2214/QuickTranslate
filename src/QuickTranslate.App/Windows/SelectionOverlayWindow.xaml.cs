@@ -209,7 +209,11 @@ public partial class SelectionOverlayWindow : Window
         LastDpiY = dpiY;
 
         var (l, t, w, h) = PerMonitorDpiHelpers.ToDip(physicalBox, dpiX, dpiY);
+        // DIP 路径先行（保持 LastLayoutRect/内部元素布局语义），随后 HWND 物理定位覆盖：
+        // 窗口创建时刻的 DPI 认知 ≠ 目标屏 DPI 时（高缩放/混合 DPI/启动后改分辨率），
+        // DIP 换算会按错误比例缩放且不触发 WM_DPICHANGED，物理写入是唯一确定性定位。
         ApplyLayout(new DipRect(l, t, w, h));
+        WindowPhysicalPlacement.SetPhysicalBounds(this, physicalBox, dpiX, dpiY, padDip: 2);
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -231,7 +235,11 @@ public partial class SelectionOverlayWindow : Window
         LastDpiX = newDpiX;
         LastDpiY = newDpiY;
 
+        // DIP 重算（窗口 DPI 已更新，换算自洽）+ 物理重定位：
+        // WPF 对 WM_DPICHANGED 的默认自动缩放会把窗口物理几何按建议矩形调整，
+        // 这里以 LastPhysicalBox 为准做物理覆盖，防止残留错误几何。
         var (l, t, w, h) = PerMonitorDpiHelpers.ToDip(LastPhysicalBox.Value, newDpiX, newDpiY);
         ApplyLayout(new DipRect(l, t, w, h));
+        WindowPhysicalPlacement.SetPhysicalBounds(this, LastPhysicalBox.Value, newDpiX, newDpiY, padDip: 2);
     }
 }

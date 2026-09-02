@@ -54,8 +54,11 @@ public class WordInteractionCoordinator : IInteractionCoordinator
     // OCR 后若选词触碰截图边缘（可能被截断），用识别到的实际行高重新算尺寸再抓一次。
     private const int TargetWordCount = 15;
     private const int TargetLineCount = 4;
+    // 96-DPI 基准估算行高（物理像素）：高 DPI 屏（150%/200% 缩放）上文字物理尺寸同比放大，
+    // 运行时经 DpiScale.Px 按 monitorInfo.DpiY 缩放后再使用，否则首捕范围/焦点带偏小
     private const int EstimatedLineHeight = 20;
     private const double AvgWordWidthPerLineHeight = 0.62;
+    // 96-DPI 基准触边判定裕度（物理像素），运行时按 DpiX 缩放
     private const int EdgeClipMargin = 10;
 
     // 首捕宽度系数：估行高 20px 对大字号/网页标题严重偏小（日志实测行框 30-38px），
@@ -187,8 +190,13 @@ public class WordInteractionCoordinator : IInteractionCoordinator
             if (IsStaleOrCanceled(newSlot)) return;
 
             // ===== 截图 + OCR + 选词（最多两次：首次按估值行高，触边时用实际行高扩大重抓）=====
+            // 高 DPI 屏：96-DPI 基准常量按监视器 DPI 缩放，保证首捕范围/焦点带/触边裕度的
+            // 逻辑大小与 96-DPI 屏一致（96 DPI 下缩放系数为 1，行为不变）
+            int estLineHeight = DpiScale.Px(EstimatedLineHeight, dpiY);
+            int clipMargin = DpiScale.Px(EdgeClipMargin, dpiX);
+
             SelectionResult sel;
-            var initialSize = WordCaptureSize(EstimatedLineHeight);
+            var initialSize = WordCaptureSize(estLineHeight);
             using (var firstFrame = await _captureService.CaptureAroundAsync(
                 cursor,
                 new PhysicalSize(
@@ -205,7 +213,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
                 SetState(newSlot, AppState.Ocr);
                 // 焦点带限定：取词只用光标所在行，带外行不跑 rec（扩抓后行多时收益显著）
                 var ocr = await _ocrEngine.RecognizeAsync(
-                    firstFrame, WordFocusBand(cursor, EstimatedLineHeight, firstFrame.Region), newSlot.Cts.Token).ConfigureAwait(false);
+                    firstFrame, WordFocusBand(cursor, estLineHeight, firstFrame.Region), newSlot.Cts.Token).ConfigureAwait(false);
                 if (IsStaleOrCanceled(newSlot)) return;
 
                 SetState(newSlot, AppState.Selecting);
@@ -220,11 +228,11 @@ public class WordInteractionCoordinator : IInteractionCoordinator
                 //      选择器退而选了邻近词（段落首尾常见：首词/末词贴截图边缘），扩大后重抓。
                 // 扩大策略：触边方向尺寸翻倍（未识别到则双向翻倍），并以实际行高重算尺寸为下限，
                 // 保证重抓范围只增不减（旧实现小字号时重算尺寸反而更小，截断永远修不好）。
-                int anchorLineHeight = GetLineHeightAtAnchor(ocr, cursor) ?? EstimatedLineHeight;
-                bool clipped = !sel.NoTextFound && TouchesCaptureEdge(sel.Box, captureRegion.Value);
+                int anchorLineHeight = GetLineHeightAtAnchor(ocr, cursor) ?? estLineHeight;
+                bool clipped = !sel.NoTextFound && TouchesCaptureEdge(sel.Box, captureRegion.Value, clipMargin);
                 bool offCursor = !sel.NoTextFound && CursorOffSelection(sel.Box, cursor, anchorLineHeight);
-                bool nearLineTouchesH = !sel.NoTextFound && LineNearCursorTouchesEdge(ocr, cursor, captureRegion.Value, horizontal: true);
-                bool nearLineTouchesV = !sel.NoTextFound && LineNearCursorTouchesEdge(ocr, cursor, captureRegion.Value, horizontal: false);
+                bool nearLineTouchesH = !sel.NoTextFound && LineNearCursorTouchesEdge(ocr, cursor, captureRegion.Value, horizontal: true, clipMargin);
+                bool nearLineTouchesV = !sel.NoTextFound && LineNearCursorTouchesEdge(ocr, cursor, captureRegion.Value, horizontal: false, clipMargin);
                 bool offCursorWithClippedAnchorLine = offCursor && (nearLineTouchesH || nearLineTouchesV);
                 if (clipped || sel.NoTextFound || offCursorWithClippedAnchorLine)
                 {
@@ -232,8 +240,8 @@ public class WordInteractionCoordinator : IInteractionCoordinator
                         "WordRetry: reason clipped={Clipped} noText={NoText} offCursor={Off}(nearLineH={H},nearLineV={V})",
                         clipped, sel.NoTextFound, offCursorWithClippedAnchorLine, nearLineTouchesH, nearLineTouchesV);
                     var computed = WordCaptureSize(anchorLineHeight);
-                    bool expandW = sel.NoTextFound || TouchesHorizontalEdge(sel.Box, captureRegion.Value) || (offCursor && nearLineTouchesH);
-                    bool expandH = sel.NoTextFound || TouchesVerticalEdge(sel.Box, captureRegion.Value) || (offCursor && nearLineTouchesV);
+                    bool expandW = sel.NoTextFound || TouchesHorizontalEdge(sel.Box, captureRegion.Value, clipMargin) || (offCursor && nearLineTouchesH);
+                    bool expandH = sel.NoTextFound || TouchesVerticalEdge(sel.Box, captureRegion.Value, clipMargin) || (offCursor && nearLineTouchesV);
                     var retrySize = new PhysicalSize(
                         Math.Max(expandW ? captureRegion.Value.Width * 2 : captureRegion.Value.Width, computed.Width),
                         Math.Max(expandH ? captureRegion.Value.Height * 2 : captureRegion.Value.Height, computed.Height));
@@ -245,7 +253,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
                     _overlayService.Show(captureRegion.Value, mid, dpiX, dpiY, preview: true);
 
                     var retryOcr = await _ocrEngine.RecognizeAsync(
-                        retryFrame, WordFocusBand(cursor, Math.Max(EstimatedLineHeight, anchorLineHeight), retryFrame.Region), newSlot.Cts.Token).ConfigureAwait(false);
+                        retryFrame, WordFocusBand(cursor, Math.Max(estLineHeight, anchorLineHeight), retryFrame.Region), newSlot.Cts.Token).ConfigureAwait(false);
                     if (IsStaleOrCanceled(newSlot)) return;
 
                     sel = _wordSelector.SelectWord(retryOcr, cursor, null);
@@ -446,21 +454,21 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         }
     }
 
-    private static bool TouchesCaptureEdge(PhysicalRect box, PhysicalRect region)
+    private static bool TouchesCaptureEdge(PhysicalRect box, PhysicalRect region, int margin)
     {
-        return TouchesHorizontalEdge(box, region) || TouchesVerticalEdge(box, region);
+        return TouchesHorizontalEdge(box, region, margin) || TouchesVerticalEdge(box, region, margin);
     }
 
-    private static bool TouchesHorizontalEdge(PhysicalRect box, PhysicalRect region)
+    private static bool TouchesHorizontalEdge(PhysicalRect box, PhysicalRect region, int margin)
     {
-        return box.Left - region.Left < EdgeClipMargin ||
-               region.Right - box.Right < EdgeClipMargin;
+        return box.Left - region.Left < margin ||
+               region.Right - box.Right < margin;
     }
 
-    private static bool TouchesVerticalEdge(PhysicalRect box, PhysicalRect region)
+    private static bool TouchesVerticalEdge(PhysicalRect box, PhysicalRect region, int margin)
     {
-        return box.Top - region.Top < EdgeClipMargin ||
-               region.Bottom - box.Bottom < EdgeClipMargin;
+        return box.Top - region.Top < margin ||
+               region.Bottom - box.Bottom < margin;
     }
 
     /// <summary>
@@ -480,7 +488,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
     /// 离光标最近的 OCR 行是否触碰截图边缘：是则说明光标所在行被截断，
     /// 光标下的词可能漏检/框偏，值得扩大截图重抓（段落首尾失败的典型特征）。
     /// </summary>
-    private static bool LineNearCursorTouchesEdge(Core.Ocr.OcrLayoutResult ocr, PhysicalPoint cursor, PhysicalRect region, bool horizontal)
+    private static bool LineNearCursorTouchesEdge(Core.Ocr.OcrLayoutResult ocr, PhysicalPoint cursor, PhysicalRect region, bool horizontal, int margin)
     {
         Core.Ocr.OcrLine? nearest = null;
         double best = double.MaxValue;
@@ -496,8 +504,8 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         if (nearest == null) return false;
 
         return horizontal
-            ? TouchesHorizontalEdge(nearest.Box, region)
-            : TouchesVerticalEdge(nearest.Box, region);
+            ? TouchesHorizontalEdge(nearest.Box, region, margin)
+            : TouchesVerticalEdge(nearest.Box, region, margin);
     }
 
     private static double RectDistance(PhysicalPoint p, PhysicalRect box)
