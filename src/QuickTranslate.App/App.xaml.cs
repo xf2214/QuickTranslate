@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using QuickTranslate.App.Bootstrap;
 using QuickTranslate.App.Coordination;
+using QuickTranslate.App.Windows;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Infrastructure.SingleInstance;
@@ -24,6 +25,7 @@ public partial class App : WpfApplication
     private IAppLifecycle? _appLifecycle;
     private ITrayIconService? _trayIconService;
     private IHotkeyBroker? _hotkeyBroker;
+    private StartupSplashWindow? _splashWindow;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -47,6 +49,21 @@ public partial class App : WpfApplication
             _instanceGuard.Dispose();
             Environment.Exit(1);
             return;
+        }
+
+        // 温和 Splash：SingleInstance 之后、Host 之前立即弹出，不阻塞 Tray Ready
+        try
+        {
+            _splashWindow = StartupSplashCoordinator.TryShowSplash(null);
+            if (_splashWindow != null)
+            {
+                _splashWindow.Closed += (_, _) => _splashWindow = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            global::Serilog.Log.Debug(ex, "[App.OnStartup] Splash show failed (non-fatal) [ErrorCode=SPLASH_SHOW_FAIL]");
+            _splashWindow = null;
         }
 
         try
@@ -77,6 +94,31 @@ public partial class App : WpfApplication
             _logger.LogInformation("Hotkeys registered: {WordHotkey} (Word), {BlockHotkey} (Block), Esc (Cancel)",
                 $"{settings.WordHotkey.Modifiers}+{settings.WordHotkey.Key}",
                 $"{settings.BlockHotkey.Modifiers}+{settings.BlockHotkey.Key}");
+
+            // 启动检查流水线：不阻塞 OnStartup，6s 兜底 + 900ms 淡出由窗口自身保障
+            var splash = _splashWindow;
+            if (splash != null)
+            {
+                var spCapture = sp;
+                var loggerCapture = _logger;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await StartupSplashCoordinator.RunStartupChecksAsync(splash, spCapture, loggerCapture).ConfigureAwait(false);
+                    }
+                    catch (Exception ex2)
+                    {
+                        try { loggerCapture.LogWarning(ex2, "[App.StartupSplash] pipeline failed (non-fatal)"); } catch { }
+                        try
+                        {
+                            if (splash.Dispatcher.CheckAccess()) splash.CloseWithAnimation();
+                            else _ = splash.Dispatcher.InvokeAsync(() => { try { splash.CloseWithAnimation(); } catch { } });
+                        }
+                        catch { }
+                    }
+                });
+            }
         }
         catch (Exception ex)
         {
@@ -131,7 +173,44 @@ public partial class App : WpfApplication
             else global::Serilog.Log.Debug(ex, "[App.Shutdown] Hotkey UnregisterAll failed during lifecycle shutdown [ErrorCode=APP_HOTKEY_UNREGISTER_FAIL]");
         }
 
+        TryCloseSplash();
         CleanupTray();
+    }
+
+    private void TryCloseSplash()
+    {
+        var splash = _splashWindow;
+        if (splash == null) return;
+        try
+        {
+            if (splash.Dispatcher.CheckAccess())
+            {
+                if (splash.IsVisible) splash.CloseWithAnimation();
+                else try { splash.Close(); } catch { }
+            }
+            else
+            {
+                _ = splash.Dispatcher.InvokeAsync(() =>
+                {
+                    try
+                    {
+                        if (splash.IsVisible) splash.CloseWithAnimation();
+                        else try { splash.Close(); } catch { }
+                    }
+                    catch { }
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            if (_logger != null) _logger.LogDebug(ex, "[App.Cleanup] Splash close failed [ErrorCode=SPLASH_CLOSE_FAIL]");
+            else global::Serilog.Log.Debug(ex, "[App.Cleanup] Splash close failed [ErrorCode=SPLASH_CLOSE_FAIL]");
+            try { _ = splash.Dispatcher.InvokeAsync(() => { try { splash.Hide(); } catch { } }); } catch { }
+        }
+        finally
+        {
+            _splashWindow = null;
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -282,6 +361,7 @@ public partial class App : WpfApplication
             _appLifecycle = null;
         }
 
+        TryCloseSplash();
         CleanupTray();
 
         // Bounded shutdown: avoid blocking UI thread via .GetAwaiter().GetResult() which can deadlock

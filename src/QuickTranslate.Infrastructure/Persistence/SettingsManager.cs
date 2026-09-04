@@ -60,22 +60,7 @@ public class SettingsManager : ISettingsManager
         // 就地更新活跃单例，保证 IOptions<AppSettings>.Value 与磁盘一致、无需重启即可生效。
         if (_loadedSettings != null && !ReferenceEquals(_loadedSettings, settings))
         {
-            _loadedSettings.WordHotkey = settings.WordHotkey;
-            _loadedSettings.BlockHotkey = settings.BlockHotkey;
-            _loadedSettings.TargetLanguage = settings.TargetLanguage;
-            _loadedSettings.TranslationQuality = settings.TranslationQuality;
-            _loadedSettings.StartWithWindows = settings.StartWithWindows;
-            _loadedSettings.CloseOnOutsideClick = settings.CloseOnOutsideClick;
-            _loadedSettings.DebugLogging = settings.DebugLogging;
-            _loadedSettings.DebugOverlayMode = settings.DebugOverlayMode;
-            _loadedSettings.EnableTextToSpeech = settings.EnableTextToSpeech;
-            _loadedSettings.EnableSelectedTextProbe = settings.EnableSelectedTextProbe;
-            _loadedSettings.TranslationProvider = settings.TranslationProvider;
-            _loadedSettings.CustomLlmBaseUrl = settings.CustomLlmBaseUrl;
-            _loadedSettings.CustomLlmModel = settings.CustomLlmModel;
-            _loadedSettings.CustomLlmMaxContextLines = settings.CustomLlmMaxContextLines;
-            _loadedSettings.PopupDisplayStyle = settings.PopupDisplayStyle;
-            _loadedSettings.ResolvedApiKey = settings.ResolvedApiKey;
+            _loadedSettings.ApplyFrom(settings);
         }
         else
         {

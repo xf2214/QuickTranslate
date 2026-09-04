@@ -46,9 +46,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
     // 若不等一拍就弹结果，用户会完全看不到“指示翻译范围”的选定框。
     private const int SelectionHoldMs = 250;
 
-    // 选定框自动消失时长（毫秒）：Popup 出现后选定框无需常驻，超时自动收起，Esc 可提前关闭。
-    // 非 const：测试可通过反射调小以避免真实等待。
-    private static int SelectionAutoHideMs = 3000;
+    // 选定框自动消失时长见 SelectionOptions.SelectionAutoHideMs（Word/Block 共用，测试可反射调小）。
 
     // 截图范围按"15 个词宽 × 4 行高"估算：OCR 前未知真实行高，先用行高估值起捕，
     // OCR 后若选词触碰截图边缘（可能被截断），用识别到的实际行高重新算尺寸再抓一次。
@@ -124,15 +122,21 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         if (_appLifecycle.IsPaused &&
             (hotkeyEvent.Type == HotkeyEventType.Word || hotkeyEvent.Type == HotkeyEventType.Block))
         {
-            _logger.LogDebug("App paused, ignoring hotkey {Type}", hotkeyEvent.Type);
+            if (_logger.IsEnabled(LogLevel.Debug))
+                _logger.LogDebug("App paused, ignoring hotkey {Type}", hotkeyEvent.Type);
             return;
         }
 
         switch (hotkeyEvent.Type)
         {
             case HotkeyEventType.Word:
-                _logger.LogDebug("Word hotkey received at {Timestamp}, starting word pipeline", hotkeyEvent.Timestamp);
-                _ = RunWordPipeline();
+                if (_logger.IsEnabled(LogLevel.Debug))
+                    _logger.LogDebug("Word hotkey received at {Timestamp}, starting word pipeline", hotkeyEvent.Timestamp);
+                // try 内已处理业务异常；此处只兜 try 之前的前置代码（定位/建槽/指示器），避免 UnobservedTaskException
+                _ = RunWordPipeline().ContinueWith(t =>
+                {
+                    try { _logger.LogDebug(t.Exception, "[WordCoord] Pipeline faulted before handler (non-fatal)"); } catch { }
+                }, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
                 break;
             case HotkeyEventType.Block:
                 // Block 热键独立由 AppHost.WireBlockHotkey 订阅 broker.HotkeyFired 并调用
@@ -236,9 +240,10 @@ public class WordInteractionCoordinator : IInteractionCoordinator
                 bool offCursorWithClippedAnchorLine = offCursor && (nearLineTouchesH || nearLineTouchesV);
                 if (clipped || sel.NoTextFound || offCursorWithClippedAnchorLine)
                 {
-                    _logger.LogDebug(
-                        "WordRetry: reason clipped={Clipped} noText={NoText} offCursor={Off}(nearLineH={H},nearLineV={V})",
-                        clipped, sel.NoTextFound, offCursorWithClippedAnchorLine, nearLineTouchesH, nearLineTouchesV);
+                    if (_logger.IsEnabled(LogLevel.Debug))
+                        _logger.LogDebug(
+                            "WordRetry: reason clipped={Clipped} noText={NoText} offCursor={Off}(nearLineH={H},nearLineV={V})",
+                            clipped, sel.NoTextFound, offCursorWithClippedAnchorLine, nearLineTouchesH, nearLineTouchesV);
                     var computed = WordCaptureSize(anchorLineHeight);
                     bool expandW = sel.NoTextFound || TouchesHorizontalEdge(sel.Box, captureRegion.Value, clipMargin) || (offCursor && nearLineTouchesH);
                     bool expandH = sel.NoTextFound || TouchesVerticalEdge(sel.Box, captureRegion.Value, clipMargin) || (offCursor && nearLineTouchesV);
@@ -380,7 +385,8 @@ public class WordInteractionCoordinator : IInteractionCoordinator
             // 空间相关性校验：文档残留的旧选区远离光标时拒绝采纳，回退 OCR 指向用户正指的词
             if (!SelectedTextProbePolicy.IsSpatiallyRelevant(result.LineRects, result.UnionBox, cursor, wordMode: true))
             {
-                _logger.LogDebug("[Probe] Selection not near cursor, fall back to OCR");
+                if (_logger.IsEnabled(LogLevel.Debug))
+                    _logger.LogDebug("[Probe] Selection not near cursor, fall back to OCR");
                 return null;
             }
             return new SelectionResult(text, text, result.UnionBox, SelectionKind.Word, null, slot.Id);
@@ -404,10 +410,12 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         var targetLang = ContainsCjk(sel.Text ?? string.Empty) ? "en" : _settings.Value.TargetLanguage;
         var trans = await _translationRouter.TranslateWordAsync(sel.Text ?? "", targetLang, slot.Cts.Token).ConfigureAwait(false);
         if (IsStaleOrCanceled(slot)) return;
-        if (!skipHold)
+        if (!skipHold && !trans.FromCache && !trans.FromDictionary)
         {
             long elapsed = Environment.TickCount64 - overlayShownAt;
             int remaining = SelectionHoldMs - (int)elapsed;
+            // 分级 hold：缓存/词典命中已在上方短路为 0，在线翻译封顶 120ms（原 250ms，仅 debug 可选）
+            remaining = Math.Min(remaining, 120);
             if (remaining > 0)
             {
                 try
@@ -435,6 +443,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
     private void LogWordSelection(SelectionResult sel, PhysicalPoint cursor, uint dpiX, uint dpiY, int lineCount,
         PhysicalRect? captureRegion = null, string phase = "first")
     {
+        if (!_logger.IsEnabled(LogLevel.Debug)) return;
         // 诊断日志：记录选词框物理坐标 + DPI + 截图范围，定位"检测/选取位置不准"问题
         string capture = captureRegion.HasValue
             ? $"{captureRegion.Value.X},{captureRegion.Value.Y} {captureRegion.Value.Width}x{captureRegion.Value.Height}"
@@ -559,14 +568,18 @@ public class WordInteractionCoordinator : IInteractionCoordinator
         _selectionAutoHideCts?.Dispose();
         var cts = new CancellationTokenSource();
         _selectionAutoHideCts = cts;
-        _ = AutoHideOverlayAsync(slot, cts.Token);
+        // AutoHide 内部只 catch 取消；HideAll 等意外异常由这里观察，避免 UnobservedTaskException
+        _ = AutoHideOverlayAsync(slot, cts.Token).ContinueWith(t =>
+        {
+            try { _logger.LogDebug(t.Exception, "[WordCoord] Auto-hide faulted (non-fatal)"); } catch { }
+        }, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
     }
 
     private async Task AutoHideOverlayAsync(OperationSlot slot, CancellationToken token)
     {
         try
         {
-            await Task.Delay(SelectionAutoHideMs, token).ConfigureAwait(false);
+            await Task.Delay(SelectionOptions.SelectionAutoHideMs, token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -608,7 +621,8 @@ public class WordInteractionCoordinator : IInteractionCoordinator
             {
                 slot.State = s;
             }
-            _logger.LogDebug("State -> {S}", s);
+            if (_logger.IsEnabled(LogLevel.Debug))
+                _logger.LogDebug("State -> {S}", s);
         }
     }
 

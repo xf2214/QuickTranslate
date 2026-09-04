@@ -18,15 +18,20 @@ public class WpfWordPopupService : IWordPopupService
     private readonly IMonitorService _monitorService;
     private readonly IOptions<AppSettings> _appSettings;
     private readonly ITextToSpeechService? _textToSpeech;
+    private readonly ISelectionOverlayService? _overlayService;
     private readonly Dictionary<MonitorId, (WordPopupWindow window, uint dpiX, uint dpiY)> _windows = new();
 
-    public WpfWordPopupService(IDpiMapper dpiMapper, IMonitorService monitorService, IOptions<AppSettings> appSettings, ITextToSpeechService? textToSpeech = null)
+    public WpfWordPopupService(IDpiMapper dpiMapper, IMonitorService monitorService, IOptions<AppSettings> appSettings, ITextToSpeechService? textToSpeech = null, ISelectionOverlayService? overlayService = null)
     {
         _dpiMapper = dpiMapper;
         _monitorService = monitorService;
         _appSettings = appSettings;
         _textToSpeech = textToSpeech;
+        _overlayService = overlayService;
     }
+
+    /// <summary>弹窗退场即藏选区：关闭按钮/5s 超时/服务收起全经窗口 HideWithFade 触发。</summary>
+    private void OnWindowDismissed(object? sender, EventArgs e) => _overlayService?.HideAll();
 
     private static void RunOnUi(Action a)
     {
@@ -84,6 +89,7 @@ public class WpfWordPopupService : IWordPopupService
         if (needsRecreate || !_windows.TryGetValue(monitorId, out entry))
         {
             window = new WordPopupWindow();
+            window.Dismissed += OnWindowDismissed;
             _windows[monitorId] = (window, dpiX, dpiY);
         }
         else
@@ -94,11 +100,11 @@ public class WpfWordPopupService : IWordPopupService
 
         var monitors = _monitorService.EnumerateMonitors();
         var monitorInfo = monitors.FirstOrDefault(m => m.Id == monitorId)
-                         ?? _monitorService.TryGetPrimary()
-                         ?? new MonitorInfo(monitorId, string.Empty,
-                             new PhysicalRect(0, 0, 1920, 1080),
-                             new PhysicalRect(0, 0, 1920, 1080),
-                             dpiX, dpiY, true);
+                          ?? _monitorService.TryGetPrimary()
+                          ?? new MonitorInfo(monitorId, string.Empty,
+                              PhysicalRect.Fallback1080p,
+                              PhysicalRect.Fallback1080p,
+                              dpiX, dpiY, true);
 
         // 尺寸随内容自适应（区分 CJK/ASCII 字宽），替代旧固定 320x150：
         // 短译文不再有大片空白，长译文自动换行增高并受工作区钳制。
@@ -200,6 +206,7 @@ public class WpfWordPopupService : IWordPopupService
         if (needsRecreate || !_windows.TryGetValue(monitorId, out entry))
         {
             window = new WordPopupWindow();
+            window.Dismissed += OnWindowDismissed;
             _windows[monitorId] = (window, dpiX, dpiY);
         }
         else
@@ -210,11 +217,11 @@ public class WpfWordPopupService : IWordPopupService
 
         var monitors = _monitorService.EnumerateMonitors();
         var monitorInfo = monitors.FirstOrDefault(m => m.Id == monitorId)
-                         ?? _monitorService.TryGetPrimary()
-                         ?? new MonitorInfo(monitorId, string.Empty,
-                             new PhysicalRect(0, 0, 1920, 1080),
-                             new PhysicalRect(0, 0, 1920, 1080),
-                             dpiX, dpiY, true);
+                          ?? _monitorService.TryGetPrimary()
+                          ?? new MonitorInfo(monitorId, string.Empty,
+                              PhysicalRect.Fallback1080p,
+                              PhysicalRect.Fallback1080p,
+                              dpiX, dpiY, true);
 
         int popupPhysicalW = (int)Math.Round(320.0 * dpiX / 96.0);
         int popupPhysicalH = (int)Math.Round(120.0 * dpiY / 96.0);

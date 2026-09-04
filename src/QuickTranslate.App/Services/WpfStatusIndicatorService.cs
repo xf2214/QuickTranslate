@@ -42,8 +42,8 @@ public class WpfStatusIndicatorService : IStatusIndicatorService
             var monitor = monitors.FirstOrDefault(m => m.Id == monitorId)
                           ?? _monitorService.TryGetPrimary()
                           ?? new MonitorInfo(monitorId, string.Empty,
-                              new PhysicalRect(0, 0, 1920, 1080),
-                              new PhysicalRect(0, 0, 1920, 1080),
+                              PhysicalRect.Fallback1080p,
+                              PhysicalRect.Fallback1080p,
                               dpiX, dpiY, true);
             var work = monitor.WorkArea;
 

@@ -5,7 +5,6 @@ using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Geometry;
 using QuickTranslate.Core.Options;
 using QuickTranslate.App.Windows;
-using QuickTranslate.Platform.UnmanagedMethods;
 using QuickTranslate.Platform.Win32;
 using QuickTranslate.App.Coordination;
 
@@ -119,16 +118,8 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
         {
             entry.window.ApplyPhysicalLayout(physicalBox, dpiX, dpiY);
             _windows[monitorId] = (entry.window, dpiX, dpiY);
-
-            IntPtr hwnd = new WindowInteropHelper(entry.window).Handle;
-            if (hwnd != IntPtr.Zero)
-            {
-                User32.SetWindowPos(
-                    hwnd,
-                    User32.HWND_TOPMOST,
-                    0, 0, 0, 0,
-                    User32.SWP_NOMOVE | User32.SWP_NOSIZE | User32.SWP_NOACTIVATE);
-            }
+            // 注：拖动 tick 内不再重复 SetWindowPos(TOPMOST)——ApplyPhysicalLayout 已定位，
+            // 窗口自创建即顶置，活动拖拽期间不会被其他窗口盖住；省掉每 tick 一次原生 present。
         }
     }
 

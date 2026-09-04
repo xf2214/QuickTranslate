@@ -25,6 +25,8 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
     private DateTimeOffset? _blockDownTimestamp;
     private bool _holdStarted;
     private readonly object _holdLock = new();
+    private long _lastBlockTick;
+    private const int BlockDedupMs = 350;
     private bool _disposed;
 
     public event EventHandler<HotkeyEvent>? HotkeyFired;
@@ -135,7 +137,7 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
         try { _globalHotkeyService.Unregister(EscId); } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.UnregisterAll] Unregister EscId {Id} failed [ErrorCode=HOTKEY_UNREGISTER_FAIL]", EscId); }
         lock (_holdLock)
         {
-            try { _holdCts?.Cancel(); } catch { }
+            try { _holdCts?.Cancel(); } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.UnregisterAll] Hold CTS cancel failed [ErrorCode=HOTKEY_CANCEL_FAIL]"); }
             _holdCts?.Dispose();
             _holdCts = null;
             _blockDownTimestamp = null;
@@ -147,8 +149,8 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        try { _globalHotkeyService.HotkeyPressed -= OnGlobalHotkeyPressed; } catch { }
-        try { _globalHotkeyService.KeyStateChanged -= OnKeyStateChanged; } catch { }
+        try { _globalHotkeyService.HotkeyPressed -= OnGlobalHotkeyPressed; } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.Dispose] HotkeyPressed unsubscribe failed [ErrorCode=HOTKEY_UNSUBSCRIBE_FAIL]"); }
+        try { _globalHotkeyService.KeyStateChanged -= OnKeyStateChanged; } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.Dispose] KeyStateChanged unsubscribe failed [ErrorCode=HOTKEY_UNSUBSCRIBE_FAIL]"); }
         UnregisterAll();
         GC.SuppressFinalize(this);
     }
@@ -235,6 +237,21 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
         if (!eventType.HasValue)
             return;
 
+        // 去重护栏：Block 存在 WM_HOTKEY + 钩子双路径竞态（BeginInvoke vs Invoke），按一次可能在 <50ms 内发两条
+        // 这里在发射层做时间窗去重，保证一次按压只触发一次 Block 管线
+        if (eventType.Value == HotkeyEventType.Block)
+        {
+            lock (_holdLock)
+            {
+                if ((Environment.TickCount64 - _lastBlockTick) < BlockDedupMs)
+                {
+                    _logger.LogDebug("Block dedup suppressed duplicate within {Ms}ms (WM_HOTKEY path)", BlockDedupMs);
+                    return;
+                }
+                _lastBlockTick = Environment.TickCount64;
+            }
+        }
+
         var hotkeyEvent = new HotkeyEvent(eventType.Value, DateTimeOffset.Now);
         HotkeyFired?.Invoke(this, hotkeyEvent);
 
@@ -309,7 +326,11 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
                 BlockHoldStateChanged?.Invoke(this, holdArgs);
                 _logger.LogDebug("Block hold started after {Threshold}ms", HoldThresholdMs);
             }
-        });
+        }).ContinueWith(t =>
+        {
+            // Delay 取消已在内部处理；这里只兜订阅者回调等意外异常，避免 UnobservedTaskException
+            try { _logger.LogDebug(t.Exception, "[HotkeyBroker] Block hold fire faulted (non-fatal)"); } catch { }
+        }, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
     }
 
     private void HandleBlockUp(KeyStateChangedEventArgs e)
@@ -331,7 +352,7 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
             // keep _blockDownTimestamp and _holdStarted until after firing, but capture values
         }
 
-        try { ctsToCancel?.Cancel(); } catch { }
+        try { ctsToCancel?.Cancel(); } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.HandleBlockUp] Hold CTS cancel failed [ErrorCode=HOTKEY_CANCEL_FAIL]"); }
         ctsToCancel?.Dispose();
 
         if (wasHoldStarted)
@@ -348,6 +369,15 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
             }
             else
             {
+                lock (_holdLock)
+                {
+                    if ((Environment.TickCount64 - _lastBlockTick) < BlockDedupMs)
+                    {
+                        _logger.LogDebug("Block dedup suppressed duplicate within {Ms}ms (HOOK_TAP path)", BlockDedupMs);
+                        return;
+                    }
+                    _lastBlockTick = Environment.TickCount64;
+                }
                 var hotkeyEvent = new HotkeyEvent(HotkeyEventType.Block, DateTimeOffset.Now, duration, false);
                 HotkeyFired?.Invoke(this, hotkeyEvent);
                 _logger.LogDebug("Block tap fired duration {Duration}ms", duration.TotalMilliseconds);

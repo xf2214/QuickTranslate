@@ -53,6 +53,9 @@ public static class PopupTransition
         // 兜底：先清除旧动画并复位到可见终态，再启动新动画
         root.BeginAnimation(UIElement.OpacityProperty, null);
         root.Opacity = 1;
+        // 透明窗口 CPU 逐帧重绘：过渡期间缓存静态内容为位图，只合成变换，结束即清
+        // （流式文本在进场后到达，清缓存保证后续内容更新走正常渲染）
+        root.CacheMode = new BitmapCache();
 
         var group = new TransformGroup();
         var scale = new ScaleTransform(1, 1);
@@ -74,7 +77,11 @@ public static class PopupTransition
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
         };
-        grow.Completed += (_, _) => root.RenderTransform = null;
+        grow.Completed += (_, _) =>
+        {
+            root.RenderTransform = null;
+            root.CacheMode = null;
+        };
 
         scale.BeginAnimation(ScaleTransform.ScaleXProperty, grow);
         scale.BeginAnimation(ScaleTransform.ScaleYProperty, grow);
@@ -105,6 +112,8 @@ public static class PopupTransition
         group.Children.Add(translate);
         root.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
         root.RenderTransform = group;
+        // 同进场：退场期间缓存，完成后随复位一起清除
+        root.CacheMode = new BitmapCache();
 
         var fade = new DoubleAnimation(root.Opacity, 0.0, ExitDuration)
         {
@@ -137,6 +146,7 @@ public static class PopupTransition
             root.BeginAnimation(UIElement.OpacityProperty, null);
             root.Opacity = 1;
             root.RenderTransform = null;
+            root.CacheMode = null;
         };
 
         scale.BeginAnimation(ScaleTransform.ScaleXProperty, shrink);

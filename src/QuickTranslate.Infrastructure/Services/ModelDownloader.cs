@@ -65,6 +65,9 @@ public class ModelDownloader : IModelDownloader
 
     private static readonly IReadOnlyList<string> OptionalFiles = new[] { "cls.onnx" };
 
+    /// <summary>下载缓冲字节数（与 Stream.CopyTo 默认值一致，两处下载路径共用）。</summary>
+    private const int DownloadBufferSize = 81920;
+
     private readonly IAppDataProvider _appDataProvider;
     private readonly ILogger<ModelDownloader> _logger;
 
@@ -201,9 +204,9 @@ public class ModelDownloader : IModelDownloader
 
             var total = resp.Content.Headers.ContentLength;
             await using var contentStream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-            await using var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);
+            await using var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, DownloadBufferSize, true);
 
-            var buffer = new byte[81920];
+            var buffer = new byte[DownloadBufferSize];
             long read = 0;
             int n;
             while ((n = await contentStream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
@@ -253,8 +256,8 @@ public class ModelDownloader : IModelDownloader
             resp.EnsureSuccessStatusCode();
 
             await using var contentStream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-            await using var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);
-            var buffer = new byte[81920];
+            await using var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, DownloadBufferSize, true);
+            var buffer = new byte[DownloadBufferSize];
             int n;
             while ((n = await contentStream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
             {

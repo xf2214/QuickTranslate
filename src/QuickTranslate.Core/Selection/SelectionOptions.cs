@@ -72,6 +72,10 @@ public class SelectionOptions
 
     public static SelectionOptions Default { get; } = new();
 
+    // 选定框自动消失时长（毫秒）：Popup 出现后选定框无需常驻，超时自动收起，Esc 可提前关闭。
+    // Word/Block 双协调器共用同一值；保持 static 可写（非常量）：测试可通过反射调小以避免真实等待。
+    public static int SelectionAutoHideMs = 3000;
+
     public int ComputeEffectiveMax(int lineHeight)
     {
         return Math.Max(MaxAnchorDistanceBase, (int)Math.Round(lineHeight * MaxAnchorDistanceRowHeightFactor));
