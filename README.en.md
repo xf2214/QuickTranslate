@@ -20,7 +20,7 @@
 
 QuickTranslate's answer is a single step: **point at it, press a key.**
 
-![Word translation demo](assets/screenshots/word-mode-demo.jpg)
+![Word translation](assets/screenshots/word-demo.png)
 
 ---
 
@@ -39,32 +39,38 @@ QuickTranslate's answer is a single step: **point at it, press a key.**
 
 ### 🔤 Word mode — one point per unfamiliar word
 
-Hover over a word and press **Alt + 1**: local OCR recognizes it and a compact card pops up with IPA, part of speech, Chinese definition, and a copy button. Common words resolve from the local dictionary and caches — **zero network, millisecond latency** — so your reading rhythm is never broken.
+Hover over a word and press **Alt + 1**: local OCR recognizes it and a compact card pops up with IPA, part of speech, Chinese definition, and a copy button. Local-dictionary hits show a green "词典" (dictionary) badge — **zero network, millisecond latency** — so your reading rhythm is never broken.
 
-![Word mode](assets/screenshots/word-mode-demo.jpg)
+![Word mode: looking up "Transformer" in a paper](assets/screenshots/word-paper-demo.png)
 
 ### 📑 Block mode — whole paragraphs, streamed
 
-Place the cursor inside a paragraph and tap **Alt + 2**: the app automatically "grows" the full block and frames it, then shows a translation card below with **SSE-streamed output**, an OCR source preview for verification, plus one-click copy and read-aloud. The popup never steals focus and dismisses itself when you click away.
+Place the cursor inside a paragraph and tap **Alt + 2**: the app automatically "grows" the full block and frames it, then shows a translation card below. While the online model is working, a compact "Translating…" indicator appears, followed by **streamed output**:
 
-![Block mode](assets/screenshots/block-mode-demo.jpg)
+![Translating: streaming indicator](assets/screenshots/loading-demo.png)
+
+Once done, the card shows the **translation on top and the OCR source text below** for side-by-side checking, with one-click copy and click-outside-to-dismiss. The popup never steals focus:
+
+![Block translation result](assets/screenshots/block-mode-demo.png)
 
 ### ✋ Drag-select mode — when auto-detection guesses wrong
 
 If the automatic paragraph detection picks the wrong range, **hold Alt + 2 and drag downward**: the dashed selection expands line by line in real time — you choose exactly which lines to include, and releasing the mouse starts the translation. Drag past the initial capture area and the OCR region expands automatically, so long paragraphs translate in one go.
 
-![Drag-select mode](assets/screenshots/drag-select-demo.jpg)
-
 ### ⚙️ Settings — configure once, works forever
 
-Open Settings from the tray menu; four cards at a glance:
+Open Settings from the tray menu. The top status bar shows **live OCR engine availability, hotkey registration state, and the app version**:
 
-- **Translation engine**: any OpenAI-compatible endpoint (DeepSeek / Moonshot / local Ollama / one-api…). Fill in Base URL + Model + API Key — **applies instantly, no restart**
-- **Global hotkeys**: freely rebindable, with automatic conflict detection on save
-- **Misc**: launch at startup, click-outside-to-dismiss, debug logging
-- **System status**: live readiness badges for the OCR engine and API key
+![Settings: translation service](assets/screenshots/settings-engine.png)
 
-![Settings window](assets/screenshots/settings-demo.jpg)
+- **Translation service**: any OpenAI-compatible endpoint (DeepSeek / Zhipu / Moonshot / local Ollama…). Fill in the API URL + model name + key, with a one-click "Test connection" probe; the key is **DPAPI-encrypted and never written to disk in plaintext**
+- **Translation & display**: target language, three quality tiers (**Fast / Balanced / Best**), popup style (detailed / compact)
+
+![Settings: options & performance](assets/screenshots/settings-general.png)
+
+- **Options**: launch at startup, read-aloud, click-outside-to-dismiss, debug logging
+- **Performance**: **iGPU acceleration (AMD/Intel DirectML)** — OCR can run on the GPU for extra speed, with automatic CPU fallback, no manual switching needed
+- **Global hotkeys**: press "Record" and tap a new key combo to rebind; live availability status shown
 
 ---
 
@@ -121,7 +127,7 @@ Hotkey (Alt+1 / Alt+2 tap / hold-and-drag)
 |-------|-----------|
 | Language / runtime | C# / .NET 10 (`net10.0-windows`) |
 | UI | WPF + Win32 P/Invoke (unfocused popups, global hotkeys, hold detection) |
-| OCR | PP-OCRv6 + ONNX Runtime (CPU, session kept warm) |
+| OCR | PP-OCRv6 + ONNX Runtime (session kept warm; optional DirectML iGPU acceleration with CPU fallback) |
 | Cache | In-memory LRU (1000 entries) + SQLite L2 (SHA-256 indexed, WAL) |
 | Dictionary | ECDICT-lite (user overlay → packed high-frequency binary) |
 | Translation | `ITranslationProvider` abstraction: custom OpenAI SSE streaming / Qwen-MT |
@@ -182,4 +188,3 @@ From [docs/benchmark-results/](docs/benchmark-results/) (Mock OCR + offline tran
 
 - Code released under the [MIT License](LICENSE)
 - Third-party notices in [LICENSES.txt](LICENSES.txt): PP-OCRv6 model weights (Apache-2.0), ONNX Runtime (MIT), ECDICT dictionary, .NET Runtime, xUnit, etc.
-- README screenshots are illustrative renderings; the actual UI may differ slightly

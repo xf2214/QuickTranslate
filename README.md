@@ -23,7 +23,7 @@
 
 QuickTranslate 的解法只有一步：**鼠标指上去，按一下。**
 
-![单词翻译演示](assets/screenshots/word-mode-demo.jpg)
+![单词翻译](assets/screenshots/word-demo.png)
 
 ***
 
@@ -42,35 +42,41 @@ QuickTranslate 的解法只有一步：**鼠标指上去，按一下。**
 
 ### 🔤 单词模式 —— 读文献时的生词，指一下就够
 
-鼠标悬停在单词上按 **Alt + 1**，本地 OCR 识别后弹出小卡片：音标、词性、中文释义、复制按钮。常用词走本地词典与缓存，**零网络、毫秒级响应**，完全不打断阅读节奏。
+鼠标悬停在单词上按 **Alt + 1**，本地 OCR 识别后弹出小卡片：音标、词性、中文释义、复制按钮。命中本地词典时顶部显示绿色「词典」标签，**零网络、毫秒级响应**，完全不打断阅读节奏。
 
-![单词模式](assets/screenshots/word-mode-demo.jpg)
+![单词模式：论文中查 Transformer](assets/screenshots/word-paper-demo.png)
 
 ### 📑 文本块模式 —— 整段翻译，流式呈现
 
-把鼠标放在段落里按 **Alt + 2**，程序自动把整段「生长」出来并框选，下方弹出译文卡片：**SSE 流式逐段输出**、顶部原文预览可核对、支持一键复制与朗读。弹窗不抢焦点，看完点别处自动消失。
+把鼠标放在段落里按 **Alt + 2**，程序自动把整段「生长」出来并框选，下方弹出译文卡片。在线翻译时先显示「正在翻译…」加载提示，随后**译文流式逐段输出**：
 
-![文本块模式](assets/screenshots/block-mode-demo.jpg)
+![翻译中：流式输出加载指示](assets/screenshots/loading-demo.png)
+
+完成后卡片内**上方译文、下方原文**对照展示，可一键复制、点击外部自动关闭，弹窗全程不抢焦点：
+
+![文本块翻译结果](assets/screenshots/block-mode-demo.png)
 
 ### ✋ 拖选模式 —— 自动选不准？范围自己定
 
 自动段落识别不合心意时，**长按 Alt + 2 向下拖**：虚线选区随鼠标逐行实时扩展，想选几行选几行，松开即翻译。超出初始截屏范围会自动扩大识别区域，长段落也能一次翻完。
 
-![拖选模式](assets/screenshots/drag-select-demo.jpg)
-
 ### ⚙️ 设置窗口 —— 一次配置，永久生效
 
-托盘右键打开设置，四张卡片一目了然：
+托盘右键打开设置。顶部状态栏实时显示 **OCR 引擎可用性、热键注册状态、程序版本**：
 
-- **翻译引擎**：任意 OpenAI 兼容端点（DeepSeek / Moonshot / 本地 Ollama / one-api…），填 Base URL + Model + Key，**保存即生效，无需重启**
+![设置：翻译服务](assets/screenshots/settings-engine.png)
 
-- **全局热键**：可自由改键，保存前自动检测冲突
+- **翻译服务**：任意 OpenAI 兼容端点（DeepSeek / 智谱 / Moonshot / 本地 Ollama…），填 API 地址 + 模型名 + Key，带「测试连接」一键验证；Key 经 **DPAPI 加密存储，绝不明文落盘**
 
-- **其他**：开机自启、点击外部关弹窗、Debug 日志
+- **翻译与显示**：目标语言、翻译质量三档（**Fast 速度优先 / Balanced 均衡 / Best 最佳质量**）、弹窗显示样式（详细 / 简洁）
 
-- **系统状态**：OCR 引擎与 API Key 就绪状态实时可见
+![设置：选项与性能](assets/screenshots/settings-general.png)
 
-![设置窗口](assets/screenshots/settings-demo.jpg)
+- **选项**：开机启动、启用朗读、点击外部自动关闭弹窗、Debug 日志
+
+- **性能**：**核显加速（AMD/Intel DirectML）**——OCR 可用 GPU 推理提速，失败自动回退 CPU，无需手动切换
+
+- **全局热键**：点「录制」直接按新组合即可改键，实时显示可用状态
 
 ***
 
@@ -79,7 +85,7 @@ QuickTranslate 的解法只有一步：**鼠标指上去，按一下。**
 |     <br />    | <br />                                        |
 | :-----------: | --------------------------------------------- |
 |    ⚡ **快**    | 按键到出框 P50 ≈ 110ms；多级缓存命中时零网络请求                |
-| 🧠 **本地 OCR** | PP-OCRv6 全链路在本机推理，离线也能识别                      |
+| 🧠 **本地 OCR** | PP-OCRv6 全链路在本机推理，离线也能识别；可选核显加速（DirectML）     |
 |   🔒 **真隐私**  | 截图只在内存、用完即毁；只上传识别出的文字；Key 用 Windows DPAPI 加密  |
 |  🧩 **模型自由**  | 不被任何厂商绑定，OpenAI 兼容端点随便换                       |
 |   🪶 **轻量**   | 无主窗口托盘常驻，后台 \~25MB 内存、CPU ≈ 0                 |
@@ -123,17 +129,17 @@ dotnet run --project src/QuickTranslate.App
 
 ### 技术栈
 
-| 层        | 技术                                                    |
-| -------- | ----------------------------------------------------- |
-| 语言 / 运行时 | C# / .NET 10 (`net10.0-windows`)                      |
-| UI       | WPF + Win32 P/Invoke（无焦点弹窗、全局热键、长按检测）                 |
-| OCR      | PP-OCRv6 + ONNX Runtime（CPU，Session 常驻预热）             |
-| 缓存       | 内存 LRU (1000 项) + SQLite L2（SHA-256 索引，WAL）           |
-| 词典       | ECDICT-lite（用户自定义 overlay → packed 高频词二进制）            |
-| 翻译       | `ITranslationProvider` 抽象：自定义 OpenAI SSE 流式 / Qwen-MT |
-| 密钥       | Windows DPAPI CurrentUser + entropy.dat               |
-| 日志       | Serilog 分级过滤（默认不记录原文）                                 |
-| 测试       | xUnit，约 580+ 用例；GitHub Actions CI（Windows 全量测试）       |
+| 层        | 技术                                                                |
+| -------- | ----------------------------------------------------------------- |
+| 语言 / 运行时 | C# / .NET 10 (`net10.0-windows`)                                  |
+| UI       | WPF + Win32 P/Invoke（无焦点弹窗、全局热键、长按检测）                             |
+| OCR      | PP-OCRv6 + ONNX Runtime（Session 常驻预热；可选 DirectML 核显加速，失败自动回退 CPU） |
+| 缓存       | 内存 LRU (1000 项) + SQLite L2（SHA-256 索引，WAL）                       |
+| 词典       | ECDICT-lite（用户自定义 overlay → packed 高频词二进制）                        |
+| 翻译       | `ITranslationProvider` 抽象：自定义 OpenAI SSE 流式 / Qwen-MT             |
+| 密钥       | Windows DPAPI CurrentUser + entropy.dat                           |
+| 日志       | Serilog 分级过滤（默认不记录原文）                                             |
+| 测试       | xUnit，约 580+ 用例；GitHub Actions CI（Windows 全量测试）                   |
 
 ### 解决方案结构
 
@@ -196,6 +202,4 @@ dotnet run --project src/QuickTranslate.App
 - 本仓库代码按 [MIT License](LICENSE) 开源
 
 - 第三方组件许可见 [LICENSES.txt](LICENSES.txt)：PP-OCRv6 模型权重 (Apache-2.0)、ONNX Runtime (MIT)、ECDICT 词典、.NET Runtime、xUnit 等
-
-- README 演示图为产品效果示意，实际界面以运行为准
 
