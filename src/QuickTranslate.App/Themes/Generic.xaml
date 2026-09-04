@@ -33,6 +33,23 @@
     <SolidColorBrush x:Key="AppleSuccessGreen" Color="#34C759"/>
     <SolidColorBrush x:Key="AppleDangerRed" Color="#FF3B30"/>
 
+    <!-- ==================== Settings / Card 共享设计令牌（由 SettingsWindow 局部提升，供 StartupSplashWindow 等复用） ==================== -->
+    <SolidColorBrush x:Key="BgAccent" Color="#F5F5F7"/>
+    <SolidColorBrush x:Key="CardBg" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="CardBorder" Color="#E8E8ED"/>
+    <SolidColorBrush x:Key="TextPrimary" Color="#1D1D1F"/>
+    <SolidColorBrush x:Key="TextSecondary" Color="#6E6E73"/>
+    <SolidColorBrush x:Key="TextTertiary" Color="#86868B"/>
+    <SolidColorBrush x:Key="Brand600" Color="#007AFF"/>
+    <SolidColorBrush x:Key="Brand700" Color="#0066D6"/>
+    <SolidColorBrush x:Key="Brand50" Color="#EAF3FF"/>
+    <SolidColorBrush x:Key="Success" Color="#1F9D55"/>
+    <SolidColorBrush x:Key="SuccessBg" Color="#EAF9EF"/>
+    <SolidColorBrush x:Key="Warning" Color="#D97706"/>
+    <SolidColorBrush x:Key="WarningBg" Color="#FFF8EB"/>
+    <SolidColorBrush x:Key="Danger" Color="#FF3B30"/>
+    <SolidColorBrush x:Key="DangerBg" Color="#FFEBEA"/>
+
     <!-- 弹窗操作按钮（复制/朗读）：macOS 胶囊按钮，无边框、全圆角、半透明黑底；
          hover/press 背景以 120ms 颜色渐变过渡，避免硬切换 -->
     <Style x:Key="PopupActionButton" TargetType="Button">

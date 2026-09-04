@@ -379,6 +379,53 @@ public class RealOcrRecognitionTests
         }
     }
 
+    /// <summary>
+    /// 高 DPI 性能诊断：同一逻辑内容在 96dpi 与 200% 物理尺度下各阶段耗时对比。
+    /// det 面积随降采样比下限放大（性能主损失源），rec 输入宽度反而减半（变快）。
+    /// 输出供 PreprocessDet 降采样比调优（正确性 vs det 耗时）参考。
+    /// </summary>
+    [Fact]
+    public async Task RecognizeAsync_HighDpi200_PerfDiagnostics()
+    {
+        if (!ModelsPresent)
+        {
+            _out.WriteLine($"SKIP: models not present under {ModelsDir}");
+            return;
+        }
+
+        var lines = new[]
+        {
+            "The quick brown fox jumps over the lazy dog near the river bank today,",
+            "and the dog barks loudly at the fox every single morning while the birds",
+            "sing sweetly in the tall green trees beside the quiet flowing river stream"
+        };
+
+        using var engine = CreateEngine();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        await engine.WarmUpAsync(cts.Token);
+
+        // 每轮用独立帧实例（det/rec 缓存按 Bitmap 引用判断，同实例第二轮会全命中返回 0 耗时）
+        using var warm96 = RenderParagraphFrame(lines, 1.0, fontPx: 12, lineGapPx: 4, targetW: 1200, targetH: 720);
+        _ = await engine.RecognizeAsync(warm96, cts.Token);
+        using var frame96 = RenderParagraphFrame(lines, 1.0, fontPx: 12, lineGapPx: 4, targetW: 1200, targetH: 720);
+        var r96 = await engine.RecognizeAsync(frame96, cts.Token);
+
+        using var warm200 = RenderParagraphFrame(lines, 2.0, fontPx: 12, lineGapPx: 4, targetW: 2400, targetH: 1440);
+        _ = await engine.RecognizeAsync(warm200, cts.Token);
+        using var frame200 = RenderParagraphFrame(lines, 2.0, fontPx: 12, lineGapPx: 4, targetW: 2400, targetH: 1440);
+        var r200 = await engine.RecognizeAsync(frame200, cts.Token);
+
+        _out.WriteLine($"[96dpi] frame=1200x720 det={r96.Timings.Detector.TotalMilliseconds:F0}ms " +
+            $"cls={r96.Timings.Classifier.TotalMilliseconds:F0}ms rec={r96.Timings.Recognizer.TotalMilliseconds:F0}ms " +
+            $"pre={r96.Timings.Preprocess.TotalMilliseconds:F0}ms post={r96.Timings.Postprocess.TotalMilliseconds:F0}ms lines={r96.LineCount}");
+        _out.WriteLine($"[200%] frame=2400x1440 det={r200.Timings.Detector.TotalMilliseconds:F0}ms " +
+            $"cls={r200.Timings.Classifier.TotalMilliseconds:F0}ms rec={r200.Timings.Recognizer.TotalMilliseconds:F0}ms " +
+            $"pre={r200.Timings.Preprocess.TotalMilliseconds:F0}ms post={r200.Timings.Postprocess.TotalMilliseconds:F0}ms lines={r200.LineCount}");
+
+        Assert.Equal(3, r96.LineCount);
+        Assert.Equal(3, r200.LineCount);
+    }
+
     [Fact]
     public async Task RecognizeAsync_FocusBand_OnlyBandedLine_AndDetCacheHitsOnSameCrop()
     {
@@ -414,12 +461,12 @@ public class RealOcrRecognitionTests
         Assert.Contains("gamma delta", text2, StringComparison.OrdinalIgnoreCase);
 
         // 紧接重复同一下半帧带：det 缓存单槽（r2 已覆盖 r1 的槽），
-        // 本次与 r2 裁剪区一致 → 缓存命中，det 推理被跳过（耗时≈0）
+        // 本次与 r2 裁剪区一致 → 缓存命中，det 推理被跳过。
+        // 用 LastDetCacheHit 确定性断言（耗时比较在并行测试负载下会偶发翻转）
         var r2b = await engine.RecognizeAsync(frame, bottomBand, cts.Token);
-        _out.WriteLine($"BottomBand again: det={r2b.Timings.Detector.TotalMilliseconds:F0}ms");
+        _out.WriteLine($"BottomBand again: detCacheHit={engine.LastDetCacheHit} det={r2b.Timings.Detector.TotalMilliseconds:F0}ms");
         Assert.Equal(1, r2b.LineCount);
-        Assert.True(r2b.Timings.Detector < r2.Timings.Detector,
-            "det cache should hit on the immediately preceding identical crop (detector skipped)");
+        Assert.True(engine.LastDetCacheHit, "det cache should hit on the immediately preceding identical crop");
 
         // 回到上半帧带：单槽缓存已被 r2 占用（历史缺陷暴露：旧断言依赖 r1 槽仍在 +
         // det 耗时偶然波动，r3 从未真正命中缓存）。此处验证重跑结果与 r1 一致
@@ -462,13 +509,12 @@ public class RealOcrRecognitionTests
         Assert.Contains("alpha beta", text2, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("gamma delta", text2, StringComparison.OrdinalIgnoreCase);
 
-        // 再次同帧重识：两行全部命中缓存 → rec 几乎零耗时，词框/文本与首识一致
+        // 再次同帧重识：两行全部命中缓存 → rec 推理被跳过，词框/文本与首识一致。
+        // recHits==2 已是缓存命中的确定性断言（耗时比较在并行负载下偶发翻转，弃用）
         var r3 = await engine.RecognizeAsync(frame, null, cts.Token);
         _out.WriteLine($"Again: recHits={engine.LastRecCacheHits}, rec={r3.Timings.Recognizer.TotalMilliseconds:F0}ms");
         Assert.Equal(2, r3.LineCount);
         Assert.Equal(2, engine.LastRecCacheHits);
-        Assert.True(r3.Timings.Recognizer < r2.Timings.Recognizer,
-            "fully cached re-recognition should cost less recognizer time");
         var text3 = string.Join(" ", r3.Lines.Select(l => l.Text));
         Assert.Equal(text2, text3);
         Assert.All(r3.Lines, l => Assert.True(l.Words.Count > 0, "cached lines must carry word boxes"));

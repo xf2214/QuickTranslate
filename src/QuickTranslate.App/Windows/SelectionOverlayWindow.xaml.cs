@@ -75,8 +75,8 @@ public partial class SelectionOverlayWindow : Window
 
     private void BeginScanEntryAnimation()
     {
-        // 与预览框同样的安全策略：窗口 Opacity 先兜底为 1，只对元素做 100ms 淡入，
-        // 并加 200ms 保护定时器强制复位到可见终态，避免动画未推进导致隐形。
+        // 零风险优化：窗口 Opacity 先兜底为 1，只对元素做 100ms 淡入，
+        // 保护定时器从 200ms 收紧到 100ms（首帧立即可见 + 兜底复位保留）。
         this.Opacity = 1;
         ScanPanel.BeginAnimation(UIElement.OpacityProperty, null);
         ScanPanel.Opacity = 1;
@@ -88,7 +88,7 @@ public partial class SelectionOverlayWindow : Window
                 EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
             });
 
-        var guard = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        var guard = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         guard.Tick += (_, _) =>
         {
             guard.Stop();
@@ -112,7 +112,7 @@ public partial class SelectionOverlayWindow : Window
         var sweep = new DoubleAnimation(
             -lineWidth,
             regionWidth,
-            TimeSpan.FromMilliseconds(700))
+            TimeSpan.FromMilliseconds(300))
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut }
         };
@@ -120,7 +120,10 @@ public partial class SelectionOverlayWindow : Window
         {
             ScanTranslate.BeginAnimation(TranslateTransform.XProperty, null);
             ScanTranslate.X = regionWidth;
+            ScanLine.CacheMode = null;
         };
+        // 扫描线光栅静态：缓存后位移只走合成，300ms 内免渐变重绘；结束即清，保证换尺寸下次重栅
+        ScanLine.CacheMode = new BitmapCache();
         ScanTranslate.BeginAnimation(TranslateTransform.XProperty, sweep);
     }
 

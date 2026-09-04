@@ -118,6 +118,7 @@ public partial class SettingsWindow : Window
         CloseOutsideBox.IsChecked = _appSettings.CloseOnOutsideClick;
         DebugLoggingBox.IsChecked = _appSettings.DebugLogging;
         EnableReadAloudBox.IsChecked = _appSettings.EnableTextToSpeech;
+        HardwareAccelerationCheckBox.IsChecked = _appSettings.UseHardwareAcceleration;
         var displayStyle = string.IsNullOrWhiteSpace(_appSettings.PopupDisplayStyle) ? "detailed" : _appSettings.PopupDisplayStyle;
         SelectComboBoxItemByTag(PopupDisplayStyleBox, displayStyle);
 
@@ -320,6 +321,7 @@ public partial class SettingsWindow : Window
         CloseOutsideBox.IsChecked = defaults.CloseOnOutsideClick;
         DebugLoggingBox.IsChecked = defaults.DebugLogging;
         EnableReadAloudBox.IsChecked = defaults.EnableTextToSpeech;
+        HardwareAccelerationCheckBox.IsChecked = defaults.UseHardwareAcceleration;
         SelectComboBoxItemByTag(PopupDisplayStyleBox, defaults.PopupDisplayStyle);
 
         UpdateHotkeyStatusPreview();
@@ -383,12 +385,15 @@ public partial class SettingsWindow : Window
         ToastBorder.Opacity = 0;
     }
 
-    private void OnSaveClicked(object sender, RoutedEventArgs e)
+    private async void OnSaveClicked(object sender, RoutedEventArgs e)
     {
         HideError();
 
         var wordHotkey = WordHotkeyRecorder.Hotkey;
         var blockHotkey = BlockHotkeyRecorder.Hotkey;
+        bool oldHardware = _appSettings.UseHardwareAcceleration;
+        bool newHardware = HardwareAccelerationCheckBox.IsChecked == true;
+        bool hardwareChanged = oldHardware != newHardware;
 
         var validation = SettingsValidator.Validate(wordHotkey, blockHotkey, _hotkeyBroker);
         if (!validation.IsSuccess)
@@ -444,6 +449,8 @@ public partial class SettingsWindow : Window
                 // 调试模式由托盘菜单控制，保存设置时保留当前值
                 DebugOverlayMode = _appSettings.DebugOverlayMode,
                 EnableTextToSpeech = EnableReadAloudBox.IsChecked == true,
+                EnableSelectedTextProbe = _appSettings.EnableSelectedTextProbe,
+                UseHardwareAcceleration = newHardware,
                 TranslationProvider = providerKind,
                 CustomLlmBaseUrl = CustomLlmBaseUrlBox.Text.Trim(),
                 CustomLlmModel = CustomLlmModelBox.Text.Trim(),
@@ -451,7 +458,7 @@ public partial class SettingsWindow : Window
                 ResolvedApiKey = _settingsManager.GetApiKey()
             };
 
-            _settingsManager.SaveAsync(newSettings).GetAwaiter().GetResult();
+            await _settingsManager.SaveAsync(newSettings).ConfigureAwait(true);
 
             // 就地更新共享的 IOptions<AppSettings>.Value 实例（协调器/弹窗服务持有同一实例），
             // 使目标语言、热键等改动无需重启即可被运行中的协调器读到。
@@ -463,6 +470,8 @@ public partial class SettingsWindow : Window
             _appSettings.CloseOnOutsideClick = newSettings.CloseOnOutsideClick;
             _appSettings.DebugLogging = newSettings.DebugLogging;
             _appSettings.EnableTextToSpeech = newSettings.EnableTextToSpeech;
+            _appSettings.EnableSelectedTextProbe = newSettings.EnableSelectedTextProbe;
+            _appSettings.UseHardwareAcceleration = newSettings.UseHardwareAcceleration;
             _appSettings.TranslationProvider = newSettings.TranslationProvider;
             _appSettings.CustomLlmBaseUrl = newSettings.CustomLlmBaseUrl;
             _appSettings.CustomLlmModel = newSettings.CustomLlmModel;
@@ -480,9 +489,52 @@ public partial class SettingsWindow : Window
             UpdateApiKeyBadge(!string.IsNullOrEmpty(_settingsManager.GetApiKey()));
             RefreshSystemStatus();
 
+            // 核显加速状态变化：尝试重建 OCR Session，下一次 OCR 生效；失败则提示重启生效
+            string baseToast = "✔ 保存成功！设置已生效，可关闭窗口。";
+            if (hardwareChanged)
+            {
+                string hwToastSuffix = newHardware
+                    ? " 核显加速已开启，下一次 OCR 将尝试 DirectML（失败自动回退 CPU）。"
+                    : " 核显加速已关闭，已切回 CPU。";
+                // 优先尝试运行时重建
+                bool rebuilt = false;
+                if (_ocrEngine is QuickTranslate.Infrastructure.Ocr.PaddleOcrV6Engine paddle)
+                {
+                    try
+                    {
+                        await paddle.RebuildSessionsIfNeededAsync().ConfigureAwait(true);
+                        rebuilt = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"RebuildSessionsIfNeededAsync failed: {ex.Message}");
+                    }
+                }
+
+                if (rebuilt)
+                    ShowToast(baseToast + hwToastSuffix + " 已重建 OCR 引擎。");
+                else if (_ocrEngine is QuickTranslate.Infrastructure.Ocr.PaddleOcrV6Engine)
+                    ShowToast(baseToast + hwToastSuffix + " 重建中，下一次 OCR 生效。");
+                else
+                    ShowToast(baseToast + hwToastSuffix + " 重启后生效。");
+
+                SaveButton.IsEnabled = false;
+                var hwTimer = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromMilliseconds(600)
+                };
+                hwTimer.Tick += (s, _) =>
+                {
+                    SaveButton.IsEnabled = true;
+                    hwTimer.Stop();
+                };
+                hwTimer.Start();
+                return;
+            }
+
             // Toast 提示，不立即关闭窗口
             SaveButton.IsEnabled = false;
-            ShowToast("✔ 保存成功！设置已生效，可关闭窗口。");
+            ShowToast(baseToast);
 
             // 恢复按钮
             var dispTimer = new System.Windows.Threading.DispatcherTimer

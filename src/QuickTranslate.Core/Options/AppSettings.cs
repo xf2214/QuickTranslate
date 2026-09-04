@@ -39,6 +39,8 @@ public class AppSettings
     public TranslationQuality TranslationQuality { get; set; } = TranslationQuality.Fast;
     public bool StartWithWindows { get; set; } = false;
     public bool CloseOnOutsideClick { get; set; } = true;
+    /// <summary>核显加速：开启后尝试使用 AMD/Intel 核显 DirectML 加速 OCR 推理，关闭则强制 CPU。</summary>
+    public bool UseHardwareAcceleration { get; set; } = false;
     public bool DebugLogging { get; set; } = false;
 
     /// <summary>调试模式：开启后选中区域以实线框显示（便于排查选词/OCR 定位），关闭时显示扫描式动画。</summary>
@@ -75,4 +77,29 @@ public class AppSettings
     /// <summary>弹窗显示样式：detailed 详细 / compact 简洁；持久化到 settings.json，随弹窗每次 Show 读取。</summary>
     // WHY：详细模式展示元信息彩点与文字按钮，简洁模式隐藏元信息行并用图标按钮以节省纵向空间。
     public string PopupDisplayStyle { get; set; } = "detailed";
+
+    /// <summary>
+    /// 把落盘加载值的全部字段复制到当前实例（原地 mutation，保持 IOptions 引用同一性）。
+    /// 新增持久化字段只改这里：调用方（HostedService 补丁 / IConfigureOptions）不再各自手写赋值，避免漏同步。
+    /// </summary>
+    public void ApplyFrom(AppSettings source)
+    {
+        WordHotkey = source.WordHotkey;
+        BlockHotkey = source.BlockHotkey;
+        TargetLanguage = source.TargetLanguage;
+        TranslationQuality = source.TranslationQuality;
+        StartWithWindows = source.StartWithWindows;
+        CloseOnOutsideClick = source.CloseOnOutsideClick;
+        UseHardwareAcceleration = source.UseHardwareAcceleration;
+        DebugLogging = source.DebugLogging;
+        DebugOverlayMode = source.DebugOverlayMode;
+        EnableTextToSpeech = source.EnableTextToSpeech;
+        EnableSelectedTextProbe = source.EnableSelectedTextProbe;
+        TranslationProvider = source.TranslationProvider;
+        CustomLlmBaseUrl = source.CustomLlmBaseUrl;
+        CustomLlmModel = source.CustomLlmModel;
+        CustomLlmMaxContextLines = source.CustomLlmMaxContextLines;
+        PopupDisplayStyle = source.PopupDisplayStyle;
+        ResolvedApiKey = source.ResolvedApiKey;
+    }
 }

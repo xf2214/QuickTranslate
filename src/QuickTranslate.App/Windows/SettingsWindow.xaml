@@ -1155,7 +1155,37 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- S3: 全局热键 -->
+                        <!-- S3: 性能加速 -->
+                        <Border Style="{StaticResource SectionCard}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource SectionTitleRow}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Border Grid.Column="0" Style="{StaticResource SectionIcon}" Background="#FFF4E5">
+                                        <TextBlock Text="&#xE9F3;" FontFamily="Segoe Fluent Icons" FontSize="13" Foreground="#FF9500" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <TextBlock Grid.Column="1"
+                                               Text="性能"
+                                               FontSize="14"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextPrimary}"
+                                               VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <CheckBox x:Name="HardwareAccelerationCheckBox"
+                                          Content="核显加速 (AMD/Intel DirectML)"
+                                          Style="{StaticResource CompactCheckBox}"
+                                          ToolTip="AMD / Intel 核显通用（DML device_id=0）。开启后 OCR 将尝试使用核显加速，失败自动回退 CPU；关闭则强制 CPU 推理。"/>
+                                <TextBlock Text="开启后 OCR 将尝试使用核显加速，关闭则强制 CPU；需要重启或下一次 OCR 生效。失败自动回退 CPU，无需手动切换。"
+                                           Style="{StaticResource SettingHint}"
+                                           Margin="26 0 0 2"
+                                           TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- S4: 全局热键 -->
                         <Border Style="{StaticResource SectionCard}" Margin="0 0 0 0">
                             <StackPanel>
                                 <Grid Style="{StaticResource SectionTitleRow}">

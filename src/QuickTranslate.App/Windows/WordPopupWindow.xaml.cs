@@ -270,7 +270,15 @@ public partial class WordPopupWindow : Window, IFadeOutHideable
     }
 
     /// <summary>带淡出退场的隐藏（自动隐藏/服务收起链路统一入口）。</summary>
-    public void HideWithFade() => PopupTransition.PlayExit(this, RootBorder);
+    public void HideWithFade()
+    {
+        // 弹窗消失即联动藏选区：Dismiss/超时/服务收起全走这里，选区不等 3s 自动隐藏
+        Dismissed?.Invoke(this, EventArgs.Empty);
+        PopupTransition.PlayExit(this, RootBorder);
+    }
+
+    /// <summary>弹窗开始退场（关闭按钮/超时/服务收起）：订阅方联动隐藏选区框。</summary>
+    public event EventHandler? Dismissed;
 
     /// <summary>窗口已可见时被复用（新译文顶替）：取消进行中的退场动画并复播进场。</summary>
     public void ReplayEntry() => PopupTransition.PlayEntry(RootBorder);

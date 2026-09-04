@@ -37,8 +37,8 @@ public class WordCapturePreviewTests
 
     private static void SetAutoHideMs(int ms)
     {
-        var field = typeof(WordInteractionCoordinator).GetField("SelectionAutoHideMs",
-            BindingFlags.Static | BindingFlags.NonPublic);
+        var field = typeof(SelectionOptions).GetField("SelectionAutoHideMs",
+            BindingFlags.Static | BindingFlags.Public);
         Assert.NotNull(field);
         field!.SetValue(null, ms);
     }

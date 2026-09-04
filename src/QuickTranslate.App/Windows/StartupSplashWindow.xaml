@@ -1,0 +1,256 @@
+<Window x:Class="QuickTranslate.App.Windows.StartupSplashWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:QuickTranslate.App.ViewModels"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen"
+        Width="430" Height="560"
+        Title="QuickTranslate 启动中"
+        FontFamily="Segoe UI, Microsoft YaHei UI, PingFang SC, sans-serif"
+        SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/QuickTranslate.App;component/Themes/Generic.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- 进度条 Apple 胶囊样式：高 4 圆角 2 -->
+            <Style x:Key="SplashProgressBar" TargetType="ProgressBar">
+                <Setter Property="Height" Value="4"/>
+                <Setter Property="Background" Value="{StaticResource BgAccent}"/>
+                <Setter Property="Foreground" Value="{StaticResource Brand600}"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ProgressBar">
+                            <Border CornerRadius="2" Background="{TemplateBinding Background}" SnapsToDevicePixels="True">
+                                <Border x:Name="PART_Track" CornerRadius="2" ClipToBounds="True">
+                                    <Rectangle x:Name="PART_Indicator" HorizontalAlignment="Left" RadiusX="2" RadiusY="2"
+                                               Fill="{TemplateBinding Foreground}"/>
+                                </Border>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- 立即进入主按钮：Apple 蓝胶囊 -->
+            <Style x:Key="SplashPrimaryButton" TargetType="Button">
+                <Setter Property="Background" Value="{StaticResource Brand600}"/>
+                <Setter Property="Foreground" Value="White"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="FontSize" Value="13"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Padding" Value="18 7"/>
+                <Setter Property="SnapsToDevicePixels" Value="True"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="B" CornerRadius="10"
+                                    Background="{TemplateBinding Background}"
+                                    Padding="{TemplateBinding Padding}"
+                                    SnapsToDevicePixels="True">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="B" Property="Background" Value="{StaticResource Brand700}"/>
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="B" Property="Background" Value="#0050B8"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter TargetName="B" Property="Background" Value="#A9C7FF"/>
+                                    <Setter Property="Foreground" Value="#F0F0F0"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <Border x:Name="RootBorder"
+            CornerRadius="12"
+            Background="#F8FFFFFF"
+            BorderBrush="#1A000000"
+            BorderThickness="1"
+            SnapsToDevicePixels="True">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="18" ShadowDepth="0" Opacity="0.16" Color="Black"/>
+        </Border.Effect>
+
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Header：42x42 图标容器 + 标题 + 副标题 -->
+            <Grid Grid.Row="0" Margin="22 20 22 14">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Border Width="42" Height="42" CornerRadius="10"
+                        Background="{StaticResource Brand50}"
+                        BorderBrush="#1A007AFF" BorderThickness="1"
+                        VerticalAlignment="Center" Margin="0 0 12 0">
+                    <TextBlock Text="QT" FontSize="16" FontWeight="Bold"
+                               Foreground="{StaticResource Brand600}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="QuickTranslate" FontSize="17" FontWeight="Bold"
+                               Foreground="{StaticResource TextPrimary}"/>
+                    <TextBlock Text="正在为您准备就绪…" FontSize="12"
+                               Foreground="{StaticResource TextSecondary}" Margin="0 2 0 0"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- 分割线 -->
+            <Border Grid.Row="1" Height="1" Background="{StaticResource AppleHairline}" Margin="22 0"/>
+
+            <!-- 检查卡片列表（7 项）-->
+            <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Disabled" Margin="0 10 0 0"
+                          Focusable="False" CanContentScroll="False">
+                <ItemsControl x:Name="CheckList" ItemsSource="{Binding Items}" Margin="14 0 14 0">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="{x:Type vm:StartupCheckItem}">
+                            <Border CornerRadius="10" Background="{StaticResource CardBg}"
+                                    BorderBrush="{StaticResource CardBorder}" BorderThickness="1"
+                                    Padding="11 9" Margin="0 0 0 7"
+                                    SnapsToDevicePixels="True">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- 左：状态图标容器 28x28 -->
+                                    <Border x:Name="IconBox" Grid.Column="0" Width="28" Height="28" CornerRadius="14"
+                                            Background="#F5F5F7" VerticalAlignment="Center" Margin="0 0 10 0">
+                                        <TextBlock x:Name="IconGlyph" Text="{Binding IconGlyph}"
+                                                   FontSize="12" FontWeight="Bold"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   Foreground="{StaticResource TextTertiary}"/>
+                                    </Border>
+
+                                    <!-- 中：标题 + 详情 -->
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Title}" FontSize="12.5" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource TextPrimary}"/>
+                                        <TextBlock Text="{Binding Detail}" FontSize="11"
+                                                   Foreground="{StaticResource TextSecondary}"
+                                                   Margin="0 2 0 0" TextWrapping="Wrap" TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+
+                                    <!-- 右：状态文本 -->
+                                    <Border Grid.Column="2" VerticalAlignment="Center" Margin="8 0 0 0"
+                                            CornerRadius="8" Padding="8 3">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="#F5F5F7"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Status}" Value="Checking">
+                                                        <Setter Property="Background" Value="{StaticResource Brand50}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Status}" Value="Success">
+                                                        <Setter Property="Background" Value="{StaticResource SuccessBg}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Status}" Value="Warning">
+                                                        <Setter Property="Background" Value="{StaticResource WarningBg}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Status}" Value="Failed">
+                                                        <Setter Property="Background" Value="{StaticResource DangerBg}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <TextBlock x:Name="StatusText" Text="{Binding StatusText}" FontSize="11" FontWeight="SemiBold">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource TextTertiary}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Status}" Value="Checking">
+                                                            <Setter Property="Foreground" Value="{StaticResource Brand600}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Status}" Value="Success">
+                                                            <Setter Property="Foreground" Value="{StaticResource Success}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Status}" Value="Warning">
+                                                            <Setter Property="Foreground" Value="{StaticResource Warning}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Status}" Value="Failed">
+                                                            <Setter Property="Foreground" Value="{StaticResource Danger}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Border>
+                                </Grid>
+                            </Border>
+                            <DataTemplate.Triggers>
+                                <!-- 图标颜色随状态联动 -->
+                                <DataTrigger Binding="{Binding Status}" Value="Checking">
+                                    <Setter TargetName="IconBox" Property="Background" Value="{StaticResource Brand50}"/>
+                                    <Setter TargetName="IconGlyph" Property="Foreground" Value="{StaticResource Brand600}"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Status}" Value="Success">
+                                    <Setter TargetName="IconBox" Property="Background" Value="{StaticResource SuccessBg}"/>
+                                    <Setter TargetName="IconGlyph" Property="Foreground" Value="{StaticResource Success}"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Status}" Value="Warning">
+                                    <Setter TargetName="IconBox" Property="Background" Value="{StaticResource WarningBg}"/>
+                                    <Setter TargetName="IconGlyph" Property="Foreground" Value="{StaticResource Warning}"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Status}" Value="Failed">
+                                    <Setter TargetName="IconBox" Property="Background" Value="{StaticResource DangerBg}"/>
+                                    <Setter TargetName="IconGlyph" Property="Foreground" Value="{StaticResource Danger}"/>
+                                </DataTrigger>
+                            </DataTemplate.Triggers>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- 进度条 -->
+            <Grid Grid.Row="3" Margin="22 6 22 0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <ProgressBar Grid.Row="0" Style="{StaticResource SplashProgressBar}"
+                             Minimum="0" Maximum="1" Value="{Binding Progress}"/>
+                <TextBlock Grid.Row="1" Text="{Binding ProgressText}" FontSize="10"
+                           Foreground="{StaticResource TextTertiary}"
+                           HorizontalAlignment="Right" Margin="0 4 0 0"/>
+            </Grid>
+
+            <!-- Footer：立即进入 + 温和提示 -->
+            <StackPanel Grid.Row="4" Margin="22 14 22 18">
+                <Button x:Name="EnterButton" Content="立即进入" Style="{StaticResource SplashPrimaryButton}"
+                        HorizontalAlignment="Center" MinWidth="128"/>
+                <TextBlock Text="按 Esc 可随时关闭 · 启动检查不影响使用"
+                           FontSize="11" Foreground="{StaticResource TextTertiary}"
+                           HorizontalAlignment="Center" Margin="0 8 0 0"/>
+                <TextBlock Text="已为您准备好指哪译哪的轻盈体验"
+                           FontSize="10.5" Foreground="#B0B0B8"
+                           HorizontalAlignment="Center" Margin="0 3 0 0"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

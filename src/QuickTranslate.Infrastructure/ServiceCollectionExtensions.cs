@@ -74,24 +74,11 @@ internal sealed class SettingsInitializationService : IHostedService
             {
                 var cur = opts.Value;
                 // In-place mutation preserves reference identity for any coordinator holding IOptions reference.
-                cur.WordHotkey = loaded.WordHotkey;
-                cur.BlockHotkey = loaded.BlockHotkey;
-                cur.TargetLanguage = loaded.TargetLanguage;
-                cur.TranslationQuality = loaded.TranslationQuality;
-                cur.StartWithWindows = loaded.StartWithWindows;
-                cur.CloseOnOutsideClick = loaded.CloseOnOutsideClick;
-                cur.DebugLogging = loaded.DebugLogging;
-                cur.DebugOverlayMode = loaded.DebugOverlayMode;
+                cur.ApplyFrom(loaded);
 
                 // 日志器可能在 Load 完成前就已按默认值创建（Serilog 级别锁死 Information，
                 // 见 LoggerConfigurator 注释）。加载完成后把落盘的 Debug 开关同步到运行时。
                 LoggingSwitch.SetDebugEnabled(loaded.DebugLogging);
-                cur.EnableTextToSpeech = loaded.EnableTextToSpeech;
-                cur.TranslationProvider = loaded.TranslationProvider;
-                cur.CustomLlmBaseUrl = loaded.CustomLlmBaseUrl;
-                cur.CustomLlmModel = loaded.CustomLlmModel;
-                cur.CustomLlmMaxContextLines = loaded.CustomLlmMaxContextLines;
-                cur.ResolvedApiKey = loaded.ResolvedApiKey;
             }
         }
         catch (Exception ex)
@@ -140,20 +127,7 @@ public static class ServiceCollectionExtensions
             {
                 var loaded = state.Loaded;
                 if (loaded is null) return;
-                opts.WordHotkey = loaded.WordHotkey;
-                opts.BlockHotkey = loaded.BlockHotkey;
-                opts.TargetLanguage = loaded.TargetLanguage;
-                opts.TranslationQuality = loaded.TranslationQuality;
-                opts.StartWithWindows = loaded.StartWithWindows;
-                opts.CloseOnOutsideClick = loaded.CloseOnOutsideClick;
-                opts.DebugLogging = loaded.DebugLogging;
-                opts.DebugOverlayMode = loaded.DebugOverlayMode;
-                opts.EnableTextToSpeech = loaded.EnableTextToSpeech;
-                opts.TranslationProvider = loaded.TranslationProvider;
-                opts.CustomLlmBaseUrl = loaded.CustomLlmBaseUrl;
-                opts.CustomLlmModel = loaded.CustomLlmModel;
-                opts.CustomLlmMaxContextLines = loaded.CustomLlmMaxContextLines;
-                opts.ResolvedApiKey = loaded.ResolvedApiKey;
+                opts.ApplyFrom(loaded);
             });
         });
 

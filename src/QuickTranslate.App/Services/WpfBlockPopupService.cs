@@ -21,6 +21,7 @@ public class WpfBlockPopupService : IBlockPopupService
     private readonly IMonitorService _monitorService;
     private readonly IOptions<AppSettings> _appSettings;
     private readonly ITextToSpeechService? _textToSpeech;
+    private readonly ISelectionOverlayService? _overlayService;
     private BlockPopupWindow? _window;
     private MonitorId _lastMonitorId = MonitorId.Empty;
     private uint _lastDpiX;
@@ -37,13 +38,17 @@ public class WpfBlockPopupService : IBlockPopupService
     private bool _resizePending;
     private long _lastResizeAppliedTicks; // Environment.TickCount64
 
-    public WpfBlockPopupService(IDpiMapper dpiMapper, IMonitorService monitorService, IOptions<AppSettings> appSettings, ITextToSpeechService? textToSpeech = null)
+    public WpfBlockPopupService(IDpiMapper dpiMapper, IMonitorService monitorService, IOptions<AppSettings> appSettings, ITextToSpeechService? textToSpeech = null, ISelectionOverlayService? overlayService = null)
     {
         _dpiMapper = dpiMapper;
         _monitorService = monitorService;
         _appSettings = appSettings;
         _textToSpeech = textToSpeech;
+        _overlayService = overlayService;
     }
+
+    /// <summary>弹窗退场即藏选区：关闭按钮/5s 超时/服务收起全经窗口 HideWithFade 触发。</summary>
+    private void OnWindowDismissed(object? sender, EventArgs e) => _overlayService?.HideAll();
 
     private static void RunOnUi(Action a)
     {
@@ -74,6 +79,7 @@ public class WpfBlockPopupService : IBlockPopupService
         {
             // 窗口重建前退订，避免旧窗口泄漏事件持有
             _window.ContentGrew -= OnWindowContentGrew;
+            _window.Dismissed -= OnWindowDismissed;
             StopGrowthTimer();
             _hasPlacementContext = false;
             _window.Close();
@@ -84,6 +90,7 @@ public class WpfBlockPopupService : IBlockPopupService
         {
             _window = new BlockPopupWindow();
             _window.ContentGrew += OnWindowContentGrew;
+            _window.Dismissed += OnWindowDismissed;
             _lastMonitorId = monitorId;
             _lastDpiX = dpiX;
             _lastDpiY = dpiY;
@@ -109,8 +116,8 @@ public class WpfBlockPopupService : IBlockPopupService
         var monitorInfo = monitors.FirstOrDefault(m => m.Id == monitorId)
                          ?? _monitorService.TryGetPrimary()
                          ?? new MonitorInfo(monitorId, string.Empty,
-                             new PhysicalRect(0, 0, 1920, 1080),
-                             new PhysicalRect(0, 0, 1920, 1080),
+                             PhysicalRect.Fallback1080p,
+                             PhysicalRect.Fallback1080p,
                              dpiX, dpiY, true);
 
         var (workWdip, workHdip) = GetWorkAreaDipSize(monitorInfo.WorkArea, dpiX, dpiY);
@@ -178,8 +185,8 @@ public class WpfBlockPopupService : IBlockPopupService
         var monitorInfo = monitors.FirstOrDefault(m => m.Id == monitorId)
                          ?? _monitorService.TryGetPrimary()
                          ?? new MonitorInfo(monitorId, string.Empty,
-                             new PhysicalRect(0, 0, 1920, 1080),
-                             new PhysicalRect(0, 0, 1920, 1080),
+                             PhysicalRect.Fallback1080p,
+                             PhysicalRect.Fallback1080p,
                              dpiX, dpiY, true);
 
         var (workWdip, workHdip) = GetWorkAreaDipSize(monitorInfo.WorkArea, dpiX, dpiY);
@@ -240,6 +247,7 @@ public class WpfBlockPopupService : IBlockPopupService
         if (_window != null)
         {
             _window.ContentGrew -= OnWindowContentGrew;
+            _window.Dismissed -= OnWindowDismissed;
             StopGrowthTimer();
             _hasPlacementContext = false;
             // 淡出退场：动画完成后由 PopupTransition 内部执行 Hide()；

@@ -205,7 +205,11 @@ public class WinFormsTrayIconService : ITrayIconService, IDisposable
             var settingsManager = _serviceProvider.GetService<ISettingsManager>();
             if (settingsManager != null)
             {
-                _ = settingsManager.SaveAsync(appSettings);
+                // 不等待落盘（菜单点击需即时返回），但必须观察异常：否则保存失败静默且 UnobservedTaskException 进进程级处理器
+                _ = settingsManager.SaveAsync(appSettings).ContinueWith(t =>
+                {
+                    try { _logger.LogWarning(t.Exception, "[WinFormsTrayIconService] Debug overlay setting persist failed"); } catch { }
+                }, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
             }
 
             _logger.LogInformation("Debug overlay mode {State} via tray menu", enabled ? "enabled" : "disabled");

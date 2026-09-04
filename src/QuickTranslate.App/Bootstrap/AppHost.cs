@@ -114,7 +114,11 @@ public static class AppHost
             }
 
             logger.LogInformation("Warm-up finished in {Ms}ms", sw.ElapsedMilliseconds);
-        });
+        }).ContinueWith(t =>
+        {
+            // 内层已 catch 业务异常；此处只兜 logger 本身抛出的极端情况，避免 UnobservedTaskException
+            try { logger.LogError(t.Exception, "Warm-up background task faulted"); } catch { }
+        }, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
     }
 
     private static void RunModelVersionVerification(IServiceProvider services)

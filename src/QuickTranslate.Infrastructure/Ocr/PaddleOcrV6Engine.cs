@@ -24,9 +24,15 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
     private readonly bool _modelReady;
     private readonly string? _modelsDirectory;
 
-    private Lazy<Task<InferenceSessionsHolder>>? _initTask;
+    // B 方案双 Holder：CPU 兜底常驻，DML 按开关创建。Word 强制 CPU，Block 按开关走 DML。
+    private Lazy<Task<InferenceSessionsHolder>>? _cpuInitTask;
+    private Lazy<Task<InferenceSessionsHolder>>? _dmlInitTask;
     private bool _sessionCreatedRaised;
     private bool _disposed;
+    private readonly object _sessionRebuildLock = new();
+    private string _activeExecutionProvider = "CPU";
+    // 向后兼容：旧单 Holder 访问点统一走 CPU Holder
+    private Lazy<Task<InferenceSessionsHolder>>? _initTask => _cpuInitTask;
 
     // 同帧 det 结果缓存：触带扩展会对同一截图帧再次调用识别（更宽的焦点带），
     // det 结果与焦点带无关 → 复用可省一次 det（~390ms）。
@@ -53,6 +59,9 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
     private List<RecLineCacheEntry>? _recCache;
     // 最近一次 RecognizeAsync 的行级缓存命中数（供回归测试断言，非线程安全仅作诊断）
     internal int LastRecCacheHits;
+    // 最近一次 RecognizeAsync 的 det 缓存是否命中（供回归测试做确定性断言，
+    // 替代耗时比较——并行测试负载下耗时断言会偶发翻转）
+    internal bool LastDetCacheHit;
     private const double RecCacheMinIou = 0.6;
 
     private sealed record RecLineCacheEntry(
@@ -87,6 +96,15 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
     public string EngineName => "PP-OCRv6-ONNX";
     public bool IsAvailable => _modelReady;
+
+    /// <summary>当前生效的 ONNX Execution Provider：DML 或 CPU，供 UI/日志可观测。</summary>
+    public string ActiveExecutionProvider => _activeExecutionProvider;
+
+    // 小图阈值：面积 &lt; 320*320 时 DML 调度/拷贝开销可能超过收益，Word 强制走 CPU。
+    // B 方案分流点：RecognizeAsync 入口按输入面积与焦点带高度决定走 CPU 还是 DML。
+    private const int SmallImageThresholdArea = 320 * 320;
+    // Word 焦点带高度阈值：Word 触带约 60px，Block 带约 1200px；≤80 视为 Word 强制 CPU。
+    private const int WordFocusBandHeightThreshold = 80;
 
     public event EventHandler? SessionCreated;
 
@@ -162,8 +180,13 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
         if (_modelReady)
         {
-            _initTask = new Lazy<Task<InferenceSessionsHolder>>(() => InitializeSessionsAsync(),
+            _cpuInitTask = new Lazy<Task<InferenceSessionsHolder>>(() => InitializeSessionsAsync(useDml: false),
                 LazyThreadSafetyMode.ExecutionAndPublication);
+            if (_settings.Value.UseHardwareAcceleration)
+            {
+                _dmlInitTask = new Lazy<Task<InferenceSessionsHolder>>(() => InitializeSessionsAsync(useDml: true),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+            }
         }
     }
 
@@ -308,7 +331,45 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         return required.All(f => File.Exists(Path.Combine(dir, f)));
     }
 
-    private async Task<InferenceSessionsHolder> InitializeSessionsAsync()
+    // B 方案：Word 强制 CPU，Block 按开关走 DML。启发式：
+    // - 面积 < SmallImageThresholdArea (102400) 视为 Word → CPU
+    // - focusBand 高度 ≤ 80 视为 Word → CPU（Word 带 ~60，Block 带 ~1200 或 null）
+    // 其余视为块，若 DML 可用则走 DML。
+    internal bool ShouldUseGpu(ScreenFrame frame, PhysicalRect? focusBand)
+    {
+        if (!_settings.Value.UseHardwareAcceleration) return false;
+        if (_dmlInitTask == null) return false;
+        long area = (long)frame.Bitmap.Width * frame.Bitmap.Height;
+        if (area < SmallImageThresholdArea) return false;
+        if (focusBand.HasValue && focusBand.Value.Height <= WordFocusBandHeightThreshold) return false;
+        return true;
+    }
+
+    private async Task<InferenceSessionsHolder> GetCpuHolderAsync(CancellationToken ct)
+    {
+        var task = _cpuInitTask ?? throw OcrException.ModelLoadFailed("CPU holder not initialized");
+        return await task.Value.WaitAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task<InferenceSessionsHolder?> TryGetDmlHolderAsync(CancellationToken ct)
+    {
+        var task = _dmlInitTask;
+        if (task == null) return null;
+        try
+        {
+            var holder = await task.Value.WaitAsync(ct).ConfigureAwait(false);
+            if (holder.DetSession == null || holder.RecSession == null) return null;
+            return holder;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "OCR DML holder unavailable, fallback to CPU");
+            return null;
+        }
+    }
+
+    private async Task<InferenceSessionsHolder> InitializeSessionsAsync(bool useDml)
     {
         await Task.Yield();
 
@@ -322,67 +383,182 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 var clsPath = Path.Combine(_modelsDirectory, "cls.onnx");
                 var recPath = Path.Combine(_modelsDirectory, "rec.onnx");
 
-                var so = new SessionOptions
+                if (useDml)
                 {
-                    GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
-                    ExecutionMode = ExecutionMode.ORT_SEQUENTIAL
-                };
-                try { so.AppendExecutionProvider_CPU(0); } catch { /* ignore if EP already attached */ }
-
-                try
-                {
-                    holder.DetSession = new InferenceSession(detPath, so);
-                    // cls.onnx is optional; if missing or load fails, we simply skip 180deg classification
-                    if (File.Exists(clsPath))
+                    // 仅 DML 分支：失败不回退到 CPU（CPU Holder 独立常驻，上层调度会回退）
+                    SessionOptions? dmlSo = null;
+                    try
                     {
-                        try { holder.ClsSession = new InferenceSession(clsPath, so); }
-                        catch (Exception clsEx)
+                        dmlSo = new SessionOptions
                         {
-                            _logger.LogInformation(clsEx, "cls.onnx optional session skipped: {Msg}", clsEx.Message);
+                            GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
+                            ExecutionMode = ExecutionMode.ORT_SEQUENTIAL
+                        };
+                        dmlSo.EnableMemoryPattern = false;
+                        bool dmlAttached = false;
+                        Exception? attachEx = null;
+                        try
+                        {
+                            dmlSo.AppendExecutionProvider("DML", new Dictionary<string, string> { { "device_id", "0" } });
+                            dmlAttached = true;
                         }
-                    }
-                    else
-                    {
-                        _logger.LogInformation("cls.onnx not found; angle classification step skipped");
-                    }
-                    holder.RecSession = new InferenceSession(recPath, so);
+                        catch (Exception ex)
+                        {
+                            attachEx = ex;
+                            try
+                            {
+                                var m = typeof(SessionOptions).GetMethod("AppendExecutionProvider_DML");
+                                if (m != null)
+                                {
+                                    var p = m.GetParameters();
+                                    if (p.Length == 1 && p[0].ParameterType == typeof(int))
+                                        m.Invoke(dmlSo, new object[] { 0 });
+                                    else if (p.Length == 1)
+                                        m.Invoke(dmlSo, new object[] { 0 });
+                                    else
+                                        throw;
+                                    dmlAttached = true;
+                                }
+                            }
+                            catch { }
+                            if (!dmlAttached) throw attachEx!;
+                        }
 
+                        var detTask = Task.Run(() => new InferenceSession(detPath, dmlSo));
+                        var recTask = Task.Run(() => new InferenceSession(recPath, dmlSo));
+                        Task<InferenceSession?> clsTask;
+                        if (File.Exists(clsPath))
+                        {
+                            clsTask = Task.Run<InferenceSession?>(() =>
+                            {
+                                try { return new InferenceSession(clsPath, dmlSo); }
+                                catch (Exception clsEx)
+                                {
+                                    _logger.LogInformation(clsEx, "cls.onnx optional session skipped: {Msg}", clsEx.Message);
+                                    return null;
+                                }
+                            });
+                        }
+                        else
+                        {
+                            _logger.LogInformation("cls.onnx not found; angle classification step skipped");
+                            clsTask = Task.FromResult<InferenceSession?>(null);
+                        }
+
+                        await Task.WhenAll((Task)detTask, (Task)recTask, (Task)clsTask);
+                        holder.DetSession = await detTask;
+                        holder.RecSession = await recTask;
+                        holder.ClsSession = await clsTask;
+                        _activeExecutionProvider = "DML";
+                        _logger.LogInformation("OCR DML holder created (device_id=0 primary adapter)");
+                    }
+                    catch (Exception dmlEx)
+                    {
+                        _logger.LogWarning(dmlEx, "OCR DML holder creation failed: {Reason}", dmlEx.Message);
+                        try { holder.DetSession?.Dispose(); } catch { }
+                        try { holder.ClsSession?.Dispose(); } catch { }
+                        try { holder.RecSession?.Dispose(); } catch { }
+                        holder.DetSession = null;
+                        holder.ClsSession = null;
+                        holder.RecSession = null;
+                        try { dmlSo?.Dispose(); } catch { }
+                        dmlSo = null;
+                        // 不抛，保持 holder 空让上层回退到 CPU
+                    }
+                }
+                else
+                {
+                    var cpuSo = new SessionOptions
+                    {
+                        GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
+                        ExecutionMode = ExecutionMode.ORT_SEQUENTIAL
+                    };
+                    try { cpuSo.AppendExecutionProvider_CPU(0); } catch { }
+
+                    try
+                    {
+                        var cpuDetTask = Task.Run(() => new InferenceSession(detPath, cpuSo));
+                        var cpuRecTask = Task.Run(() => new InferenceSession(recPath, cpuSo));
+                        Task<InferenceSession?> cpuClsTask;
+                        if (File.Exists(clsPath))
+                        {
+                            cpuClsTask = Task.Run<InferenceSession?>(() =>
+                            {
+                                try { return new InferenceSession(clsPath, cpuSo); }
+                                catch (Exception clsEx)
+                                {
+                                    _logger.LogInformation(clsEx, "cls.onnx optional session skipped: {Msg}", clsEx.Message);
+                                    return null;
+                                }
+                            });
+                        }
+                        else
+                        {
+                            _logger.LogInformation("cls.onnx not found; angle classification step skipped");
+                            cpuClsTask = Task.FromResult<InferenceSession?>(null);
+                        }
+
+                        await Task.WhenAll((Task)cpuDetTask, (Task)cpuRecTask, (Task)cpuClsTask);
+                        holder.DetSession = await cpuDetTask;
+                        holder.RecSession = await cpuRecTask;
+                        holder.ClsSession = await cpuClsTask;
+                        // 仅当非 DML 模式时更新 ActiveExecutionProvider 为 CPU，避免覆盖 DML 状态
+                        if (_dmlInitTask == null)
+                            _activeExecutionProvider = "CPU";
+                        _logger.LogInformation("OCR CPU holder created (UseHardwareAcceleration={Flag})", _settings.Value.UseHardwareAcceleration);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "ONNX Runtime CPU session creation failed; running in skeleton mode");
+                        if (_dmlInitTask == null) _activeExecutionProvider = "CPU";
+                    }
+                }
+
+                // CPU Holder 不覆盖已有的 DML ActiveProvider，保持 DML 优先展示
+                if (!useDml && string.Equals(_activeExecutionProvider, "DML", StringComparison.OrdinalIgnoreCase))
+                {
+                    // keep DML
+                }
+
+                // 字典校验 18710：仅在任意 RecSession 成功创建后执行
+                if (holder.RecSession != null)
+                {
                     var dictPath = Path.Combine(_modelsDirectory, "ppocr_keys.txt");
                     if (File.Exists(dictPath))
                     {
-                        var lines = await File.ReadAllLinesAsync(dictPath);
-                        holder.CharDictionary = BuildCharDictionary(lines);
-
-                        // 诊断：字典长度必须等于 rec 输出类别数（blank + 字符 + 空格）。
-                        // 不一致（例如 v6 模型误配 ppocr_keys_v1.txt）时 CTC 解码必然全错。
                         try
                         {
-                            var outMeta = holder.RecSession.OutputMetadata.Values.First();
-                            var dims = outMeta.Dimensions;
-                            int classCount = dims != null && dims.Length > 0 ? dims[dims.Length - 1] : -1;
-                            if (classCount > 0 && classCount != holder.CharDictionary.Length)
+                            var lines = await File.ReadAllLinesAsync(dictPath);
+                            holder.CharDictionary = BuildCharDictionary(lines);
+                            try
                             {
-                                _logger.LogWarning(
-                                    "OCR dictionary/model mismatch: dict labels={DictLen} but rec output classes={ClassCount}. " +
-                                    "Recognition will be garbage. ppocr_keys.txt must match the rec.onnx model ({ModelDir}).",
-                                    holder.CharDictionary.Length, classCount, _modelsDirectory);
+                                var outMeta = holder.RecSession.OutputMetadata.Values.First();
+                                var dims = outMeta.Dimensions;
+                                int classCount = dims != null && dims.Length > 0 ? dims[dims.Length - 1] : -1;
+                                if (classCount > 0 && classCount != holder.CharDictionary.Length)
+                                {
+                                    _logger.LogWarning(
+                                        "OCR dictionary/model mismatch: dict labels={DictLen} but rec output classes={ClassCount}. " +
+                                        "Recognition will be garbage. ppocr_keys.txt must match the rec.onnx model ({ModelDir}).",
+                                        holder.CharDictionary.Length, classCount, _modelsDirectory);
+                                }
+                                else if (classCount > 0)
+                                {
+                                    _logger.LogInformation(
+                                        "OCR dictionary OK: {DictLen} labels = rec output classes {ClassCount}",
+                                        holder.CharDictionary.Length, classCount);
+                                }
                             }
-                            else if (classCount > 0)
+                            catch (Exception metaEx)
                             {
-                                _logger.LogInformation(
-                                    "OCR dictionary OK: {DictLen} labels = rec output classes {ClassCount}",
-                                    holder.CharDictionary.Length, classCount);
+                                _logger.LogDebug(metaEx, "Could not read rec output metadata for dictionary size check");
                             }
                         }
-                        catch (Exception metaEx)
+                        catch (Exception dictEx)
                         {
-                            _logger.LogDebug(metaEx, "Could not read rec output metadata for dictionary size check");
+                            _logger.LogWarning(dictEx, "Failed to load ppocr_keys.txt");
                         }
                     }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "ONNX Runtime session creation failed; running in skeleton mode");
                 }
             }
         }
@@ -391,12 +567,85 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             if (!_sessionCreatedRaised)
             {
                 _sessionCreatedRaised = true;
-                _logger.LogInformation("OCR Session created");
+                _logger.LogInformation("OCR Session created (EP={EP})", _activeExecutionProvider);
                 SessionCreated?.Invoke(this, EventArgs.Empty);
             }
         }
 
         return holder;
+    }
+
+    /// <summary>
+    /// 运行时响应 AppSettings.UseHardwareAcceleration 变化重建 Session。
+    /// 线程安全：双 Lazy 独立锁，避免 DML 失败回退时泄漏。
+    /// </summary>
+    public async Task RebuildSessionsAsync(CancellationToken ct = default)
+    {
+        if (!_modelReady || _disposed) return;
+        InferenceSessionsHolder? oldCpu = null;
+        InferenceSessionsHolder? oldDml = null;
+        lock (_sessionRebuildLock)
+        {
+            if (_cpuInitTask != null && _cpuInitTask.IsValueCreated && _cpuInitTask.Value.IsCompletedSuccessfully)
+                oldCpu = _cpuInitTask.Value.Result;
+            if (_dmlInitTask != null && _dmlInitTask.IsValueCreated && _dmlInitTask.Value.IsCompletedSuccessfully)
+                oldDml = _dmlInitTask.Value.Result;
+
+            _cpuInitTask = new Lazy<Task<InferenceSessionsHolder>>(() => InitializeSessionsAsync(useDml: false),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            bool wantsDml = _settings.Value.UseHardwareAcceleration;
+            if (wantsDml)
+            {
+                _dmlInitTask = new Lazy<Task<InferenceSessionsHolder>>(() => InitializeSessionsAsync(useDml: true),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+                _activeExecutionProvider = "DML";
+            }
+            else
+            {
+                _dmlInitTask = null;
+                _activeExecutionProvider = "CPU";
+            }
+            _sessionCreatedRaised = false;
+        }
+        if (oldCpu != null) DisposeSessions(oldCpu);
+        if (oldDml != null) DisposeSessions(oldDml);
+        _logger.LogInformation("OCR RebuildSessions: CPU/DML holders reset (UseHardwareAcceleration={Flag})", _settings.Value.UseHardwareAcceleration);
+
+        try
+        {
+            var cpuHolder = await _cpuInitTask.Value.WaitAsync(ct).ConfigureAwait(false);
+            if (cpuHolder.DetSession == null)
+                throw OcrException.ModelLoadFailed("CPU Det session not initialized after rebuild");
+            if (_dmlInitTask != null)
+            {
+                try
+                {
+                    var dmlHolder = await _dmlInitTask.Value.WaitAsync(ct).ConfigureAwait(false);
+                    if (dmlHolder.DetSession != null)
+                        _logger.LogInformation("OCR DML holder rebuilt OK");
+                    else
+                        _logger.LogWarning("OCR DML holder rebuilt but sessions null, will fallback to CPU");
+                }
+                catch (Exception dmlEx)
+                {
+                    _logger.LogWarning(dmlEx, "OCR DML holder rebuild failed, CPU fallback remains");
+                }
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (OcrException) { throw; }
+        catch (Exception ex) { throw OcrException.ModelLoadFailed(ex.Message, ex); }
+    }
+
+    /// <summary>仅当 EP 与当前设置不一致时重建（供 Settings 保存后调用）。</summary>
+    public Task RebuildSessionsIfNeededAsync(CancellationToken ct = default)
+    {
+        bool wantsDml = _settings.Value.UseHardwareAcceleration;
+        bool hasDml = _dmlInitTask != null;
+        bool isDml = string.Equals(_activeExecutionProvider, "DML", StringComparison.OrdinalIgnoreCase);
+        // 需要重建：开关与当前 DML 存在性不一致，或 ActiveProvider 与开关不一致
+        if (wantsDml == hasDml && wantsDml == isDml && _cpuInitTask != null && _cpuInitTask.IsValueCreated) return Task.CompletedTask;
+        return RebuildSessionsAsync(ct);
     }
 
     private static string[] BuildCharDictionary(string[] rawLines)
@@ -428,13 +677,29 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
     public async Task WarmUpAsync(CancellationToken ct = default)
     {
-        if (!_modelReady || _initTask == null) return;
+        if (!_modelReady || _cpuInitTask == null) return;
 
         try
         {
-            var holder = await _initTask.Value.WaitAsync(ct).ConfigureAwait(false);
-            if (holder.DetSession == null)
-                throw OcrException.ModelLoadFailed("Det session not initialized");
+            var cpuHolder = await _cpuInitTask.Value.WaitAsync(ct).ConfigureAwait(false);
+            if (cpuHolder.DetSession == null)
+                throw OcrException.ModelLoadFailed("CPU Det session not initialized");
+            _logger.LogInformation("OCR WarmUp: CPU holder ready (EP={EP})", _activeExecutionProvider);
+            if (_dmlInitTask != null)
+            {
+                try
+                {
+                    var dmlHolder = await _dmlInitTask.Value.WaitAsync(ct).ConfigureAwait(false);
+                    if (dmlHolder.DetSession != null)
+                        _logger.LogInformation("OCR WarmUp: DML holder ready");
+                    else
+                        _logger.LogWarning("OCR WarmUp: DML holder sessions null, CPU fallback");
+                }
+                catch (Exception dmlEx)
+                {
+                    _logger.LogWarning(dmlEx, "OCR WarmUp: DML holder failed, CPU fallback");
+                }
+            }
         }
         catch (OperationCanceledException oce)
         {
@@ -465,18 +730,34 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
             var sw = Stopwatch.StartNew();
 
+            // B 方案分流：Word 强制 CPU，Block 按开关走 DML（小图/窄带阈值兜底）
+            bool preferGpu = ShouldUseGpu(frame, focusBand);
             InferenceSessionsHolder? holder = null;
-            if (_initTask != null)
+            string holderEp = "CPU";
+            if (preferGpu)
             {
-                try
+                var dmlHolder = await TryGetDmlHolderAsync(ct).ConfigureAwait(false);
+                if (dmlHolder != null)
                 {
-                    holder = await _initTask.Value.WaitAsync(ct).ConfigureAwait(false);
+                    holder = dmlHolder;
+                    holderEp = "DML";
                 }
-                catch (OperationCanceledException oce)
+                else
                 {
-                    throw OcrException.Cancelled(oce.Message, oce);
+                    // DML 不可用回退 CPU
+                    holder = await GetCpuHolderAsync(ct).ConfigureAwait(false);
+                    holderEp = "CPU(fallback)";
                 }
             }
+            else
+            {
+                holder = await GetCpuHolderAsync(ct).ConfigureAwait(false);
+                holderEp = "CPU";
+            }
+
+            if (_logger.IsEnabled(LogLevel.Debug))
+                _logger.LogDebug("OCR Recognize routing: preferGpu={Prefer} -> {Ep} focusBand={Band} area={Area}",
+                    preferGpu, holderEp, focusBand?.ToString() ?? "null", (long)frame.Bitmap.Width * frame.Bitmap.Height);
 
             if (holder == null || holder.DetSession == null || holder.RecSession == null)
             {
@@ -489,15 +770,18 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             var preprocessStart = sw.Elapsed;
             TimeSpan preprocess = TimeSpan.Zero;
             TimeSpan detectorElapsed = TimeSpan.Zero;
+            TimeSpan postprocessAccum = TimeSpan.Zero;
             List<PhysicalRect> detBoxes;
             // 有焦点带时只在「带 ± 20% 帧高」区域跑 det，降低大帧 det 输入面积；
             // 盒子统一平移到帧局部坐标，后续管线不感知裁剪。
             var detCrop = ComputeDetCrop(frame, focusBand);
             bool detCacheHit = TryGetDetCache(frame.Bitmap, detCrop, out var cachedBoxes);
+            LastDetCacheHit = detCacheHit;
             if (detCacheHit)
             {
                 detBoxes = cachedBoxes!;
-                _logger.LogDebug("DetCache: hit, reused {Count} det boxes for same frame", detBoxes.Count);
+                if (_logger.IsEnabled(LogLevel.Debug))
+                    _logger.LogDebug("DetCache: hit, reused {Count} det boxes for same frame", detBoxes.Count);
             }
             else
             {
@@ -514,10 +798,15 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
                     ct.ThrowIfCancellationRequested();
 
+                    // Detector 仅计 Session.Run，避免 DbPostprocess/CloseMask 计入指标失真
                     var detectorStart = sw.Elapsed;
-                    detBoxes = RunDetector(holder.DetSession, detInput, detInputW, detInputH, detScaleW, detScaleH,
-                        detSource.Width, detSource.Height);
+                    var (predMap, outW, outH) = RunDetectorInference(holder.DetSession, detInput, detInputW, detInputH);
                     detectorElapsed = sw.Elapsed - detectorStart;
+
+                    var dbStart = sw.Elapsed;
+                    detBoxes = DbPostprocess(predMap, outW, outH, detInputW, detInputH, detScaleW, detScaleH,
+                        detSource.Width, detSource.Height);
+                    postprocessAccum += sw.Elapsed - dbStart;
 
                     // 裁剪区内的盒子平移回帧局部坐标（全帧时起点为 0，等价无操作）
                     if (cropped)
@@ -541,11 +830,14 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             }
 
             // 诊断日志：检测框原始尺寸（定位框太扁/偏离问题）
-            _logger.LogDebug("DetBoxes: count={Count} frameRegion=({RX},{RY},{RW}x{RH})",
-                detBoxes.Count, frame.Region.X, frame.Region.Y, frame.Region.Width, frame.Region.Height);
-            foreach (var db in detBoxes)
+            if (_logger.IsEnabled(LogLevel.Debug))
             {
-                _logger.LogDebug("  DetBox: ({X},{Y},{W}x{H})", db.X, db.Y, db.Width, db.Height);
+                _logger.LogDebug("DetBoxes: count={Count} frameRegion=({RX},{RY},{RW}x{RH})",
+                    detBoxes.Count, frame.Region.X, frame.Region.Y, frame.Region.Width, frame.Region.Height);
+                foreach (var db in detBoxes)
+                {
+                    _logger.LogDebug("  DetBox: ({X},{Y},{W}x{H})", db.X, db.Y, db.Width, db.Height);
+                }
             }
 
             // 焦点带过滤：只识别与焦点带垂直相交的行。
@@ -558,8 +850,9 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 detBoxes = detBoxes
                     .Where(b => b.Y + frame.Region.Y < fb.Bottom && b.Bottom + frame.Region.Y > fb.Top)
                     .ToList();
-                _logger.LogDebug("FocusBand: kept {Kept}/{Total} lines band=({X},{Y},{W}x{H})",
-                    detBoxes.Count, recognizedTotal, fb.X, fb.Y, fb.Width, fb.Height);
+                if (_logger.IsEnabled(LogLevel.Debug))
+                    _logger.LogDebug("FocusBand: kept {Kept}/{Total} lines band=({X},{Y},{W}x{H})",
+                        detBoxes.Count, recognizedTotal, fb.X, fb.Y, fb.Width, fb.Height);
 
                 // 近邻优先：带内行多于上限时只识别离带中心（≈光标）最近的行，
                 // 避免把远处工具栏/侧栏的行也跑一遍 rec。
@@ -571,7 +864,8 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                         .Take(MaxLinesToRecognize)
                         .OrderBy(b => b.Y)
                         .ToList();
-                    _logger.LogDebug("FocusBand: capped to nearest {Cap} lines", MaxLinesToRecognize);
+                    if (_logger.IsEnabled(LogLevel.Debug))
+                        _logger.LogDebug("FocusBand: capped to nearest {Cap} lines", MaxLinesToRecognize);
                 }
             }
 
@@ -595,7 +889,7 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 lineBmps[i] = CropBitmap(frame.Bitmap, detBoxes[i]);
             }
             LastRecCacheHits = recCacheHits;
-            if (recCacheHits > 0)
+            if (recCacheHits > 0 && _logger.IsEnabled(LogLevel.Debug))
                 _logger.LogDebug("RecCache: {Hits}/{Total} lines reused from same-frame line cache", recCacheHits, detBoxes.Count);
 
             // RecBox = 词框/行框坐标系实际对应的框（原 det 框或主墨水带裁剪后的子框，
@@ -625,7 +919,7 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
                     // ===== rec 输入增强：背景色距离灰度化（保留色度对比 + 自动浅底深字极性）=====
                     using var enhancedBmp = EnhanceForRec(lineBmp, out bool darkInverted);
-                    if (darkInverted)
+                    if (darkInverted && _logger.IsEnabled(LogLevel.Debug))
                         _logger.LogDebug("RecEnhance: dark background normalized (line {Idx})", lineIdx);
 
                     // ===== 主墨水带垂直裁剪 =====
@@ -644,9 +938,10 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                         int padBottom = Math.Min(enhancedBmp.Height, dominantBand.Value.Bottom + RecBandPaddingPx);
                         if (padBottom - padTop < enhancedBmp.Height * 9 / 10)
                         {
-                            _logger.LogDebug(
-                                "RecBandCrop: rows [0,{H}) -> [{T},{B}) (line {Idx})",
-                                enhancedBmp.Height, padTop, padBottom, lineIdx);
+                            if (_logger.IsEnabled(LogLevel.Debug))
+                                _logger.LogDebug(
+                                    "RecBandCrop: rows [0,{H}) -> [{T},{B}) (line {Idx})",
+                                    enhancedBmp.Height, padTop, padBottom, lineIdx);
                             bandTop = padTop;
                             bandBottom = padBottom;
                         }
@@ -789,7 +1084,7 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
                 {
                     // 逐词明细（文本+屏幕绝对框）：定位"检测/选取位置不准"的关键证据。
-                    // Debug 关闭时零开销（IsEnabled 守卫，字符串不构建）。
+                    // Debug 关闭时零开销（IsEnabled 守卫，字符串不构建）；非 Debug 不分配 object[]。
                     var detail = string.Join(" | ",
                         res.Words.Select(w => $"'{w.Text}'({w.Box.X},{w.Box.Y} {w.Box.Width}x{w.Box.Height})"));
                     _logger.LogDebug(
@@ -797,30 +1092,29 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                         res.Strategy, res.Words.Count, res.Confidence, lineIdx,
                         screenBox.X, screenBox.Y, screenBox.Width, screenBox.Height, detail);
                 }
-                else
-                {
-                    _logger.LogDebug("WordBox: strategy={Strategy} words={Count} confidence={Confidence:F3} line={Idx}",
-                        res.Strategy, res.Words.Count, res.Confidence, lineIdx);
-                }
                 lines.Add(new OcrLine(screenBox, res.Words, res.Text, res.Angle, res.Confidence));
             }
 
             // det 偶尔把相隔大片空白的两处文字合并成一个检测框（如左右两页中间隔空白），
             // 导致行框/选区横跨空白区 → 按词框间大空隙拆成独立行。
+            var gapStart = sw.Elapsed;
             int beforeGapSplit = lines.Count;
             lines = LineGapSplitter.SplitLines(lines);
-            if (lines.Count != beforeGapSplit)
+            postprocessAccum += sw.Elapsed - gapStart;
+            if (lines.Count != beforeGapSplit && _logger.IsEnabled(LogLevel.Debug))
                 _logger.LogDebug("LineGapSplit: {Before} lines split into {After}", beforeGapSplit, lines.Count);
 
             // 行首图标单符号清理（?/0/• 等），同步收紧行框改善选区。
+            var glyphStart = sw.Elapsed;
             lines = LeadingGlyphCleaner.Clean(lines, out int glyphCleaned);
-            if (glyphCleaned > 0)
+            postprocessAccum += sw.Elapsed - glyphStart;
+            if (glyphCleaned > 0 && _logger.IsEnabled(LogLevel.Debug))
                 _logger.LogDebug("LeadingGlyphClean: removed leading glyph on {Count} lines", glyphCleaned);
 
             // ===== POSTPROCESS =====
-            var postprocessStart = sw.Elapsed;
-            // Already done above per box; just finalize timing
-            var postprocessElapsed = sw.Elapsed - postprocessStart;
+            // 真实计入 CloseMask+DbPostprocess(已累加至 postprocessAccum)+LineGapSplitter+LeadingGlyphCleaner
+            // Detector 仅计 Session.Run，避免形态学/连通域开销污染推理指标
+            var postprocessElapsed = postprocessAccum;
 
             sw.Stop();
 
@@ -908,15 +1202,17 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         // 旧实现会把小截图放大到长边 960（Word 起捕 300x100 → 960x320，面积约 10 倍），
         // det 每次多付 ~300ms；放大不带来任何信息量，只会增加计算量。
         //
-        // 高 DPI 降采样比下限（0.5）：高缩放屏（如 200%）下块选首捕经 DpiScale 放大到
+        // 高 DPI 降采样比下限（0.4）：高缩放屏（如 200%）下块选首捕经 DpiScale 放大到
         // 2400x1440，固定 800 上限意味着 3x 降采样（96 DPI 仅 1.5x）——GDI+ 缩小的
         // 预滤波有限，3x 下细笔画欠采样断裂，且 pred map 量化步长放大到 12 物理px/px
         // （96 DPI 为 6px/px），det 框误差与行间隙同量级 → 行框吃进邻行 → rec 读到
         // "一行半"输出乱码（历史回归：200% 屏块选乱码/选块内容错）。
-        // 上限提升到 longSide/2（ratio 下限 0.5）后误差与采样质量回到 96 DPI 量级；
-        // 96/150 DPI 帧 ratio≥0.5 完全不受影响。
+        // 0.4 折中：200% 帧 det 输入 960x576，输入内最小字高 9.6px 仍高于 96 DPI
+        // 水平（8px）20%，配 HighQualityBicubic 预滤波保笔画连续；det 面积较 0.5
+        // （1200x720）降 36%，耗时约 -270ms（实测 736→~470ms）。
+        // 96/150 DPI 帧 ratio≥0.4 完全不受影响。
         int limit = (srcW >= AdaptiveThreshold || srcH >= AdaptiveThreshold) ? DetMaxSideLenLarge : DetMaxSideLenSmall;
-        limit = Math.Max(limit, (int)Math.Ceiling(Math.Max(srcW, srcH) / 2.0));
+        limit = Math.Max(limit, (int)Math.Ceiling(Math.Max(srcW, srcH) * 0.4));
         float ratio = Math.Min(1f, Math.Min((float)limit / srcW, (float)limit / srcH));
         int resizeW = Math.Max(1, (int)Math.Round(srcW * ratio));
         int resizeH = Math.Max(1, (int)Math.Round(srcH * ratio));
@@ -983,25 +1279,20 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         return (chw, scaleW, scaleH, inputW, inputH);
     }
 
-    private static List<PhysicalRect> RunDetector(
+    private static (float[] PredMap, int OutW, int OutH) RunDetectorInference(
         InferenceSession session, float[] input,
-        int inputW, int inputH,
-        float scaleW, float scaleH,
-        int origW, int origH)
+        int inputW, int inputH)
     {
         var inputMeta = session.InputMetadata;
         var inputName = inputMeta.Keys.First();
         var dims = new[] { 1, 3, inputH, inputW };
 
-        // [池化] input 为 ArrayPool 租借（可能超长）。DenseTensor 对后备内存做严格等长校验，
-        // 故用 AsMemory 切片到精确张量长度后零拷贝包装。
         var tensor = new DenseTensor<float>(input.AsMemory(0, 3 * inputH * inputW), dims);
         var inputValues = NamedOnnxValue.CreateFromTensor(inputName, tensor);
         using var outputs = session.Run(new[] { inputValues });
 
         var output = outputs.First();
         var outTensor = output.AsTensor<float>();
-        // shape [1, 1, H, W] or [1, H, W] or [H, W]
         var predMap = outTensor.ToArray();
         int outH, outW;
 
@@ -1011,6 +1302,16 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         else if (shape.Length == 2) { outH = shape[0]; outW = shape[1]; }
         else { predMap = new float[inputH / 4 * inputW / 4]; outH = inputH / 4; outW = inputW / 4; Array.Fill(predMap, 0f); }
 
+        return (predMap, outW, outH);
+    }
+
+    private static List<PhysicalRect> RunDetector(
+        InferenceSession session, float[] input,
+        int inputW, int inputH,
+        float scaleW, float scaleH,
+        int origW, int origH)
+    {
+        var (predMap, outW, outH) = RunDetectorInference(session, input, inputW, inputH);
         return DbPostprocess(predMap, outW, outH, inputW, inputH, scaleW, scaleH, origW, origH);
     }
 
@@ -1511,7 +1812,6 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         var srcData = src.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
         var dstData = dst.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
         byte[]? srcBytes = null;
-        byte[]? dist = null;
         byte[]? dstBytes = null;
         try
         {
@@ -1540,8 +1840,7 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             byte bgR = MedianOf(histR, total);
             inverted = (double)lumaSum / total < 127;
 
-            // 第二遍：色距 d = max(|r-br|,|g-bg|,|b-bb|) + d 直方图（dist 池化复用）
-            dist = ArrayPool<byte>.Shared.Rent(total);
+            // 第二遍：色距 d 直方图（无 dist[] 分配，直接计数，避免 205KB/帧分配）
             var histD = new int[256];
             for (int i = 0; i < total; i++)
             {
@@ -1550,8 +1849,6 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 int dg = Math.Abs(srcBytes[j + 1] - bgG);
                 int dr = Math.Abs(srcBytes[j + 2] - bgR);
                 int d = Math.Max(db, Math.Max(dg, dr));
-                if (d > 255) d = 255;
-                dist[i] = (byte)d;
                 histD[d]++;
             }
 
@@ -1572,23 +1869,34 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
             float scale = p98 >= 16 ? 255f / p98 : 0f;
 
-            // 第三遍：写回灰度。out = 255 − min(255, d×scale)：
-            // 背景（d≈0）→ 浅 255；文字（d 大）→ 深。任何源极性统一为浅底深字。
+            // 预烘焙 LUT255[256]：lut[d] = 255 - min(255, d*scale)，数学等价原 Pass3 公式
+            // 原三遍（直方图/dist/写回）→ 融合为两遍（直方图+直方图D，LUT查表写回），省一次全像素遍历与 dist[] 分配
+            var lut = new byte[256];
+            for (int d = 0; d < 256; d++)
+            {
+                lut[d] = (byte)(255 - Math.Min(255, d * scale));
+            }
+
+            // 第二遍融合写回：直接查表，无需 dist[]
             int dstLen = dstData.Stride * h;
             dstBytes = ArrayPool<byte>.Shared.Rent(dstLen);
             for (int y = 0; y < h; y++)
             {
                 int rowOff = y * dstData.Stride;
-                int gOff = y * w;
+                int srcRowOff = y * srcData.Stride;
                 for (int x = 0; x < w; x++)
                 {
-                    int v = 255 - (int)Math.Min(255f, dist[gOff + x] * scale);
-                    byte val = (byte)v;
-                    int i = rowOff + x * 4;
-                    dstBytes[i] = val;
-                    dstBytes[i + 1] = val;
-                    dstBytes[i + 2] = val;
-                    dstBytes[i + 3] = 255;
+                    int srcOff = srcRowOff + x * 4;
+                    int db = Math.Abs(srcBytes[srcOff] - bgB);
+                    int dg = Math.Abs(srcBytes[srcOff + 1] - bgG);
+                    int dr = Math.Abs(srcBytes[srcOff + 2] - bgR);
+                    int d = Math.Max(db, Math.Max(dg, dr));
+                    byte val = lut[d];
+                    int dstOff = rowOff + x * 4;
+                    dstBytes[dstOff] = val;
+                    dstBytes[dstOff + 1] = val;
+                    dstBytes[dstOff + 2] = val;
+                    dstBytes[dstOff + 3] = 255;
                 }
             }
             Marshal.Copy(dstBytes, 0, dstData.Scan0, dstLen);
@@ -1596,7 +1904,6 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         finally
         {
             if (srcBytes != null) ArrayPool<byte>.Shared.Return(srcBytes);
-            if (dist != null) ArrayPool<byte>.Shared.Return(dist);
             if (dstBytes != null) ArrayPool<byte>.Shared.Return(dstBytes);
             src.UnlockBits(srcData);
             dst.UnlockBits(dstData);
@@ -1628,23 +1935,26 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         int w = gray.Width, h = gray.Height;
         var rowInk = new int[h];
         var data = gray.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        byte[]? rented = null;
         try
         {
-            var bytes = new byte[data.Stride * h];
-            Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);
+            int len = data.Stride * h;
+            rented = ArrayPool<byte>.Shared.Rent(len);
+            Marshal.Copy(data.Scan0, rented, 0, len);
             for (int y = 0; y < h; y++)
             {
                 int rowOff = y * data.Stride;
                 int count = 0;
                 for (int x = 0; x < w; x++)
                 {
-                    if (bytes[rowOff + x * 4] < 128) count++;
+                    if (rented[rowOff + x * 4] < 128) count++;
                 }
                 rowInk[y] = count;
             }
         }
         finally
         {
+            if (rented != null) ArrayPool<byte>.Shared.Return(rented, clearArray: false);
             gray.UnlockBits(data);
         }
         return rowInk;
@@ -1786,31 +2096,31 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        if (_initTask == null || !_initTask.IsValueCreated)
-            return;
-
-        var task = _initTask.Value;
-        if (task.IsCompletedSuccessfully)
+        void DisposeLazy(Lazy<Task<InferenceSessionsHolder>>? lazy)
         {
-            DisposeSessions(task.Result);
-            return;
+            if (lazy == null || !lazy.IsValueCreated) return;
+            var task = lazy.Value;
+            if (task.IsCompletedSuccessfully)
+            {
+                DisposeSessions(task.Result);
+                return;
+            }
+            if (!task.IsCompleted)
+            {
+                _ = task.ContinueWith(
+                    static t =>
+                    {
+                        if (t.IsCompletedSuccessfully && t.Result != null)
+                            DisposeSessions(t.Result);
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
         }
 
-        if (!task.IsCompleted)
-        {
-            // 预热仍在进行：绝不阻塞等待 .Result（UI 线程死锁风险——App 退出路径会在
-            // STA 线程调用本方法）。挂接延续，在初始化完成后释放原生 ONNX 会话。
-            _ = task.ContinueWith(
-                static t =>
-                {
-                    if (t.IsCompletedSuccessfully && t.Result != null)
-                        DisposeSessions(t.Result);
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-        }
-        // faulted/canceled：会话未成功创建，无资源需要在此释放。
+        DisposeLazy(_cpuInitTask);
+        DisposeLazy(_dmlInitTask);
     }
 
     private static void DisposeSessions(InferenceSessionsHolder holder)
