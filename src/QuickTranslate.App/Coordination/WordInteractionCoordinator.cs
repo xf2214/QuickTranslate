@@ -216,8 +216,9 @@ public class WordInteractionCoordinator : IInteractionCoordinator
 
                 SetState(newSlot, AppState.Ocr);
                 // 焦点带限定：取词只用光标所在行，带外行不跑 rec（扩抓后行多时收益显著）
+                // 单词链路恒走 CPU：即使大面积/高DPI/UseHardwareAcceleration=true 也不进 DML
                 var ocr = await _ocrEngine.RecognizeAsync(
-                    firstFrame, WordFocusBand(cursor, estLineHeight, firstFrame.Region), newSlot.Cts.Token).ConfigureAwait(false);
+                    firstFrame, WordFocusBand(cursor, estLineHeight, firstFrame.Region), newSlot.Cts.Token, forceCpu: true).ConfigureAwait(false);
                 if (IsStaleOrCanceled(newSlot)) return;
 
                 SetState(newSlot, AppState.Selecting);
@@ -258,7 +259,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
                     _overlayService.Show(captureRegion.Value, mid, dpiX, dpiY, preview: true);
 
                     var retryOcr = await _ocrEngine.RecognizeAsync(
-                        retryFrame, WordFocusBand(cursor, Math.Max(estLineHeight, anchorLineHeight), retryFrame.Region), newSlot.Cts.Token).ConfigureAwait(false);
+                        retryFrame, WordFocusBand(cursor, Math.Max(estLineHeight, anchorLineHeight), retryFrame.Region), newSlot.Cts.Token, forceCpu: true).ConfigureAwait(false);
                     if (IsStaleOrCanceled(newSlot)) return;
 
                     sel = _wordSelector.SelectWord(retryOcr, cursor, null);

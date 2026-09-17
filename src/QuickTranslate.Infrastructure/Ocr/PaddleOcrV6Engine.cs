@@ -715,10 +715,10 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         }
     }
 
-    public Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default)
-        => RecognizeAsync(frame, null, ct);
+    public Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default, bool forceCpu = false)
+        => RecognizeAsync(frame, null, ct, forceCpu);
 
-    public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, PhysicalRect? focusBand, CancellationToken ct = default)
+    public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, PhysicalRect? focusBand, CancellationToken ct = default, bool forceCpu = false)
     {
         try
         {
@@ -730,11 +730,17 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
             var sw = Stopwatch.StartNew();
 
-            // B 方案分流：Word 强制 CPU，Block 按开关走 DML（小图/窄带阈值兜底）
-            bool preferGpu = ShouldUseGpu(frame, focusBand);
+            // 分流：forceCpu==true 时单词链路恒走 CPU，跳过 TryGetDmlHolderAsync 与 ShouldUseGpu 启发式，
+            // 即使 UseHardwareAcceleration=true、高DPI、重试扩大后大面积也不进 DML。
+            bool preferGpu = !forceCpu && ShouldUseGpu(frame, focusBand);
             InferenceSessionsHolder? holder = null;
             string holderEp = "CPU";
-            if (preferGpu)
+            if (forceCpu)
+            {
+                holder = await GetCpuHolderAsync(ct).ConfigureAwait(false);
+                holderEp = "CPU(forceCpu)";
+            }
+            else if (preferGpu)
             {
                 var dmlHolder = await TryGetDmlHolderAsync(ct).ConfigureAwait(false);
                 if (dmlHolder != null)
@@ -756,8 +762,8 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             }
 
             if (_logger.IsEnabled(LogLevel.Debug))
-                _logger.LogDebug("OCR Recognize routing: preferGpu={Prefer} -> {Ep} focusBand={Band} area={Area}",
-                    preferGpu, holderEp, focusBand?.ToString() ?? "null", (long)frame.Bitmap.Width * frame.Bitmap.Height);
+                _logger.LogDebug("OCR Recognize routing: forceCpu={ForceCpu} preferGpu={Prefer} -> {Ep} focusBand={Band} area={Area}",
+                    forceCpu, preferGpu, holderEp, focusBand?.ToString() ?? "null", (long)frame.Bitmap.Width * frame.Bitmap.Height);
 
             if (holder == null || holder.DetSession == null || holder.RecSession == null)
             {

@@ -1021,6 +1021,11 @@
                                            TextWrapping="NoWrap"
                                            TextTrimming="CharacterEllipsis"
                                            MaxHeight="16"/>
+                                <CheckBox x:Name="DisableSystemProxyCheckBox"
+                                          Content="不使用系统代理（直连，本地 Ollama 推荐勾选）"
+                                          Style="{StaticResource CompactCheckBox}"
+                                          ToolTip="勾选后在线翻译与模型下载将直连，不走系统代理；本地 Ollama 必需。修改后新请求生效，已复用的连接重启后完全生效。"
+                                          Margin="0 8 0 0"/>
                             </StackPanel>
                         </Border>
 

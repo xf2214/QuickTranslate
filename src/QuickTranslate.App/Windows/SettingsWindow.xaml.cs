@@ -119,6 +119,7 @@ public partial class SettingsWindow : Window
         DebugLoggingBox.IsChecked = _appSettings.DebugLogging;
         EnableReadAloudBox.IsChecked = _appSettings.EnableTextToSpeech;
         HardwareAccelerationCheckBox.IsChecked = _appSettings.UseHardwareAcceleration;
+        DisableSystemProxyCheckBox.IsChecked = _appSettings.DisableSystemProxy;
         var displayStyle = string.IsNullOrWhiteSpace(_appSettings.PopupDisplayStyle) ? "detailed" : _appSettings.PopupDisplayStyle;
         SelectComboBoxItemByTag(PopupDisplayStyleBox, displayStyle);
 
@@ -322,6 +323,7 @@ public partial class SettingsWindow : Window
         DebugLoggingBox.IsChecked = defaults.DebugLogging;
         EnableReadAloudBox.IsChecked = defaults.EnableTextToSpeech;
         HardwareAccelerationCheckBox.IsChecked = defaults.UseHardwareAcceleration;
+        DisableSystemProxyCheckBox.IsChecked = defaults.DisableSystemProxy;
         SelectComboBoxItemByTag(PopupDisplayStyleBox, defaults.PopupDisplayStyle);
 
         UpdateHotkeyStatusPreview();
@@ -394,6 +396,9 @@ public partial class SettingsWindow : Window
         bool oldHardware = _appSettings.UseHardwareAcceleration;
         bool newHardware = HardwareAccelerationCheckBox.IsChecked == true;
         bool hardwareChanged = oldHardware != newHardware;
+        bool oldProxy = _appSettings.DisableSystemProxy;
+        bool newProxy = DisableSystemProxyCheckBox.IsChecked == true;
+        bool proxyChanged = oldProxy != newProxy;
 
         var validation = SettingsValidator.Validate(wordHotkey, blockHotkey, _hotkeyBroker);
         if (!validation.IsSuccess)
@@ -451,6 +456,7 @@ public partial class SettingsWindow : Window
                 EnableTextToSpeech = EnableReadAloudBox.IsChecked == true,
                 EnableSelectedTextProbe = _appSettings.EnableSelectedTextProbe,
                 UseHardwareAcceleration = newHardware,
+                DisableSystemProxy = newProxy,
                 TranslationProvider = providerKind,
                 CustomLlmBaseUrl = CustomLlmBaseUrlBox.Text.Trim(),
                 CustomLlmModel = CustomLlmModelBox.Text.Trim(),
@@ -472,6 +478,7 @@ public partial class SettingsWindow : Window
             _appSettings.EnableTextToSpeech = newSettings.EnableTextToSpeech;
             _appSettings.EnableSelectedTextProbe = newSettings.EnableSelectedTextProbe;
             _appSettings.UseHardwareAcceleration = newSettings.UseHardwareAcceleration;
+            _appSettings.DisableSystemProxy = newSettings.DisableSystemProxy;
             _appSettings.TranslationProvider = newSettings.TranslationProvider;
             _appSettings.CustomLlmBaseUrl = newSettings.CustomLlmBaseUrl;
             _appSettings.CustomLlmModel = newSettings.CustomLlmModel;
@@ -490,7 +497,8 @@ public partial class SettingsWindow : Window
             RefreshSystemStatus();
 
             // 核显加速状态变化：尝试重建 OCR Session，下一次 OCR 生效；失败则提示重启生效
-            string baseToast = "✔ 保存成功！设置已生效，可关闭窗口。";
+            string proxySuffix = proxyChanged ? " 代理设置已更新，新请求将直连，重启后完全生效（Handler 池复用）。" : "";
+            string baseToast = "✔ 保存成功！设置已生效，可关闭窗口。" + proxySuffix;
             if (hardwareChanged)
             {
                 string hwToastSuffix = newHardware

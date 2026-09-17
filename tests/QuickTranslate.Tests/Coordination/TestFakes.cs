@@ -133,23 +133,40 @@ public class FakeOcrEngine : IOcrEngine
     public List<PhysicalRect?> FocusBands { get; } = new();
     /// <summary>同帧多次识别（如触带扩展）时按序返回的预置结果，空则走 RecognizeTcs。</summary>
     public Queue<OcrLayoutResult> QueuedResults { get; } = new();
+    public List<bool> ForceCpuCalls { get; } = new();
+    public List<string> RecognizeHolderChoices { get; } = new();
 
     public string EngineName => "FakeOcr";
     public bool IsAvailable => true;
     public event EventHandler? SessionCreated;
 
-    public Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, PhysicalRect? focusBand, CancellationToken ct = default)
+    public Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, PhysicalRect? focusBand, CancellationToken ct = default, bool forceCpu = false)
     {
         FocusBands.Add(focusBand);
+        ForceCpuCalls.Add(forceCpu);
+        RecognizeHolderChoices.Add(forceCpu ? "CPU" : "CPU");
         if (QueuedResults.Count > 0)
         {
             RecognizeCount++;
             return Task.FromResult(QueuedResults.Dequeue());
         }
-        return RecognizeAsync(frame, ct);
+        return RecognizeCoreAsync(frame, ct);
     }
 
-    public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default)
+    public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default, bool forceCpu = false)
+    {
+        // direct call without focusBand: track forceCpu as well
+        ForceCpuCalls.Add(forceCpu);
+        RecognizeHolderChoices.Add(forceCpu ? "CPU" : "CPU");
+        if (QueuedResults.Count > 0)
+        {
+            RecognizeCount++;
+            return QueuedResults.Dequeue();
+        }
+        return await RecognizeCoreAsync(frame, ct).ConfigureAwait(false);
+    }
+
+    private async Task<OcrLayoutResult> RecognizeCoreAsync(ScreenFrame frame, CancellationToken ct)
     {
         RecognizeCount++;
         var tcs = RecognizeTcs;

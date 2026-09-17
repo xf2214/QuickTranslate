@@ -78,6 +78,9 @@ public class AppSettings
     // WHY：详细模式展示元信息彩点与文字按钮，简洁模式隐藏元信息行并用图标按钮以节省纵向空间。
     public string PopupDisplayStyle { get; set; } = "detailed";
 
+    /// <summary>默认关闭代理、直连；本地 Ollama 必需。</summary>
+    public bool DisableSystemProxy { get; set; } = true;
+
     /// <summary>
     /// 把落盘加载值的全部字段复制到当前实例（原地 mutation，保持 IOptions 引用同一性）。
     /// 新增持久化字段只改这里：调用方（HostedService 补丁 / IConfigureOptions）不再各自手写赋值，避免漏同步。
@@ -100,6 +103,7 @@ public class AppSettings
         CustomLlmModel = source.CustomLlmModel;
         CustomLlmMaxContextLines = source.CustomLlmMaxContextLines;
         PopupDisplayStyle = source.PopupDisplayStyle;
+        DisableSystemProxy = source.DisableSystemProxy;
         ResolvedApiKey = source.ResolvedApiKey;
     }
 }

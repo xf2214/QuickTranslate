@@ -331,7 +331,7 @@ public class BenchmarksRunner
         public bool IsAvailable => true;
         public event EventHandler? SessionCreated;
 
-        public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default)
+        public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default, bool forceCpu = false)
         {
             await Task.Delay(100, ct);
             return BuildOcrLayoutResults(1)[0] with

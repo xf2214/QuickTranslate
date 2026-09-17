@@ -30,7 +30,7 @@ public class MockOcrEngine : IOcrEngine
         return Task.CompletedTask;
     }
 
-    public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default)
+    public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default, bool forceCpu = false)
     {
         try
         {

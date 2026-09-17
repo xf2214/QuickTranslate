@@ -4,6 +4,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using QuickTranslate.Core.Options;
 using QuickTranslate.Infrastructure.AppData;
 
 namespace QuickTranslate.Infrastructure.Services;
@@ -70,17 +72,29 @@ public class ModelDownloader : IModelDownloader
 
     private readonly IAppDataProvider _appDataProvider;
     private readonly ILogger<ModelDownloader> _logger;
+    private readonly IOptions<AppSettings>? _appSettings;
 
     public string TargetDirectory { get; }
 
-    public ModelDownloader(IAppDataProvider appDataProvider, ILogger<ModelDownloader> logger)
+    public ModelDownloader(IAppDataProvider appDataProvider, ILogger<ModelDownloader> logger, IOptions<AppSettings>? appSettings = null)
     {
         _appDataProvider = appDataProvider;
         _logger = logger;
+        _appSettings = appSettings;
         var appDataModels = Path.Combine(_appDataProvider.GetAppDataDirectory(), "models");
         Directory.CreateDirectory(appDataModels);
         TargetDirectory = appDataModels;
     }
+
+    internal HttpClient CreateHttpClient()
+    {
+        var disable = _appSettings?.Value.DisableSystemProxy ?? true;
+        var handler = new System.Net.Http.SocketsHttpHandler { UseProxy = !disable };
+        return new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(20) };
+    }
+
+    /// <summary>测试可见：按当前设置产出 HttpClient，用于验证 UseProxy 切换</summary>
+    public HttpClient CreateHttpClientForTest() => CreateHttpClient();
 
     public IReadOnlyDictionary<string, bool> GetFileExistsMap()
     {
@@ -108,7 +122,7 @@ public class ModelDownloader : IModelDownloader
                 return VerifySha256();
             }
 
-            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(20) };
+            using var http = CreateHttpClient();
 
             // url → 本地 zip 缓存路径（同 URL 只下载一次）
             var zipCache = new ConcurrentDictionary<string, string>();

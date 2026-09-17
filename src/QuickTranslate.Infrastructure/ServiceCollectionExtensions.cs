@@ -1,3 +1,4 @@
+using System.Net.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -209,7 +210,8 @@ public static class ServiceCollectionExtensions
 
         // 自定义大模型（OpenAI 兼容）：配置实时读取 AppSettings 单例（设置窗口保存后立即生效），
         // 因此不经过 IOptions 快照。请求 URL 使用绝对地址，不依赖 HttpClient.BaseAddress。
-        services.AddHttpClient<CustomOpenAiTranslationProvider>();
+        services.AddHttpClient<CustomOpenAiTranslationProvider>()
+            .ConfigurePrimaryHttpMessageHandler(sp => HttpProxyHelper.CreateHandler(sp.GetRequiredService<IOptions<AppSettings>>().Value));
 
         services.AddHttpClient<QwenMtTranslationProvider>((sp, client) =>
         {
@@ -219,7 +221,7 @@ public static class ServiceCollectionExtensions
                 client.BaseAddress = new Uri(opts.BaseAddress.EndsWith('/') ? opts.BaseAddress : opts.BaseAddress + "/");
             }
             client.Timeout = opts.Timeout;
-        });
+        }).ConfigurePrimaryHttpMessageHandler(sp => HttpProxyHelper.CreateHandler(sp.GetRequiredService<IOptions<AppSettings>>().Value));
 
         // ITranslationProvider = 分发器：按设置在自定义大模型 / Qwen-MT 之间路由
         services.AddSingleton<ITranslationProvider, TranslationProviderDispatcher>();
@@ -330,6 +332,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISecretStore, DpapiCurrentUserSecretStore>();
         return services;
     }
+}
+
+public static class HttpProxyHelper
+{
+    public static SocketsHttpHandler CreateHandler(AppSettings settings) =>
+        new SocketsHttpHandler { UseProxy = !settings.DisableSystemProxy };
 }
 
 internal class SerilogAppLoggingProvider : ILoggerProvider

@@ -86,7 +86,7 @@ public class OcrExceptionTests
 
         public Task WarmUpAsync(CancellationToken ct = default) => Task.CompletedTask;
 
-        public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default)
+        public async Task<OcrLayoutResult> RecognizeAsync(ScreenFrame frame, CancellationToken ct = default, bool forceCpu = false)
         {
             try
             {
