@@ -39,7 +39,7 @@ public class DefaultTranslationRouter : ITranslationRouter
 
         if (_cache.TryGet(normalizedKey, out var cached))
         {
-            _logger.LogDebug("L1 cache hit for {Key}", normalizedKey);
+            _logger.LogDebug("L1 word cache hit");
             return cached with { FromCache = true };
         }
 
@@ -48,7 +48,7 @@ public class DefaultTranslationRouter : ITranslationRouter
             var l2Result = await _l2Cache.TryGetAsync(normalizedKey, ct);
             if (l2Result != null)
             {
-                _logger.LogDebug("L2 cache hit for {Key}", normalizedKey);
+                _logger.LogDebug("L2 word cache hit");
                 _cache.Add(normalizedKey, l2Result);
                 return l2Result with { FromCache = true };
             }
@@ -56,14 +56,14 @@ public class DefaultTranslationRouter : ITranslationRouter
 
         if (_dictionary.TryLookup(word, targetLang, out var dictResult))
         {
-            _logger.LogDebug("Dictionary hit for {Word}", word);
+            _logger.LogDebug("Local dictionary hit");
             // 本地词典是确定性、O(1) 内存查找：只写 L1 内存热缓存（重复词直接命中），
             // 不必持久化到 SQLite L2，避免多余写盘并挤占在线译文的缓存容量。
             _cache.Add(normalizedKey, dictResult);
             return dictResult with { NormalizedKey = normalizedKey };
         }
 
-        _logger.LogDebug("Calling online provider for {Word}", word);
+        _logger.LogDebug("Calling online provider for word");
 
         var request = new TranslationRequest(
             Text: word,
@@ -98,7 +98,7 @@ public class DefaultTranslationRouter : ITranslationRouter
 
         if (_cache.TryGet(normalizedKey, out var cached))
         {
-            _logger.LogDebug("L1 cache hit for block {Key}", normalizedKey);
+            _logger.LogDebug("L1 block cache hit");
             return cached with { FromCache = true };
         }
 
@@ -107,7 +107,7 @@ public class DefaultTranslationRouter : ITranslationRouter
             var l2Result = await _l2Cache.TryGetAsync(normalizedKey, ct);
             if (l2Result != null)
             {
-                _logger.LogDebug("L2 cache hit for block {Key}", normalizedKey);
+                _logger.LogDebug("L2 block cache hit");
                 _cache.Add(normalizedKey, l2Result);
                 return l2Result with { FromCache = true };
             }
