@@ -1,7 +1,8 @@
 # CI — Windows build + test
 # QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS=1 disables dev-local model path probing
-# so tests don't accidentally pick up assets/models from the dev machine; RealOcrRecognitionTests
-# then correctly skips when no models are present on CI.
+# so tests don't accidentally pick up assets/models from the dev machine.
+# ModelValidationTests (Category=Model) and RealOcrRecognitionTests require external
+# ONNX assets and run separately on a Windows machine with those models installed.
 name: ci
 
 on:
@@ -23,7 +24,7 @@ jobs:
         run: dotnet restore QuickTranslate.sln
       - name: Build
         run: dotnet build QuickTranslate.sln -c Release --no-restore
-      - name: Test
+      - name: Test (without external OCR models)
         env:
           QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS: "1"
-        run: dotnet test QuickTranslate.sln -c Release --no-build --filter "FullyQualifiedName!~RealOcrRecognitionTests"
+        run: dotnet test QuickTranslate.sln -c Release --no-build --filter "FullyQualifiedName!~RealOcrRecognitionTests&Category!=Model"

@@ -12,7 +12,8 @@ namespace QuickTranslate.Tests.Translation;
 
 public class RouterL2CacheTests
 {
-    private static string NKey(string word, string lang) => $"{word.Trim().ToLowerInvariant()}||{lang.Trim().ToLowerInvariant()}";
+    private static string NKey(string word, string lang, TranslationMode mode = TranslationMode.Word)
+        => TranslationCacheKey.BuildForRequest(word, lang, mode, new AppSettings(), string.Empty);
 
     private static IAsyncEnumerable<TranslationChunk> SingleChunkStream(string targetText)
     {
@@ -37,7 +38,7 @@ public class RouterL2CacheTests
         var provider = Substitute.For<ITranslationProvider>();
         var logger = NullLogger<DefaultTranslationRouter>.Instance;
 
-        var key = NKey("hello", "zh-CN");
+        var key = NKey("Hello", "zh-CN");
         var l2Result = new TranslationResult(
             NormalizedKey: key,
             SourceText: "hello",

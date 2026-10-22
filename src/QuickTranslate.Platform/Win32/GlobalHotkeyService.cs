@@ -1,9 +1,11 @@
 using System.Runtime.InteropServices;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Interop;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Platform.UnmanagedMethods;
+using QuickTranslate.Platform.Hotkeys;
 
 namespace QuickTranslate.Platform.Win32;
 
@@ -25,6 +27,7 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
     private IntPtr _keyboardHookHandle = IntPtr.Zero;
     private User32.LowLevelKeyboardProc? _keyboardHookProc;
     private readonly Dictionary<int, DateTime> _downTimes = new();
+    private readonly EscapeKeyState _escapeKeyState = new();
 
     public event EventHandler<HotkeyEventArgs>? HotkeyPressed;
     public event EventHandler<KeyStateChangedEventArgs>? KeyStateChanged;
@@ -44,6 +47,16 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
         };
 
         _source = new HwndSource(parameters);
+        try
+        {
+            // Escape must work even when both configured hotkeys are mouse buttons.
+            EnsureKeyboardHookInstalled();
+        }
+        catch
+        {
+            _source.Dispose();
+            throw;
+        }
     }
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -161,10 +174,20 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
         _keyboardHookProc = KeyboardHookCallback;
         IntPtr hMod = Kernel32.GetModuleHandleW(null);
         _keyboardHookHandle = User32.SetWindowsHookExW(User32.WH_KEYBOARD_LL, _keyboardHookProc, hMod, 0);
+        if (_keyboardHookHandle == IntPtr.Zero)
+            throw new Win32Exception(Marshal.GetLastWin32Error(),
+                "Unable to install keyboard hook [ErrorCode=HOTKEY_KEYBOARD_HOOK_FAIL]");
     }
 
     private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
+        if (nCode >= 0 && _escapeKeyState.ShouldEmit(nCode, (int)wParam, Marshal.ReadInt32(lParam)))
+        {
+            var args = new HotkeyEventArgs(DefaultHotkeyBroker.EscId, HotkeyModifiers.None, KeyboardKey.Escape);
+            // Keep native hook callbacks short and pass Escape through to the foreground app.
+            _source.Dispatcher.BeginInvoke(() => HotkeyPressed?.Invoke(this, args));
+        }
+
         if (nCode == HC_ACTION && _registered.Count > 0)
         {
             int msg = (int)wParam.ToInt64();
@@ -320,17 +343,18 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
             _mouseHookProc = null;
         }
 
-        if (_registered.Count == 0 && _keyboardHookHandle != IntPtr.Zero)
-        {
-            User32.UnhookWindowsHookEx(_keyboardHookHandle);
-            _keyboardHookHandle = IntPtr.Zero;
-            _keyboardHookProc = null;
-        }
+        // Keep the keyboard hook alive for Escape, including mouse-only configurations.
     }
 
     public void UnregisterAll()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+
+        ClearRegistrations();
+    }
+
+    private void ClearRegistrations()
+    {
 
         foreach (int id in _registered.Keys)
         {
@@ -347,20 +371,20 @@ public sealed class GlobalHotkeyService : IGlobalHotkeyService, IDisposable
             _mouseHookProc = null;
         }
 
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        ClearRegistrations();
         if (_keyboardHookHandle != IntPtr.Zero)
         {
             User32.UnhookWindowsHookEx(_keyboardHookHandle);
             _keyboardHookHandle = IntPtr.Zero;
             _keyboardHookProc = null;
         }
-    }
-
-    public void Dispose()
-    {
-        if (_disposed) return;
-        _disposed = true;
-
-        UnregisterAll();
+        _escapeKeyState.Reset();
         _source.Dispose();
+        _disposed = true;
     }
 }

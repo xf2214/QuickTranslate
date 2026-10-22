@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using QuickTranslate.Core.Abstractions;
+using QuickTranslate.Core.Cache;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Core.Translation;
 using QuickTranslate.Infrastructure.Cache;
@@ -43,7 +44,7 @@ public class RouterProviderIntegrationTests
     }
 
     private static string NKey(string word, string lang)
-        => $"{word.Trim().ToLowerInvariant()}||{lang.Trim().ToLowerInvariant()}";
+        => TranslationCacheKey.BuildForRequest(word, lang, TranslationMode.Word, new AppSettings(), "Counting");
 
     [Fact]
     public async Task TranslateWordAsync_L1CacheHit_DoesNotCallProvider()
@@ -52,7 +53,7 @@ public class RouterProviderIntegrationTests
         var provider = new CountingProvider();
         var router = BuildRouter(cache, provider);
 
-        var key = NKey("hello", "zh-CN");
+        var key = NKey("Hello", "zh-CN");
         var cached = new TranslationResult(
             NormalizedKey: key,
             SourceText: "hello",

@@ -80,21 +80,37 @@ public class SettingsAsyncCompositionTests : IDisposable
     }
 
     [Fact]
-    public async Task Build_DoesNotBlock_OnDiskDpapi()
+    public async Task Build_DoesNotWaitForPendingSettingsLoad()
     {
         var config = new ConfigurationBuilder().Build();
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var host = Host.CreateDefaultBuilder()
-            .ConfigureServices((ctx, services) => services.AddInfrastructure(config))
-            .Build();
-        sw.Stop();
+        var load = new TaskCompletionSource<AppSettings>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var builder = Host.CreateDefaultBuilder()
+            .ConfigureServices((ctx, services) =>
+            {
+                services.AddInfrastructure(config);
+                // Model disk/DPAPI work that has not completed yet. Build must never await it.
+                services.AddSingleton(new SettingsLoadState { LoadTask = load.Task });
+            });
+        var build = Task.Run(() => builder.Build());
+        IHost? host = null;
+        try
+        {
+            // This is a deadlock guard, not a performance benchmark on shared CI hardware.
+            host = await build.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(load.Task.IsCompleted);
 
-        // Build should return quickly and not block on DPAPI/disk (<500ms even on slow CI).
-        Assert.True(sw.ElapsedMilliseconds < 500, $"Host.Build blocked for {sw.ElapsedMilliseconds}ms, expected <500ms");
-
-        // Cleanup: start to ensure hosted service completes, then stop.
-        await host.StartAsync();
-        await host.StopAsync();
-        host.Dispose();
+            var start = host.StartAsync();
+            Assert.False(start.IsCompleted);
+            load.SetResult(new AppSettings { TargetLanguage = "ja" });
+            await start.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal("ja", host.Services.GetRequiredService<IOptions<AppSettings>>().Value.TargetLanguage);
+        }
+        finally
+        {
+            load.TrySetResult(new AppSettings());
+            host ??= await build.WaitAsync(TimeSpan.FromSeconds(10));
+            await host.StopAsync();
+            host.Dispose();
+        }
     }
 }

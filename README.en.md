@@ -133,7 +133,7 @@ Hotkey (Alt+1 / Alt+2 tap / hold-and-drag)
 | Translation | `ITranslationProvider` abstraction: custom OpenAI SSE streaming / Qwen-MT |
 | Key storage | Windows DPAPI CurrentUser + entropy.dat |
 | Logging | Serilog leveled filtering (source text excluded by default) |
-| Tests | xUnit, ~580+ cases; GitHub Actions CI (full Windows test suite) |
+| Tests | xUnit; GitHub Actions CI (Windows tests excluding integration tests requiring external OCR models) |
 
 ### Solution layout
 
@@ -170,6 +170,21 @@ From [docs/benchmark-results/](docs/benchmark-results/) (Mock OCR + offline tran
 
 ```powershell
 .\scripts\download-v6-final.ps1
+```
+
+### Running tests (Windows)
+
+CI does not download the large ONNX assets. Run tests that do not require real models with:
+
+```powershell
+dotnet test QuickTranslate.sln -c Release --filter "FullyQualifiedName!~RealOcrRecognitionTests&Category!=Model"
+```
+
+After downloading models, run integrity and recognition tests separately from the repository root. Clear the model-isolation variable so the engine can find development assets:
+
+```powershell
+Remove-Item Env:QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS -ErrorAction SilentlyContinue
+dotnet test QuickTranslate.sln -c Release --filter "Category=Model|FullyQualifiedName~RealOcrRecognitionTests"
 ```
 
 </details>
