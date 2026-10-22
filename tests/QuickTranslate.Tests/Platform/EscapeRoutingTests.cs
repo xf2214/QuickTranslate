@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Platform.Hotkeys;
+using QuickTranslate.Platform.UnmanagedMethods;
 using QuickTranslate.Platform.Win32;
 using Xunit;
 
@@ -8,6 +10,34 @@ namespace QuickTranslate.Tests.Platform;
 
 public class EscapeRoutingTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Escape_CancelsPendingBlockPress_WithoutRestartingOnHoldOrRelease(bool releaseImmediately)
+    {
+        var source = new FakeGlobalHotkeyService();
+        using var broker = new DefaultHotkeyBroker(source, new FakeAppLifecycle(),
+            NullLogger<DefaultHotkeyBroker>.Instance, new DefaultEscHook());
+        var fired = new List<HotkeyEventType>();
+        var holds = new List<HotkeyHoldPhase>();
+        broker.HotkeyFired += (_, e) => fired.Add(e.Type);
+        broker.BlockHoldStateChanged += (_, e) => holds.Add(e.Phase);
+
+        source.RaiseKeyDown(DefaultHotkeyBroker.BlockId);
+        source.RaiseHotkeyPressed(DefaultHotkeyBroker.EscId);
+        if (releaseImmediately) source.RaiseKeyUp(DefaultHotkeyBroker.BlockId);
+        await Task.Delay(550);
+        if (!releaseImmediately) source.RaiseKeyUp(DefaultHotkeyBroker.BlockId);
+
+        Assert.Equal(new[] { HotkeyEventType.Escape }, fired);
+        Assert.Empty(holds);
+
+        // A fresh press after cancellation must still work.
+        source.RaiseKeyDown(DefaultHotkeyBroker.BlockId);
+        source.RaiseKeyUp(DefaultHotkeyBroker.BlockId);
+        Assert.Equal(new[] { HotkeyEventType.Escape, HotkeyEventType.Block }, fired);
+    }
+
     [Fact]
     public void KeyboardEscape_DownEmitsOnceUntilKeyUp()
     {

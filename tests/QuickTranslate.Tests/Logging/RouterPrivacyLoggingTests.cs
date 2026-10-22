@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using QuickTranslate.Core.Abstractions;
+using QuickTranslate.Core.Cache;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Core.Translation;
 using QuickTranslate.Infrastructure.Cache;
@@ -16,7 +17,7 @@ public class RouterPrivacyLoggingTests
     public async Task CacheHit_DebugLogsDoNotContainSensitiveSourceText()
     {
         const string sensitive = "CONFIDENTIAL_OCR_TEXT_123";
-        var key = sensitive.ToLowerInvariant() + "||zh-cn";
+        var key = TranslationCacheKey.BuildForRequest(sensitive, "zh-CN", TranslationMode.Word, new AppSettings(), string.Empty);
         var cache = Substitute.For<ITranslationCache>();
         cache.TryGet(key, out Arg.Any<TranslationResult>()!)
             .Returns(call =>

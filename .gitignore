@@ -6,6 +6,9 @@
 x64/
 x86/
 [Ww][Ii][Nn]32/
+# Win32 is also the platform source namespace, not just a build output directory.
+!src/QuickTranslate.Platform/Win32/
+!src/QuickTranslate.Platform/Win32/*.cs
 [Aa][Rr][Mm]/
 [Aa][Rr][Mm]64/
 bld/

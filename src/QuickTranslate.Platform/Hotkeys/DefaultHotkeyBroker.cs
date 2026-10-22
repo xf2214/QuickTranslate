@@ -135,6 +135,11 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
         try { _globalHotkeyService.Unregister(WordId); } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.UnregisterAll] Unregister WordId {Id} failed [ErrorCode=HOTKEY_UNREGISTER_FAIL]", WordId); }
         try { _globalHotkeyService.Unregister(BlockId); } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.UnregisterAll] Unregister BlockId {Id} failed [ErrorCode=HOTKEY_UNREGISTER_FAIL]", BlockId); }
         try { _globalHotkeyService.Unregister(EscId); } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.UnregisterAll] Unregister EscId {Id} failed [ErrorCode=HOTKEY_UNREGISTER_FAIL]", EscId); }
+        ResetBlockHold();
+    }
+
+    private void ResetBlockHold()
+    {
         lock (_holdLock)
         {
             try { _holdCts?.Cancel(); } catch (Exception ex) { _logger.LogDebug(ex, "[HotkeyBroker.UnregisterAll] Hold CTS cancel failed [ErrorCode=HOTKEY_CANCEL_FAIL]"); }
@@ -230,6 +235,8 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
                 eventType = HotkeyEventType.Block;
                 break;
             case EscId:
+                // A canceled press must not restart the block pipeline on timer expiry/key-up.
+                ResetBlockHold();
                 eventType = HotkeyEventType.Escape;
                 break;
         }
@@ -297,11 +304,12 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
             cts = _holdCts;
         }
 
+        var holdToken = cts.Token;
         _ = Task.Run(async () =>
         {
             try
             {
-                await Task.Delay(HoldThresholdMs, cts.Token).ConfigureAwait(false);
+                await Task.Delay(HoldThresholdMs, holdToken).ConfigureAwait(false);
             }
             catch (TaskCanceledException)
             {
@@ -311,7 +319,7 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
             bool shouldFire = false;
             lock (_holdLock)
             {
-                if (cts.IsCancellationRequested)
+                if (holdToken.IsCancellationRequested)
                     return;
                 if (_holdStarted)
                     return;

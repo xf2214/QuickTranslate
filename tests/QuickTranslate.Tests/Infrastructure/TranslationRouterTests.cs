@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using QuickTranslate.Core.Abstractions;
+using QuickTranslate.Core.Cache;
 using QuickTranslate.Core.Options;
 using QuickTranslate.Core.Translation;
 using QuickTranslate.Infrastructure.Cache;
@@ -11,7 +12,8 @@ namespace QuickTranslate.Tests.Infrastructure;
 
 public class TranslationRouterTests
 {
-    private static string NKey(string word, string lang) => $"{word.Trim().ToLowerInvariant()}||{lang.Trim().ToLowerInvariant()}";
+    private static string NKey(string word, string lang, TranslationMode mode = TranslationMode.Word)
+        => TranslationCacheKey.BuildForRequest(word, lang, mode, new AppSettings(), string.Empty);
 
     private static IAsyncEnumerable<TranslationChunk> SingleChunkStream(string targetText)
     {
@@ -42,14 +44,14 @@ public class TranslationRouterTests
         var provider = Substitute.For<ITranslationProvider>();
 
         var cached = new TranslationResult(
-            NormalizedKey: NKey("hello", "zh-CN"),
+            NormalizedKey: NKey("Hello", "zh-CN"),
             SourceText: "hello",
             TargetText: "你好",
             TargetLanguage: "zh-CN",
             FromCache: true,
             FromDictionary: false);
 
-        cache.TryGet(NKey("hello", "zh-CN"), out Arg.Any<TranslationResult>()!)
+        cache.TryGet(NKey("Hello", "zh-CN"), out Arg.Any<TranslationResult>()!)
             .Returns(x =>
             {
                 x[1] = cached;
@@ -80,7 +82,7 @@ public class TranslationRouterTests
             });
 
         var dictResult = new TranslationResult(
-            NormalizedKey: NKey("hello", "zh-CN"),
+            NormalizedKey: NKey("Hello", "zh-CN"),
             SourceText: "hello",
             TargetText: "字典你好",
             TargetLanguage: "zh-CN",
@@ -102,7 +104,7 @@ public class TranslationRouterTests
         Assert.Equal("字典你好", result.TargetText);
 
         _ = provider.DidNotReceiveWithAnyArgs().TranslateAsync(default!, default);
-        cache.Received(1).Add(NKey("hello", "zh-CN"), Arg.Any<TranslationResult>());
+        cache.Received(1).Add(NKey("Hello", "zh-CN"), Arg.Any<TranslationResult>());
     }
 
     [Fact]
@@ -137,7 +139,7 @@ public class TranslationRouterTests
         Assert.Equal("online-hello", result.TargetText);
 
         _ = provider.Received(1).TranslateAsync(Arg.Any<TranslationRequest>(), Arg.Any<CancellationToken>());
-        cache.Received(1).Add(NKey("hello", "zh-CN"), Arg.Any<TranslationResult>());
+        cache.Received(1).Add(NKey("Hello", "zh-CN"), Arg.Any<TranslationResult>());
     }
 
     [Fact]
@@ -163,7 +165,7 @@ public class TranslationRouterTests
         Assert.Equal("在线-block", result.TargetText);
         _ = dict.DidNotReceiveWithAnyArgs().TryLookup(default!, default!, out _);
         _ = provider.Received(1).TranslateAsync(Arg.Any<TranslationRequest>(), Arg.Any<CancellationToken>());
-        cache.Received(1).Add(NKey("block text here", "zh-CN"), Arg.Any<TranslationResult>());
+        cache.Received(1).Add(NKey("block text here", "zh-CN", TranslationMode.Block), Arg.Any<TranslationResult>());
     }
 
     [Fact]
