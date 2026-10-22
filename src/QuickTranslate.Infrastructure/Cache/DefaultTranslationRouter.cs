@@ -35,9 +35,8 @@ public class DefaultTranslationRouter : ITranslationRouter
 
     public async Task<TranslationResult> TranslateWordAsync(string word, string targetLang, CancellationToken ct = default)
     {
-        var settings = _settings.Value;
-        var quality = settings.TranslationQuality;
-        var normalizedKey = TranslationCacheKey.BuildForRequest(word, targetLang, TranslationMode.Word, settings, _provider.Name);
+        var identity = CaptureCacheIdentity(word, targetLang, TranslationMode.Word);
+        var normalizedKey = identity.Key;
 
         if (_cache.TryGet(normalizedKey, out var cached))
         {
@@ -70,8 +69,8 @@ public class DefaultTranslationRouter : ITranslationRouter
 
         // L2 lookup can yield to the settings UI. Bind the online result to the settings
         // the provider is about to read, rather than the identity used for the earlier lookup.
-        quality = _settings.Value.TranslationQuality;
-        normalizedKey = BuildCacheKey(word, targetLang, TranslationMode.Word);
+        identity = CaptureCacheIdentity(word, targetLang, TranslationMode.Word);
+        normalizedKey = identity.Key;
 
         var request = new TranslationRequest(
             Text: word,
@@ -80,7 +79,7 @@ public class DefaultTranslationRouter : ITranslationRouter
             TargetLanguage: targetLang,
             Mode: TranslationMode.Word,
             OperationId: Guid.NewGuid(),
-            Quality: quality);
+            Quality: identity.Quality);
 
         var fullTranslation = await ConsumeFullTranslationAsync(request, ct);
         var result = new TranslationResult(
@@ -92,7 +91,7 @@ public class DefaultTranslationRouter : ITranslationRouter
             FromDictionary: false,
             NeedsOnline: true);
 
-        if (normalizedKey == BuildCacheKey(word, targetLang, TranslationMode.Word))
+        if (IsCurrent(identity))
         {
             _cache.Add(normalizedKey, result);
             if (_l2Cache != null)
@@ -103,9 +102,8 @@ public class DefaultTranslationRouter : ITranslationRouter
 
     public async Task<TranslationResult> TranslateBlockAsync(string blockText, string targetLang, CancellationToken ct = default)
     {
-        var settings = _settings.Value;
-        var quality = settings.TranslationQuality;
-        var normalizedKey = TranslationCacheKey.BuildForRequest(blockText, targetLang, TranslationMode.Block, settings, _provider.Name);
+        var identity = CaptureCacheIdentity(blockText, targetLang, TranslationMode.Block);
+        var normalizedKey = identity.Key;
 
         if (_cache.TryGet(normalizedKey, out var cached))
         {
@@ -126,8 +124,8 @@ public class DefaultTranslationRouter : ITranslationRouter
 
         _logger.LogDebug("Calling online provider for block");
 
-        quality = _settings.Value.TranslationQuality;
-        normalizedKey = BuildCacheKey(blockText, targetLang, TranslationMode.Block);
+        identity = CaptureCacheIdentity(blockText, targetLang, TranslationMode.Block);
+        normalizedKey = identity.Key;
 
         var request = new TranslationRequest(
             Text: blockText,
@@ -136,7 +134,7 @@ public class DefaultTranslationRouter : ITranslationRouter
             TargetLanguage: targetLang,
             Mode: TranslationMode.Block,
             OperationId: Guid.NewGuid(),
-            Quality: quality);
+            Quality: identity.Quality);
 
         var fullTranslation = await ConsumeFullTranslationAsync(request, ct);
         var result = new TranslationResult(
@@ -148,7 +146,7 @@ public class DefaultTranslationRouter : ITranslationRouter
             FromDictionary: false,
             NeedsOnline: true);
 
-        if (normalizedKey == BuildCacheKey(blockText, targetLang, TranslationMode.Block))
+        if (IsCurrent(identity))
         {
             _cache.Add(normalizedKey, result);
             if (_l2Cache != null)
@@ -157,8 +155,24 @@ public class DefaultTranslationRouter : ITranslationRouter
         return result;
     }
 
-    private string BuildCacheKey(string text, string targetLang, TranslationMode mode)
-        => TranslationCacheKey.BuildForRequest(text, targetLang, mode, _settings.Value, _provider.Name);
+    private sealed record CacheIdentity(string Key, TranslationQuality Quality, long Revision, AppSettings Settings);
+
+    private CacheIdentity CaptureCacheIdentity(string text, string targetLang, TranslationMode mode)
+    {
+        var settings = _settings.Value;
+        while (true)
+        {
+            var snapshot = settings.CaptureTranslationSettings();
+            var providerName = _provider.Name;
+            if (snapshot.Revision != settings.TranslationSettingsRevision) continue;
+            return new(TranslationCacheKey.BuildForRequest(text, targetLang, mode, snapshot, providerName),
+                snapshot.Quality, snapshot.Revision, settings);
+        }
+    }
+
+    private bool IsCurrent(CacheIdentity identity)
+        => ReferenceEquals(identity.Settings, _settings.Value)
+           && identity.Settings.TranslationSettingsRevision == identity.Revision;
 
     private async Task<string> ConsumeFullTranslationAsync(TranslationRequest request, CancellationToken ct)
     {

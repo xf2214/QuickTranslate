@@ -24,17 +24,21 @@ public static class TranslationCacheKey
     /// </summary>
     public static string BuildForRequest(string text, string targetLang, TranslationMode mode,
         AppSettings settings, string providerName)
+        => BuildForRequest(text, targetLang, mode, settings.CaptureTranslationSettings(), providerName);
+
+    public static string BuildForRequest(string text, string targetLang, TranslationMode mode,
+        AppSettings.TranslationSettingsSnapshot settings, string providerName)
     {
         var payload = JsonSerializer.Serialize(new
         {
             Text = (text ?? string.Empty).Trim().Normalize(NormalizationForm.FormC),
             Provider = providerName,
-            Kind = settings.TranslationProvider,
-            Quality = settings.TranslationQuality,
-            BaseUrl = (settings.CustomLlmBaseUrl ?? string.Empty).Trim(),
-            Model = (settings.CustomLlmModel ?? string.Empty).Trim(),
+            Kind = settings.Provider,
+            Quality = settings.Quality,
+            BaseUrl = (settings.BaseUrl ?? string.Empty).Trim(),
+            Model = (settings.Model ?? string.Empty).Trim(),
             // Demo results must not survive configuring the real service. Never include the key itself.
-            HasCredentials = settings.IsApiKeyConfigured
+            HasCredentials = settings.HasCredentials
         });
         return Build("auto", (targetLang ?? string.Empty).Trim().ToLowerInvariant(), mode,
             "v2:" + Sha256Hex(payload));

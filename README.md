@@ -139,7 +139,7 @@ dotnet run --project src/QuickTranslate.App
 | 翻译       | `ITranslationProvider` 抽象：自定义 OpenAI SSE 流式 / Qwen-MT             |
 | 密钥       | Windows DPAPI CurrentUser + entropy.dat                           |
 | 日志       | Serilog 分级过滤（默认不记录原文）                                             |
-| 测试       | xUnit，约 580+ 用例；GitHub Actions CI（Windows 全量测试）                   |
+| 测试       | xUnit；GitHub Actions CI（Windows 测试，不含需外部 OCR 模型的集成测试）       |
 
 ### 解决方案结构
 
@@ -179,6 +179,21 @@ dotnet run --project src/QuickTranslate.App
 
 ```powershell
 .\scripts\download-v6-final.ps1
+```
+
+### 运行测试（Windows）
+
+CI 不下载大型 ONNX 资产，运行不依赖真实模型的测试：
+
+```powershell
+dotnet test QuickTranslate.sln -c Release --filter "FullyQualifiedName!~RealOcrRecognitionTests&Category!=Model"
+```
+
+下载模型后，在项目根目录另行运行模型完整性与真实识别测试。此时请清除 `QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS` 环境变量，以允许引擎读取开发目录中的模型：
+
+```powershell
+Remove-Item Env:QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS -ErrorAction SilentlyContinue
+dotnet test QuickTranslate.sln -c Release --filter "Category=Model|FullyQualifiedName~RealOcrRecognitionTests"
 ```
 
 </details>

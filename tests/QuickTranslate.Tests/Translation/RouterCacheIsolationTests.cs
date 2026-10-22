@@ -25,7 +25,11 @@ public class RouterCacheIsolationTests
 
     private sealed class Provider : ITranslationProvider
     {
-        public string Name => "TestProvider";
+        public Action? OnNameRead { get; set; }
+        public string Name
+        {
+            get { OnNameRead?.Invoke(); return "TestProvider"; }
+        }
         public int Calls { get; private set; }
         public Action? OnTranslate { get; set; }
 
@@ -99,6 +103,38 @@ public class RouterCacheIsolationTests
 
         var old = await router.TranslateWordAsync("hello", "zh-CN");
         Assert.False(old.FromCache);
+    }
+
+    [Fact]
+    public async Task SettingsChangedAndRestoredDuringProviderCall_DoNotCachePossiblyMixedResult()
+    {
+        var settings = new AppSettings { CustomLlmModel = "old-model" };
+        var provider = new Provider
+        {
+            OnTranslate = () =>
+            {
+                settings.CustomLlmModel = "temporary-model";
+                settings.CustomLlmModel = "old-model";
+            }
+        };
+        var router = Router(provider, settings);
+        await router.TranslateBlockAsync("hello", "zh-CN");
+        provider.OnTranslate = null;
+
+        Assert.False((await router.TranslateBlockAsync("hello", "zh-CN")).FromCache);
+    }
+
+    [Fact]
+    public async Task QualityChangedWhileCapturingIdentity_KeyAndRequestUseSameQuality()
+    {
+        var settings = new AppSettings();
+        var reads = 0;
+        var provider = new Provider
+        {
+            OnNameRead = () => { if (++reads == 2) settings.TranslationQuality = TranslationQuality.Best; }
+        };
+        var result = await Router(provider, settings).TranslateBlockAsync("hello", "zh-CN");
+        Assert.Contains(":Best:", result.TargetText);
     }
 
     [Fact]

@@ -15,6 +15,7 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
     private readonly IAppLifecycle _appLifecycle;
     private readonly ILogger<DefaultHotkeyBroker> _logger;
     private readonly IEscHook? _escHook;
+    private readonly SynchronizationContext? _eventContext;
 
     private HotkeyCombo? _wordCombo;
     private HotkeyCombo? _blockCombo;
@@ -42,6 +43,7 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
         _appLifecycle = appLifecycle;
         _logger = logger;
         _escHook = escHook;
+        _eventContext = SynchronizationContext.Current;
 
         _globalHotkeyService.HotkeyPressed += OnGlobalHotkeyPressed;
         _globalHotkeyService.KeyStateChanged += OnKeyStateChanged;
@@ -316,24 +318,24 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
                 return;
             }
 
-            bool shouldFire = false;
-            lock (_holdLock)
+            void DeliverHoldStart()
             {
-                if (holdToken.IsCancellationRequested)
-                    return;
-                if (_holdStarted)
-                    return;
-                // Still holding
-                _holdStarted = true;
-                shouldFire = true;
+                lock (_holdLock)
+                {
+                    if (holdToken.IsCancellationRequested || _disposed || _holdStarted) return;
+                    _holdStarted = true;
+                    var holdArgs = new HotkeyHoldEventArgs(HotkeyEventType.Block, HotkeyHoldPhase.Start, TimeSpan.FromMilliseconds(HoldThresholdMs), DateTimeOffset.Now, BlockId);
+                    BlockHoldStateChanged?.Invoke(this, holdArgs);
+                    _logger.LogDebug("Block hold started after {Threshold}ms", HoldThresholdMs);
+                }
             }
 
-            if (shouldFire)
-            {
-                var holdArgs = new HotkeyHoldEventArgs(HotkeyEventType.Block, HotkeyHoldPhase.Start, TimeSpan.FromMilliseconds(HoldThresholdMs), DateTimeOffset.Now, BlockId);
-                BlockHoldStateChanged?.Invoke(this, holdArgs);
-                _logger.LogDebug("Block hold started after {Threshold}ms", HoldThresholdMs);
-            }
+            // WPF delivers Escape on the owning context too: cancellation and HoldStart
+            // cannot overtake each other. Recheck the token when a queued start is delivered.
+            if (_eventContext != null)
+                _eventContext.Post(_ => DeliverHoldStart(), null);
+            else
+                DeliverHoldStart();
         }).ContinueWith(t =>
         {
             // Delay 取消已在内部处理；这里只兜订阅者回调等意外异常，避免 UnobservedTaskException
