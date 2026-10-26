@@ -15,6 +15,9 @@ public class SqliteTranslationCache : ITranslationL2Cache, IDisposable
     private readonly string _dbPath;
     private readonly SqliteConnection _conn;
     private readonly int _maxKeep;
+    private readonly long _softLimit;
+    // Only accessed under _gate (or during construction). Updates do not add rows.
+    private long _rowCount;
     private readonly ILogger<SqliteTranslationCache> _logger;
 
     // Microsoft.Data.Sqlite 不支持同一连接上的并发命令（重叠的 async 命令会抛
@@ -25,10 +28,16 @@ public class SqliteTranslationCache : ITranslationL2Cache, IDisposable
     public SqliteTranslationCache(string dbPath, int maxKeep, ILogger<SqliteTranslationCache> logger)
     {
         _dbPath = dbPath;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxKeep);
         _maxKeep = maxKeep;
+        _softLimit = (long)maxKeep + Math.Min(256, Math.Max(1, maxKeep / 10));
         _logger = logger;
 
-        var connectionString = $"Data Source={_dbPath};Pooling=True;Mode=ReadWriteCreate;Cache=Shared;";
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath, Pooling = true, Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Shared
+        }.ToString();
         _conn = new SqliteConnection(connectionString);
         _conn.Open();
 
@@ -47,6 +56,12 @@ public class SqliteTranslationCache : ITranslationL2Cache, IDisposable
         }
 
         EnsureTablesCreated();
+        _rowCount = CountRows();
+        if (_rowCount > _maxKeep)
+        {
+            try { _rowCount -= TrimCore(_maxKeep); }
+            catch (Exception ex) when (IsRecoverable(ex)) { LogFailure("CACHE_L2_TRIM", ex); }
+        }
     }
 
     private void EnsureTablesCreated()
@@ -66,7 +81,9 @@ public class SqliteTranslationCache : ITranslationL2Cache, IDisposable
                 hits INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS ix_translation_cache_last_hit ON translation_cache(last_hit_at);
-            CREATE INDEX IF NOT EXISTS ix_translation_cache_hits ON translation_cache(hits);";
+            CREATE INDEX IF NOT EXISTS ix_translation_cache_hits ON translation_cache(hits);
+            CREATE INDEX IF NOT EXISTS ix_translation_cache_eviction
+                ON translation_cache(hits DESC, last_hit_at DESC, id DESC);";
         cmd.ExecuteNonQuery();
     }
 
@@ -87,8 +104,24 @@ public class SqliteTranslationCache : ITranslationL2Cache, IDisposable
             var json = (string?)await cmd.ExecuteScalarAsync(ct);
             if (json == null) return null;
 
-            return JsonSerializer.Deserialize<TranslationResult>(json, JsonOpts)
-                ?? throw new InvalidOperationException("Bad cache JSON");
+            TranslationResult? result;
+            try { result = JsonSerializer.Deserialize<TranslationResult>(json, JsonOpts); }
+            catch (JsonException ex)
+            {
+                LogFailure("CACHE_L2_INVALID", ex);
+                result = null;
+            }
+            if (result != null && result.NormalizedKey == normalizedKey &&
+                result.SourceText != null && !string.IsNullOrWhiteSpace(result.TargetText)) return result;
+
+            // Invalid persisted data is a miss; do not let one poisoned entry break
+            // every subsequent translation for this key. Never log JSON or key text.
+            using var delete = _conn.CreateCommand();
+            delete.CommandText = "DELETE FROM translation_cache WHERE key_hash=$hash";
+            delete.Parameters.AddWithValue("$hash", hash);
+            _rowCount -= await delete.ExecuteNonQueryAsync(ct);
+            _logger.LogWarning("Invalid cache entry removed [ErrorCode=CACHE_L2_INVALID]");
+            return null;
         }
         finally
         {
@@ -96,10 +129,15 @@ public class SqliteTranslationCache : ITranslationL2Cache, IDisposable
         }
     }
 
+    /// <summary>
+    /// Successful writes retain at most maxKeep + min(256, max(1, maxKeep / 10))
+    /// rows. Crossing that limit trims to maxKeep. An update does not advance the
+    /// count. New insertion and maintenance are atomic: failed trimming skips the
+    /// new cache write, rather than permitting unbounded growth during failures.
+    /// </summary>
     public async Task AddAsync(string normalizedKey, TranslationResult result, CancellationToken ct = default)
     {
         if (result == null) return;
-
         var hash = TranslationCacheKey.Sha256Hex(normalizedKey);
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var json = JsonSerializer.Serialize(result, JsonOpts);
@@ -107,56 +145,90 @@ public class SqliteTranslationCache : ITranslationL2Cache, IDisposable
         await _gate.WaitAsync(ct);
         try
         {
-            using var cmd = _conn.CreateCommand();
-            cmd.CommandText = @"INSERT INTO translation_cache(key_hash,key_payload,src_lang,dst_lang,mode,result_json,created_at,last_hit_at,hits)
-          VALUES($hash,$payload,$src,$dst,$mode,$json,$t,$t,1)
-          ON CONFLICT(key_hash) DO UPDATE SET
-            result_json = excluded.result_json,
-            last_hit_at = excluded.last_hit_at,
-            hits = hits + 1;";
-            cmd.Parameters.AddWithValue("$hash", hash);
-            cmd.Parameters.AddWithValue("$payload", normalizedKey);
-
+            using var transaction = _conn.BeginTransaction();
+            using var command = _conn.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = @"INSERT INTO translation_cache(key_hash,key_payload,src_lang,dst_lang,mode,result_json,created_at,last_hit_at,hits)
+                VALUES($hash,$payload,$src,$dst,$mode,$json,$t,$t,1)
+                ON CONFLICT(key_hash) DO NOTHING";
+            command.Parameters.AddWithValue("$hash", hash);
+            command.Parameters.AddWithValue("$payload", normalizedKey);
             var parts = normalizedKey.Split('|', 4);
-            cmd.Parameters.AddWithValue("$src", parts.Length >= 1 ? parts[0] : "");
-            cmd.Parameters.AddWithValue("$dst", parts.Length >= 2 ? parts[1] : "");
-            cmd.Parameters.AddWithValue("$mode", parts.Length >= 3 && int.TryParse(parts[2], out var m) ? m : 0);
-            cmd.Parameters.AddWithValue("$json", json);
-            cmd.Parameters.AddWithValue("$t", now);
+            command.Parameters.AddWithValue("$src", parts.Length >= 1 ? parts[0] : "");
+            command.Parameters.AddWithValue("$dst", parts.Length >= 2 ? parts[1] : "");
+            command.Parameters.AddWithValue("$mode", parts.Length >= 3 && int.TryParse(parts[2], out var mode) ? mode : 0);
+            command.Parameters.AddWithValue("$json", json);
+            command.Parameters.AddWithValue("$t", now);
+            var inserted = await command.ExecuteNonQueryAsync(ct);
+            if (inserted == 0)
+            {
+                command.CommandText = @"UPDATE translation_cache SET result_json=$json,
+                    last_hit_at=$t,hits=hits+1 WHERE key_hash=$hash";
+                await command.ExecuteNonQueryAsync(ct);
+            }
 
-            await cmd.ExecuteNonQueryAsync(ct);
+            var deleted = 0;
+            if (_rowCount + inserted > _softLimit)
+            {
+                ct.ThrowIfCancellationRequested();
+                try { deleted = TrimCore(_maxKeep, transaction); }
+                catch (Exception ex) when (IsRecoverable(ex))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    LogFailure("CACHE_L2_TRIM", ex);
+                    return; // transaction disposal rolls back the new insertion too
+                }
+            }
+            ct.ThrowIfCancellationRequested();
+            transaction.Commit();
+            _rowCount += inserted - deleted;
         }
-        finally
-        {
-            _gate.Release();
-        }
+        finally { _gate.Release(); }
     }
 
     public async Task<int> TrimAsync(int keep, CancellationToken ct = default)
     {
         if (keep <= 0) keep = _maxKeep;
-
         await _gate.WaitAsync(ct);
         try
         {
-            using var cmd = _conn.CreateCommand();
-            cmd.CommandText = @"DELETE FROM translation_cache WHERE id NOT IN (
-            SELECT id FROM translation_cache ORDER BY hits DESC, last_hit_at DESC LIMIT $keep)";
-            cmd.Parameters.AddWithValue("$keep", keep);
-            var deleted = await cmd.ExecuteNonQueryAsync(ct);
-
-            if (deleted > 0)
-            {
-                _logger.LogInformation("Trimmed L2 cache: removed {Count} rows, keeping top {Keep}", deleted, keep);
-            }
-
+            ct.ThrowIfCancellationRequested();
+            var deleted = TrimCore(keep);
+            _rowCount -= deleted;
             return deleted;
         }
-        finally
+        catch (Exception ex) when (IsRecoverable(ex))
         {
-            _gate.Release();
+            ct.ThrowIfCancellationRequested();
+            LogFailure("CACHE_L2_TRIM", ex);
+            return 0;
         }
+        finally { _gate.Release(); }
     }
+
+    private long CountRows()
+    {
+        using var command = _conn.CreateCommand();
+        command.CommandText = "SELECT count(*) FROM translation_cache";
+        return (long)command.ExecuteScalar()!;
+    }
+
+    private int TrimCore(int keep, SqliteTransaction? transaction = null)
+    {
+        using var command = _conn.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = @"DELETE FROM translation_cache WHERE id NOT IN (
+            SELECT id FROM translation_cache ORDER BY hits DESC,last_hit_at DESC,id DESC LIMIT $keep)";
+        command.Parameters.AddWithValue("$keep", keep);
+        return command.ExecuteNonQuery();
+    }
+
+    private void LogFailure(string code, Exception exception)
+        => _logger.LogWarning("Optional cache maintenance skipped [ErrorCode={ErrorCode}] [ExceptionType={ExceptionType}]",
+            code, exception.GetType().Name);
+
+    private static bool IsRecoverable(Exception exception) => exception is
+        SqliteException or IOException or UnauthorizedAccessException or InvalidOperationException;
 
     public void Dispose()
     {

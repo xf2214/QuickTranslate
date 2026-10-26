@@ -134,7 +134,7 @@ public class ModelConnectionTestTests
     }
 
     [Fact]
-    public async Task ServerErrorPayload_ReturnsServerMessage()
+    public async Task ServerErrorPayload_ReturnsSafeClassification()
     {
         var handler = new LambdaHandler((_, _) =>
             Task.FromResult(JsonResponse("{\"error\":{\"message\":\"model not found\"}}")));
@@ -143,7 +143,8 @@ public class ModelConnectionTestTests
             .TestConnectionAsync("https://mock.test.local/v1", "ghost-model", "sk-test");
 
         Assert.False(result.Success);
-        Assert.Contains("model not found", result.Message);
+        Assert.Contains("响应异常", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("model not found", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]

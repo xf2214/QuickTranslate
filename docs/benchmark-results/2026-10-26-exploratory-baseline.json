@@ -1,0 +1,58 @@
+{
+  "timestampUtc": "2026-10-26T05:48:13.3782175+00:00",
+  "runtime": ".NET 10.0.11",
+  "os": "Ubuntu 24.04.3 LTS",
+  "architecture": "X64",
+  "processors": 8,
+  "infrastructureVersion": "0.9.0\u002B4859c4527bda0d582b47a3d0503ded40feb7c9e1",
+  "dictionaryBytes": 30070636,
+  "dictionarySha256": "918709a3067871f0a8dbf6650afcce2531ef514a40daa822144c87a1d2d00770",
+  "dictionaryEntries": 500000,
+  "tensorShape": [
+    1,
+    320,
+    18710
+  ],
+  "tensorBytes": 23948800,
+  "metrics": [
+    {
+      "Name": "dictionary_load_warm_filesystem",
+      "Samples": 5,
+      "OperationsPerSample": 1,
+      "P50MillisecondsPerOperation": 588.2971,
+      "P95MillisecondsPerOperation": 1617.9966,
+      "AllocatedBytesPerOperation": 224585843.2
+    },
+    {
+      "Name": "dictionary_lookup_with_result",
+      "Samples": 25,
+      "OperationsPerSample": 10000,
+      "P50MillisecondsPerOperation": 0.00019779,
+      "P95MillisecondsPerOperation": 0.00023043999999999997,
+      "AllocatedBytesPerOperation": 212.0192
+    },
+    {
+      "Name": "ctc_copy_then_decode",
+      "Samples": 31,
+      "OperationsPerSample": 1,
+      "P50MillisecondsPerOperation": 25.16,
+      "P95MillisecondsPerOperation": 39.7818,
+      "AllocatedBytesPerOperation": 23950996.129032258
+    },
+    {
+      "Name": "ctc_direct_tensor_decode",
+      "Samples": 31,
+      "OperationsPerSample": 1,
+      "P50MillisecondsPerOperation": 14.1496,
+      "P95MillisecondsPerOperation": 20.1884,
+      "AllocatedBytesPerOperation": 1248
+    }
+  ],
+  "notes": [
+    "CPU microbenchmarks only: no ONNX inference, screen capture, UI or network.",
+    "CTC comparison holds decoding constant and isolates the removed output copy.",
+    "Dictionary load follows a file hash and includes parsing/index construction, not cold disk I/O.",
+    "P50/P95 use nearest-rank percentiles; bytes are managed allocations on the executing thread.",
+    "No measurements imply an end-to-end OCR speedup or recognition-accuracy change."
+  ]
+}

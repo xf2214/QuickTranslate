@@ -162,18 +162,19 @@ public class EcdictLiteDictionaryTests : IDisposable
     //  4. packed magic / version / count 异常时被跳过（不 throw，保证应用可用）
     // ============================================================
     [Fact]
-    public void CorruptedPacked_GracefulSkip_NoEntries()
+    public void CorruptedPacked_GracefulSkip_OverlayRemainsAvailable()
     {
         var appData = MakeAppData(out _);
         var packedPath = Path.Combine(appData.GetAppDataDirectory(), "ecdict-lite.packed");
         File.WriteAllBytes(packedPath, new byte[] { 0xBA, 0xAD, 0xF0, 0x0D });
+        File.WriteAllText(Path.Combine(appData.GetAppDataDirectory(), "custom-dictionary.txt"),
+            "unique-corrupt-overlay-qt,有效自定义词\n");
 
         var dict = new EcdictLiteDictionary(appData, NullLogger<EcdictLiteDictionary>.Instance);
 
-        // 损坏的 packed 被跳过（不抛异常），无 overlay、无 stub → 词典为空、查不到
-        _ = dict.Count;
-        Assert.Equal(0, dict.Count);
-        Assert.False(dict.TryLookup("translate", "zh", out _));
+        // 损坏候选被跳过，随包词典可回退，用户 overlay 仍独立可用。
+        Assert.True(dict.TryLookup("unique-corrupt-overlay-qt", "zh", out var result));
+        Assert.Equal("有效自定义词", result.TargetText);
     }
 
     [Fact]

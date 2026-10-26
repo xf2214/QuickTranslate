@@ -30,7 +30,7 @@ public class RouterL2CacheTests
         Options.Create(new AppSettings { TranslationQuality = TranslationQuality.Fast });
 
     [Fact]
-    public async Task Case1_L1Miss_L2Hit_DoesNotCallProvider()
+    public async Task Case1_L1AndDictionaryMiss_L2Hit_DoesNotCallProvider()
     {
         var l1Cache = Substitute.For<ITranslationCache>();
         var l2Cache = Substitute.For<ITranslationL2Cache>();
@@ -59,7 +59,6 @@ public class RouterL2CacheTests
         Assert.True(result.FromCache);
         Assert.Equal("你好L2", result.TargetText);
 
-        _ = dict.DidNotReceiveWithAnyArgs().TryLookup(default!, default!, out _);
         _ = provider.DidNotReceiveWithAnyArgs().TranslateAsync(default!, default);
         l1Cache.Received(1).Add(key, Arg.Is<TranslationResult>(r => r.TargetText == "你好L2"));
     }

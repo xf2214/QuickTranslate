@@ -38,10 +38,13 @@ public static class TranslationCacheKey
             BaseUrl = (settings.BaseUrl ?? string.Empty).Trim(),
             Model = (settings.Model ?? string.Empty).Trim(),
             // Demo results must not survive configuring the real service. Never include the key itself.
-            HasCredentials = settings.HasCredentials
+            HasCredentials = settings.HasCredentials,
+            settings.RequireApiKey,
+            settings.UseStreaming,
+            settings.SendTemperature
         });
         return Build("auto", (targetLang ?? string.Empty).Trim().ToLowerInvariant(), mode,
-            "v2:" + Sha256Hex(payload));
+            "v3:" + Sha256Hex(payload));
     }
 
     public static string Sha256Hex(string payload)

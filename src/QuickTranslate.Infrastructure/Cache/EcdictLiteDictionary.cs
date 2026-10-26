@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Frozen;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -11,7 +12,7 @@ namespace QuickTranslate.Infrastructure.Cache;
 /// ECDICT-lite 本地英汉词典实现。
 /// 查找顺序（override chain）：
 ///   1. 用户自定义 overlay 词典（AppData 目录下 custom-dictionary.txt，优先级最高，缺词时用户自行追加）
-///   2. 内置压缩二进制 ecdict-lite.packed（高频 3~5 万词，按词频精选）
+///   2. 内置二进制 ecdict-lite.packed（当前随包资产为 50 万条）
 /// 无任何内置兜底词表：packed 缺失时本地词典即为空，未命中词交给在线 Provider。
 /// 仅当 targetLang 为中文（zh / zh-CN / zh-CN 变体）时才返回 true；反向 zh→en 不处理，走在线 Provider。
 /// </summary>
@@ -20,6 +21,11 @@ public class EcdictLiteDictionary : ILocalDictionary
     private readonly IAppDataProvider _appData;
     private readonly ILogger<EcdictLiteDictionary> _logger;
     private readonly Lazy<DictionarySnapshot> _snapshot;
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
+    private const int MaxWordBytes = 1024;
+    private const int MaxPhoneticBytes = 256;
+    private const int MaxTranslationBytes = 64 * 1024;
+    private const long MaxPackedBytes = 128L * 1024 * 1024;
 
     public int Count => _snapshot.Value.TotalCount;
 
@@ -68,6 +74,14 @@ public class EcdictLiteDictionary : ILocalDictionary
         return false;
     }
 
+    public bool ContainsWord(string word)
+    {
+        var key = NormalizeKey(word);
+        if (key.Length == 0) return false;
+        var snapshot = _snapshot.Value;
+        return snapshot.Overlay.ContainsKey(key) || snapshot.Main.ContainsKey(key);
+    }
+
     // ============================================================
     // 内部实现
     // ============================================================
@@ -79,7 +93,8 @@ public class EcdictLiteDictionary : ILocalDictionary
     {
         if (string.IsNullOrWhiteSpace(lang)) return false;
         var l = lang.Trim().ToLowerInvariant();
-        return l.StartsWith("zh", StringComparison.Ordinal) || l == "chinese" || l == "cn" || l == "zho";
+        return l == "zh" || l.StartsWith("zh-", StringComparison.Ordinal) ||
+               l.StartsWith("zh_", StringComparison.Ordinal) || l == "chinese" || l == "cn" || l == "zho";
     }
 
     private static TranslationResult BuildResult(
@@ -109,22 +124,23 @@ public class EcdictLiteDictionary : ILocalDictionary
         var main = new Dictionary<string, Entry>(StringComparer.Ordinal);
         var overlay = new Dictionary<string, Entry>(StringComparer.Ordinal);
 
-        // --- 主词典：按"嵌入资源 → 程序基目录/assets/dictionaries → AppData"顺序查找第一个存在的 packed 文件 ---
-        var packedPath = ResolvePackedPath();
-        int mainCount = 0;
-        if (packedPath != null && File.Exists(packedPath))
+        // A corrupt override must not suppress a healthy deployed dictionary. Each
+        // candidate is built privately and published only after complete validation.
+        foreach (var packedPath in ResolvePackedPaths().Distinct(StringComparer.OrdinalIgnoreCase))
         {
+            if (!File.Exists(packedPath)) continue;
             try
             {
-                mainCount = LoadPacked(packedPath, main);
-                _logger.LogInformation("ECDICT-lite loaded: {Count} entries from {Path}", mainCount, packedPath);
+                main = LoadPacked(packedPath);
+                _logger.LogInformation("ECDICT-lite loaded: {Count} entries", main.Count);
+                break;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or DecoderFallbackException)
             {
-                _logger.LogWarning(ex, "ECDICT-lite packed 损坏或不可读，跳过：{Path}", packedPath);
+                _logger.LogWarning("Dictionary candidate skipped [ErrorCode=DICTIONARY_PACKED_INVALID] [ExceptionType={ExceptionType}]", ex.GetType().Name);
             }
         }
-        else
+        if (main.Count == 0)
         {
             _logger.LogInformation("ECDICT-lite packed 文件未找到，本地词典为空（仅剩用户 overlay）");
         }
@@ -141,32 +157,23 @@ public class EcdictLiteDictionary : ILocalDictionary
             overlay.ToFrozenDictionary(StringComparer.Ordinal));
     }
 
-    private string? ResolvePackedPath()
+    private IEnumerable<string> ResolvePackedPaths()
     {
         const string Fn = "ecdict-lite.packed";
-        var candidates = new List<string>();
-
         // 1. AppData 目录（用户 / 测试放这里 → 优先级最高，可覆盖随包版）
-        candidates.Add(Path.Combine(_appData.GetAppDataDirectory(), Fn));
+        yield return Path.Combine(_appData.GetAppDataDirectory(), Fn);
 
         // 2. 随包部署（发布后 /assets/dictionaries 或 /dictionaries 子目录）
         var baseDir = AppContext.BaseDirectory;
-        candidates.Add(Path.Combine(baseDir, "assets", "dictionaries", Fn));
-        candidates.Add(Path.Combine(baseDir, "dictionaries", Fn));
+        yield return Path.Combine(baseDir, "assets", "dictionaries", Fn);
+        yield return Path.Combine(baseDir, "dictionaries", Fn);
 
         // 3. 仓库源代码树（开发阶段 fallback）
         var repoRoot = TryFindRepoRoot();
         if (repoRoot != null)
         {
-            candidates.Add(Path.Combine(repoRoot, "assets", "dictionaries", Fn));
+            yield return Path.Combine(repoRoot, "assets", "dictionaries", Fn);
         }
-
-        foreach (var c in candidates)
-        {
-            if (File.Exists(c)) return c;
-        }
-
-        return null;
     }
 
     private static string? TryFindRepoRoot()
@@ -181,76 +188,55 @@ public class EcdictLiteDictionary : ILocalDictionary
         return null;
     }
 
-    private static int LoadPacked(string path, Dictionary<string, Entry> dest)
+    private static Dictionary<string, Entry> LoadPacked(string path)
     {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        using var br = new BinaryReader(fs, Encoding.UTF8, leaveOpen: false);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 64 * 1024, FileOptions.SequentialScan);
+        if (stream.Length > MaxPackedBytes) throw new InvalidDataException("Packed file exceeds size limit");
+        using var reader = new BinaryReader(stream, StrictUtf8, leaveOpen: false);
 
-        // 读取头 4 字节；有两种合法格式：
-        //   Format A (8-byte magic, 测试辅助 WriteMiniPacked) : "ECDICT\0\0"
-        //       bytes on disk: [0x45,0x43,0x44,0x49, 0x43,0x54,0x00,0x00]
-        //   Format B (4-byte magic, download-ecdict-lite.ps1 v1) : LE uint32 0x45434431
-        //       bytes on disk: [0x31,0x44,0x43,0x45]   (= ASCII "1DCE" as LE)
-        var head4 = br.ReadBytes(4);
-        if (head4.Length < 4) throw new InvalidDataException("Packed file too small");
+        // Keep both deployed v1 formats: 4-byte "1DCE" and 8-byte "ECDICT\0\0".
+        var magic = reader.ReadUInt32();
+        if (magic != 0x45434431 && (magic != 0x49444345 || reader.ReadUInt32() != 0x00005443))
+            throw new InvalidDataException("Bad packed magic");
+        if (reader.ReadInt32() != 1) throw new InvalidDataException("Unsupported packed version");
+        var count = reader.ReadInt32();
+        // Every record has three lengths plus nonempty word/translation payloads.
+        // Validate against the actual file before using an external count as capacity.
+        if (count <= 0 || count > 5_000_000 || (long)count * 14 > stream.Length - stream.Position)
+            throw new InvalidDataException("Invalid packed entry count");
 
-        bool isFormatB = head4[0] == 0x31 && head4[1] == 0x44 &&
-                         head4[2] == 0x43 && head4[3] == 0x45;  // "1DCE" LE
-
-        if (!isFormatB)
+        var entries = new Dictionary<string, Entry>(count, StringComparer.Ordinal);
+        var buffer = ArrayPool<byte>.Shared.Rent(MaxTranslationBytes);
+        try
         {
-            // Format A：继续读剩下 4 字节，合计 8 字节比较
-            var tail4 = br.ReadBytes(4);
-            var expected = new byte[] { (byte)'E', (byte)'C', (byte)'D', (byte)'I', (byte)'C', (byte)'T', 0, 0 };
-            if (!head4.Concat(tail4).SequenceEqual(expected))
+            for (var i = 0; i < count; i++)
             {
-                throw new InvalidDataException("Bad packed magic (not an ECDICT packed file)");
+                var word = ReadField(reader, buffer, MaxWordBytes, allowEmpty: false);
+                var phonetic = ReadField(reader, buffer, MaxPhoneticBytes, allowEmpty: true);
+                var translation = ReadField(reader, buffer, MaxTranslationBytes, allowEmpty: false);
+                var key = NormalizeKey(word);
+                if (key.Length == 0 || string.IsNullOrWhiteSpace(translation)) continue;
+                entries.TryAdd(key, new Entry(translation, string.IsNullOrWhiteSpace(phonetic) ? null : phonetic));
             }
+            if (stream.Position != stream.Length) throw new InvalidDataException("Trailing packed data");
+            return entries;
         }
-
-        var version = br.ReadInt32();
-        if (version < 1)
+        finally
         {
-            throw new InvalidDataException($"Unsupported packed version: {version}");
+            ArrayPool<byte>.Shared.Return(buffer);
         }
+    }
 
-        var count = br.ReadInt32();
-        if (count <= 0 || count > 5_000_000)
-        {
-            throw new InvalidDataException($"Invalid count in packed: {count}");
-        }
-
-        var utf8 = Encoding.UTF8;
-        int loaded = 0;
-        for (int i = 0; i < count; i++)
-        {
-            int wLen = br.ReadInt32();
-            if (wLen <= 0 || wLen > 1024) break;
-            var wBytes = br.ReadBytes(wLen);
-
-            int pLen = br.ReadInt32();
-            byte[] pBytes = pLen > 0 ? br.ReadBytes(pLen) : Array.Empty<byte>();
-            if (pLen < 0 || pLen > 256) break;
-
-            int tLen = br.ReadInt32();
-            if (tLen <= 0 || tLen > 64 * 1024) break;
-            var tBytes = br.ReadBytes(tLen);
-
-            var key = NormalizeKey(utf8.GetString(wBytes));
-            if (key.Length == 0) continue;
-
-            var translation = utf8.GetString(tBytes);
-            var phonetic = pBytes.Length > 0 ? utf8.GetString(pBytes) : null;
-
-            // 同名重复：保留第一个（通常是更常用的，也避免重复 Key 抛异常）
-            if (!dest.ContainsKey(key))
-            {
-                dest[key] = new Entry(translation, phonetic);
-                loaded++;
-            }
-        }
-
-        return loaded;
+    private static string ReadField(BinaryReader reader, byte[] buffer, int maximumBytes, bool allowEmpty)
+    {
+        var length = reader.ReadInt32();
+        if (length < (allowEmpty ? 0 : 1) || length > maximumBytes)
+            throw new InvalidDataException("Invalid packed field length");
+        if (length == 0) return string.Empty;
+        var bytes = buffer.AsSpan(0, length);
+        reader.BaseStream.ReadExactly(bytes);
+        return StrictUtf8.GetString(bytes);
     }
 
     private int LoadOverlay(Dictionary<string, Entry> dest)

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -106,7 +107,9 @@ public class ModelDownloader : IModelDownloader
         return map;
     }
 
-    public bool AllModelFilesExist() => GetFileExistsMap().All(kv => kv.Value);
+    public bool AllModelFilesExist() => GetFileExistsMap()
+        .Where(kv => !OptionalFiles.Contains(kv.Key))
+        .All(kv => kv.Value);
 
     public async Task<bool> DownloadAsync(IProgress<ModelDownloadProgress>? progress = null, CancellationToken ct = default)
     {
@@ -118,6 +121,7 @@ public class ModelDownloader : IModelDownloader
             var pending = DefaultUrls.Keys.Where(n => !File.Exists(Path.Combine(TargetDirectory, n))).ToList();
             if (pending.Count == 0)
             {
+                TryCopyVersionJson();
                 progress?.Report(new ModelDownloadProgress("verify", DefaultUrls.Count, DefaultUrls.Count, 0, null, 100.0));
                 return VerifySha256();
             }
@@ -188,7 +192,7 @@ public class ModelDownloader : IModelDownloader
             TryCopyVersionJson();
 
             progress?.Report(new ModelDownloadProgress("verify", DefaultUrls.Count, DefaultUrls.Count, 0, null, 100.0));
-            return allOk && AllModelFilesExist();
+            return allOk && VerifySha256();
         }
         catch (OperationCanceledException)
         {
@@ -314,7 +318,6 @@ public class ModelDownloader : IModelDownloader
     }
 
     private static readonly Regex YmlListItem = new(@"^\s*-\s+(.+?)\s*$", RegexOptions.Compiled);
-    private static readonly Regex YmlTopKey = new(@"^[A-Za-z_]", RegexOptions.Compiled);
 
     /// <summary>从 rec zip 的 inference.yml 提取 character_dict 生成 ppocr_keys.txt（UTF-8 无 BOM，每行一字符）。</summary>
     private bool GenerateDictFromZipYml(string zipPath, string targetPath)
@@ -323,34 +326,57 @@ public class ModelDownloader : IModelDownloader
         {
             using var zip = ZipFile.OpenRead(zipPath);
             var ymlEntry = zip.Entries.FirstOrDefault(e =>
+                e.Name.Equals("inference.yml", StringComparison.OrdinalIgnoreCase) ||
+                e.Name.Equals("inference.yaml", StringComparison.OrdinalIgnoreCase))
+                ?? zip.Entries.FirstOrDefault(e =>
                 e.Name.EndsWith(".yml", StringComparison.OrdinalIgnoreCase) || e.Name.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase));
             if (ymlEntry == null) return false;
 
             var sb = new StringBuilder();
             bool inDict = false;
+            bool inPostProcess = false;
+            int dictionaryIndent = 0;
             using var reader = new StreamReader(ymlEntry.Open(), Encoding.UTF8);
             string? line;
             while ((line = reader.ReadLine()) != null)
             {
-                if (YmlTopKey.IsMatch(line))
+                var trimmed = line.TrimStart(' ');
+                int indent = line.Length - trimmed.Length;
+                if (trimmed.Length == 0 || trimmed.StartsWith('#')) continue;
+                if (!inDict)
                 {
-                    inDict = line.TrimStart().StartsWith("character_dict:", StringComparison.Ordinal);
+                    if (indent == 0) inPostProcess = trimmed == "PostProcess:";
+                    if (trimmed == "character_dict:" && (indent == 0 || inPostProcess))
+                    {
+                        inDict = true;
+                        dictionaryIndent = indent;
+                    }
                     continue;
                 }
 
-                if (!inDict) continue;
                 var m = YmlListItem.Match(line);
-                if (!m.Success) continue;
+                // Paddle exports use both indentation-less and indented YAML
+                // sequences. A sibling key or next section ends this dictionary.
+                if (!m.Success || indent < dictionaryIndent)
+                {
+                    if (indent <= dictionaryIndent) break;
+                    throw new InvalidDataException("Unsupported character dictionary scalar layout");
+                }
 
                 var v = m.Groups[1].Value;
                 if (v.Length >= 2 && v.StartsWith('\'') && v.EndsWith('\''))
                 {
-                    v = v.Substring(1, v.Length - 2).Replace("''", "'");
+                    v = v.Substring(1, v.Length - 2).Replace("''", "'", StringComparison.Ordinal);
                 }
                 else if (v.Length >= 2 && v.StartsWith('"') && v.EndsWith('"'))
                 {
-                    v = v.Substring(1, v.Length - 2);
+                    // Paddle's quoted scalars use JSON-compatible escaping.
+                    // Decode escapes instead of copying their literal backslashes.
+                    v = JsonSerializer.Deserialize<string>(v)
+                        ?? throw new InvalidDataException("Null dictionary scalar");
                 }
+                if (v.Contains('\r') || v.Contains('\n'))
+                    throw new InvalidDataException("Dictionary labels cannot contain line breaks");
                 sb.Append(v).Append('\n');
             }
 
@@ -379,12 +405,17 @@ public class ModelDownloader : IModelDownloader
             var dest = Path.Combine(TargetDirectory, "version.json");
             if (File.Exists(dest)) return;
 
-            var candidates = new[]
+            var candidates = new List<string>
             {
                 Path.Combine(AppContext.BaseDirectory, "assets", "models", "version.json"),
-                Path.Combine(AppContext.BaseDirectory, "models", "version.json"),
-                @"E:\翻译\assets\models\version.json"
+                Path.Combine(AppContext.BaseDirectory, "models", "version.json")
             };
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            for (var depth = 0; directory != null && depth < 8; depth++, directory = directory.Parent)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "QuickTranslate.sln")))
+                    candidates.Add(Path.Combine(directory.FullName, "assets", "models", "version.json"));
+            }
             var src = candidates.FirstOrDefault(File.Exists);
             if (src != null)
             {
@@ -402,28 +433,59 @@ public class ModelDownloader : IModelDownloader
         var versionJson = Path.Combine(TargetDirectory, "version.json");
         if (!File.Exists(versionJson))
         {
-            _logger.LogWarning("version.json missing under {Dir}, skipping strict sha256 check", TargetDirectory);
-            return AllModelFilesExist();
+            _logger.LogWarning("Model integrity check failed: missing manifest [ErrorCode=MODEL_MANIFEST_MISSING]");
+            return false;
         }
 
         try
         {
-            using var sha = SHA256.Create();
-            var ok = true;
-            foreach (var name in DefaultUrls.Keys)
+            using var manifest = JsonDocument.Parse(File.ReadAllText(versionJson));
+            var root = manifest.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("schemaVersion", out var schema) ||
+                !schema.TryGetInt32(out var version) || version != 1)
+                throw new InvalidDataException("Unsupported model manifest schema");
+
+            foreach (var (key, name, format, optional) in new[]
             {
-                var path = Path.Combine(TargetDirectory, name);
-                if (!File.Exists(path)) { ok = false; continue; }
+                ("det", "det", "onnx", false), ("rec", "rec", "onnx", false),
+                ("keys", "ppocr_keys", "txt", false), ("cls", "cls", "onnx", true)
+            })
+            {
+                // Filenames are fixed by the engine contract, never taken from untrusted paths.
+                var filename = name + "." + format;
+                var path = Path.Combine(TargetDirectory, filename);
+                if (!File.Exists(path))
+                {
+                    if (optional) continue;
+                    _logger.LogWarning("Required model file missing: {File} [ErrorCode=MODEL_FILE_MISSING]", filename);
+                    return false;
+                }
+                if (!root.TryGetProperty(key, out var asset) || asset.ValueKind != JsonValueKind.Object)
+                {
+                    if (optional) continue;
+                    throw new InvalidDataException("Required asset missing from manifest");
+                }
+                var expected = asset.TryGetProperty("sha256", out var shaNode) ? shaNode.GetString() : null;
+                if (string.IsNullOrWhiteSpace(expected) && optional) continue;
+                if (expected is null || expected.Length != 64 || !expected.All(Uri.IsHexDigit) ||
+                    !asset.TryGetProperty("name", out var nameNode) || nameNode.GetString() != name ||
+                    !asset.TryGetProperty("format", out var formatNode) || formatNode.GetString() != format)
+                    throw new InvalidDataException("Invalid model asset identity or checksum");
                 using var s = File.OpenRead(path);
-                var hash = Convert.ToHexString(sha.ComputeHash(s)).ToLowerInvariant();
-                _logger.LogInformation("SHA256 {File} = {Hash}", name, hash);
+                var hash = Convert.ToHexString(SHA256.HashData(s));
+                if (!string.Equals(hash, expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogWarning("Model checksum mismatch: {File} [ErrorCode=MODEL_HASH_MISMATCH]", filename);
+                    return false;
+                }
             }
-            return ok;
+            return true;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "SHA256 verification error");
-            return AllModelFilesExist();
+            _logger.LogWarning("Model integrity check failed: {ErrorType} [ErrorCode=MODEL_VERIFY_FAIL]", ex.GetType().Name);
+            return false;
         }
     }
 }

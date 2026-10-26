@@ -1,5 +1,4 @@
 using System.Net.Http.Headers;
-using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -187,140 +186,27 @@ public class QwenMtTranslationProvider : ITranslationProvider
     }
 
     internal async IAsyncEnumerable<TranslationChunk> RealHttpTranslateAsync(
-        TranslationRequest req,
-        [EnumeratorCancellation] CancellationToken ct)
+        TranslationRequest req, [EnumeratorCancellation] CancellationToken ct)
     {
         var opts = _opts.Value;
-
-        HttpResponseMessage response;
-        try
+        var apiKey = EffectiveApiKey;
+        var model = opts.ModelMap.TryGetValue(req.Quality, out var selected) ? selected : opts.ModelMap[TranslationQuality.Fast];
+        var body = new QwenMtRequestBody
         {
-            var modelName = opts.ModelMap.TryGetValue(req.Quality, out var m) ? m : opts.ModelMap[TranslationQuality.Fast];
-
-            // 官方协议：messages 仅一条 user 消息 + translation_options 指定语种；
-            // source_lang/target_lang 要求英文全称（Chinese/English 等），把 zh-CN/en 等映射过去。
-            var body = new QwenMtRequestBody
+            Model = model,
+            Messages = new List<QwenMtMessage> { new() { Role = "user", Content = req.Text } },
+            TranslationOptions = new QwenMtTranslationOptions
             {
-                Model = modelName,
-                Messages = new List<QwenMtMessage> { new() { Role = "user", Content = req.Text } },
-                TranslationOptions = new QwenMtTranslationOptions
-                {
-                    SourceLang = MapToApiLanguage(req.SourceLanguage),
-                    TargetLang = MapToApiLanguage(req.TargetLanguage),
-                },
-            };
-
-            // 统一非流式：qwen-mt-plus/turbo 的流式每帧返回“截至目前的全文”（非增量），
-            // 按增量拼接会重复成倍膨胀；且 Word/Block 协调器都等完整结果再弹窗，
-            // 流式无体验收益，非流式更简单且对所有模型都正确。
-            var json = JsonSerializer.Serialize(body);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            using var request = new HttpRequestMessage(HttpMethod.Post, BuildTranslateUrl(opts));
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", EffectiveApiKey);
-            request.Content = content;
-
-            response = await SendTranslateRequestAsync(request, ct).ConfigureAwait(false);
-        }
-        catch (TranslationException)
-        {
-            throw;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (JsonException je)
-        {
-            throw TranslationException.InvalidResponse(inner: je);
-        }
-        catch (Exception ex)
-        {
-            throw new TranslationException(TranslationErrorCode.Unknown, ex.Message, ex);
-        }
-
-        try
-        {
-            var raw = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            OpenAiChatResponse? frame;
-            try
-            {
-                frame = JsonSerializer.Deserialize<OpenAiChatResponse>(raw);
+                SourceLang = MapToApiLanguage(req.SourceLanguage),
+                TargetLang = MapToApiLanguage(req.TargetLanguage)
             }
-            catch (JsonException je)
-            {
-                throw TranslationException.InvalidResponse("非 JSON 响应: " + Truncate(raw, 200), je);
-            }
-
-            if (frame == null)
-                throw TranslationException.InvalidResponse("响应为空");
-
-            if (frame.Error?.Message is { } errMsg)
-                throw TranslationException.InvalidResponse(errMsg);
-
-            var text = frame.Choices?.FirstOrDefault()?.Message?.Content;
-            if (string.IsNullOrWhiteSpace(text))
-                throw TranslationException.InvalidResponse("翻译结果为空");
-
-            yield return new TranslationChunk(TextDelta: text, IsFinal: true, FullTranslation: text);
-        }
-        finally
-        {
-            response.Dispose();
-        }
-    }
-
-    private async Task<HttpResponseMessage> SendTranslateRequestAsync(
-        HttpRequestMessage req,
-        CancellationToken ct)
-    {
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(_opts.Value.Timeout);
-
-        try
-        {
-            var response = await _httpClient.SendAsync(
-                req,
-                HttpCompletionOption.ResponseHeadersRead,
-                cts.Token).ConfigureAwait(false);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                string errorBody = "";
-                try
-                {
-                    errorBody = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    // Best-effort read — keep fallback to empty body semantics, but log diagnostic.
-                    _logger.LogDebug(ex, "[QwenMt.SendTranslate] Failed to read error body [ErrorCode=QWEN_ERROR_BODY_READ_FAIL] {ExType}: {Message}", ex.GetType().Name, ex.Message);
-                }
-
-                response.Dispose();
-                throw TranslationException.FromHttpStatus((int)response.StatusCode, Truncate(errorBody, 300));
-            }
-
-            return response;
-        }
-        catch (OperationCanceledException oce) when (!ct.IsCancellationRequested)
-        {
-            throw TranslationException.Timeout(inner: oce);
-        }
-        catch (HttpRequestException hre) when (hre.InnerException is SocketException)
-        {
-            throw TranslationException.NetworkUnavailable(inner: hre);
-        }
-        catch (HttpRequestException hre)
-        {
-            throw new TranslationException(TranslationErrorCode.Unknown, hre.Message, hre);
-        }
-    }
-
-    private static Uri BuildTranslateUrl(QwenMtOptions opts)
-    {
-        var baseUri = opts.BaseAddress.EndsWith('/') ? opts.BaseAddress : opts.BaseAddress + "/";
-        return new Uri(new Uri(baseUri), "chat/completions");
+        };
+        // Qwen-MT keeps its dedicated, non-streaming protocol.
+        using var request = new HttpRequestMessage(HttpMethod.Post, ChatCompletionsEndpoint.Normalize(opts.BaseAddress));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+        await foreach (var chunk in TranslationHttp.SendAsync(_httpClient, request, opts.Timeout, ct).ConfigureAwait(false))
+            yield return chunk;
     }
 
     /// <summary>
@@ -351,6 +237,4 @@ public class QwenMtTranslationProvider : ITranslationProvider
         return lang; // 已是英文全称（如 "Chinese"）或未知语种，原样传递
     }
 
-    private static string Truncate(string s, int max) =>
-        string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s.Substring(0, max) + "…");
 }

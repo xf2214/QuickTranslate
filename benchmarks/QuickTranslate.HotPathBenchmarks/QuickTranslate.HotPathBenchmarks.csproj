@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/QuickTranslate.Infrastructure/QuickTranslate.Infrastructure.csproj" />
+    <!-- Exercise the same pure decoder source without exposing benchmark-only APIs. -->
+    <Compile Include="../../src/QuickTranslate.Infrastructure/Ocr/CtcGreedyDecoder.cs" Link="CtcGreedyDecoder.cs" />
+  </ItemGroup>
+</Project>
