@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Reuse the exact tests and production projects without the WPF executable.
+         net10.0-windows is a compile-time platform annotation; this subset uses
+         only APIs supported by the ordinary .NET runtime on Linux and Windows. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>QuickTranslate.Tests</AssemblyName>
+    <RootNamespace>QuickTranslate.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="NSubstitute" />
+    <ProjectReference Include="../../src/QuickTranslate.Core/QuickTranslate.Core.csproj" />
+    <ProjectReference Include="../../src/QuickTranslate.Infrastructure/QuickTranslate.Infrastructure.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../QuickTranslate.Tests/Translation/**/*.cs" Link="Translation/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="../QuickTranslate.Tests/Core/*.cs"
+             Exclude="../QuickTranslate.Tests/Core/ProjectionWordSegmenterTests.cs;../QuickTranslate.Tests/Core/TrayServiceContractTests.cs"
+             Link="Core/%(Filename)%(Extension)" />
+    <Compile Include="../QuickTranslate.Tests/Selection/*.cs" Link="Selection/%(Filename)%(Extension)" />
+    <Compile Include="../QuickTranslate.Tests/Logging/*.cs" Link="Logging/%(Filename)%(Extension)" />
+    <Compile Include="../QuickTranslate.Tests/Infrastructure/SpyLogger.cs" Link="Infrastructure/SpyLogger.cs" />
+    <Compile Include="../QuickTranslate.Tests/Infrastructure/LruCacheTests.cs" Link="Infrastructure/LruCacheTests.cs" />
+    <Compile Include="../QuickTranslate.Tests/Infrastructure/TranslationRouterTests.cs" Link="Infrastructure/TranslationRouterTests.cs" />
+    <Compile Include="../QuickTranslate.Tests/Infrastructure/Services/ModelDownloaderTests.cs" Link="Infrastructure/Services/ModelDownloaderTests.cs" />
+    <Compile Include="../QuickTranslate.Tests/Infrastructure/Services/ModelDownloadIntegrityTests.cs" Link="Infrastructure/Services/ModelDownloadIntegrityTests.cs" />
+    <Compile Include="../QuickTranslate.Tests/Infrastructure/OcrHotPathTests.cs" Link="Infrastructure/OcrHotPathTests.cs" />
+    <Compile Include="../QuickTranslate.Tests/Infrastructure/OcrLifecycleGateTests.cs" Link="Infrastructure/OcrLifecycleGateTests.cs" />
+  </ItemGroup>
+</Project>

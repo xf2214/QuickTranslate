@@ -70,6 +70,9 @@ public partial class SettingsWindow : Window
         SelectComboBoxItemByTag(TranslationProviderBox, _appSettings.TranslationProvider.ToString());
         CustomLlmBaseUrlBox.Text = _appSettings.CustomLlmBaseUrl ?? string.Empty;
         CustomLlmModelBox.Text = _appSettings.CustomLlmModel ?? string.Empty;
+        CustomLlmRequireApiKeyCheckBox.IsChecked = _appSettings.CustomLlmRequireApiKey;
+        CustomLlmUseStreamingCheckBox.IsChecked = _appSettings.CustomLlmUseStreaming;
+        CustomLlmSendTemperatureCheckBox.IsChecked = _appSettings.CustomLlmSendTemperature;
         UpdateCustomLlmPanelVisibility();
 
         // API Key 状态
@@ -316,6 +319,9 @@ public partial class SettingsWindow : Window
         SelectComboBoxItemByTag(TranslationProviderBox, defaults.TranslationProvider.ToString());
         CustomLlmBaseUrlBox.Text = defaults.CustomLlmBaseUrl;
         CustomLlmModelBox.Text = defaults.CustomLlmModel;
+        CustomLlmRequireApiKeyCheckBox.IsChecked = defaults.CustomLlmRequireApiKey;
+        CustomLlmUseStreamingCheckBox.IsChecked = defaults.CustomLlmUseStreaming;
+        CustomLlmSendTemperatureCheckBox.IsChecked = defaults.CustomLlmSendTemperature;
         UpdateCustomLlmPanelVisibility();
         SetQualityRadio(defaults.TranslationQuality);
         StartOnBootBox.IsChecked = defaults.StartWithWindows;
@@ -460,6 +466,10 @@ public partial class SettingsWindow : Window
                 TranslationProvider = providerKind,
                 CustomLlmBaseUrl = CustomLlmBaseUrlBox.Text.Trim(),
                 CustomLlmModel = CustomLlmModelBox.Text.Trim(),
+                CustomLlmRequireApiKey = CustomLlmRequireApiKeyCheckBox.IsChecked == true,
+                CustomLlmUseStreaming = CustomLlmUseStreamingCheckBox.IsChecked == true,
+                CustomLlmSendTemperature = CustomLlmSendTemperatureCheckBox.IsChecked == true,
+                CustomLlmMaxContextLines = _appSettings.CustomLlmMaxContextLines,
                 PopupDisplayStyle = displayStyle,
                 ResolvedApiKey = _settingsManager.GetApiKey()
             };
@@ -468,22 +478,7 @@ public partial class SettingsWindow : Window
 
             // 就地更新共享的 IOptions<AppSettings>.Value 实例（协调器/弹窗服务持有同一实例），
             // 使目标语言、热键等改动无需重启即可被运行中的协调器读到。
-            _appSettings.WordHotkey = newSettings.WordHotkey;
-            _appSettings.BlockHotkey = newSettings.BlockHotkey;
-            _appSettings.TargetLanguage = newSettings.TargetLanguage;
-            _appSettings.TranslationQuality = newSettings.TranslationQuality;
-            _appSettings.StartWithWindows = newSettings.StartWithWindows;
-            _appSettings.CloseOnOutsideClick = newSettings.CloseOnOutsideClick;
-            _appSettings.DebugLogging = newSettings.DebugLogging;
-            _appSettings.EnableTextToSpeech = newSettings.EnableTextToSpeech;
-            _appSettings.EnableSelectedTextProbe = newSettings.EnableSelectedTextProbe;
-            _appSettings.UseHardwareAcceleration = newSettings.UseHardwareAcceleration;
-            _appSettings.DisableSystemProxy = newSettings.DisableSystemProxy;
-            _appSettings.TranslationProvider = newSettings.TranslationProvider;
-            _appSettings.CustomLlmBaseUrl = newSettings.CustomLlmBaseUrl;
-            _appSettings.CustomLlmModel = newSettings.CustomLlmModel;
-            _appSettings.PopupDisplayStyle = newSettings.PopupDisplayStyle;
-            _appSettings.ResolvedApiKey = newSettings.ResolvedApiKey;
+            _appSettings.ApplyFrom(newSettings);
 
             _hotkeyBroker.UnregisterAll();
             _hotkeyBroker.RegisterDefaultsFromSettings(newSettings);
@@ -497,7 +492,7 @@ public partial class SettingsWindow : Window
             RefreshSystemStatus();
 
             // 核显加速状态变化：尝试重建 OCR Session，下一次 OCR 生效；失败则提示重启生效
-            string proxySuffix = proxyChanged ? " 代理设置已更新，新请求将直连，重启后完全生效（Handler 池复用）。" : "";
+            string proxySuffix = proxyChanged ? " 代理设置已更新，重启应用后生效。" : "";
             string baseToast = "✔ 保存成功！设置已生效，可关闭窗口。" + proxySuffix;
             if (hardwareChanged)
             {
@@ -616,7 +611,10 @@ public partial class SettingsWindow : Window
         try
         {
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(40));
-            var result = await _modelTester.TestConnectionAsync(baseUrl, model, apiKey, cts.Token);
+            var result = await _modelTester.TestConnectionAsync(baseUrl, model, apiKey,
+                CustomLlmRequireApiKeyCheckBox.IsChecked == true,
+                CustomLlmUseStreamingCheckBox.IsChecked == true,
+                CustomLlmSendTemperatureCheckBox.IsChecked == true, cts.Token);
 
             if (result.Success)
             {
@@ -627,9 +625,9 @@ public partial class SettingsWindow : Window
                 SetModelTestStatus("✖ " + result.Message, "fail");
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            SetModelTestStatus("✖ 测试失败：" + ex.Message, "fail");
+            SetModelTestStatus("✖ 测试失败，请检查服务配置", "fail");
         }
         finally
         {

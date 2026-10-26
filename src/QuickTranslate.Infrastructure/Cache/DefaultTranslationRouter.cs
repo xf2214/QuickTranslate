@@ -35,6 +35,7 @@ public class DefaultTranslationRouter : ITranslationRouter
 
     public async Task<TranslationResult> TranslateWordAsync(string word, string targetLang, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var identity = CaptureCacheIdentity(word, targetLang, TranslationMode.Word);
         var normalizedKey = identity.Key;
 
@@ -44,18 +45,9 @@ public class DefaultTranslationRouter : ITranslationRouter
             return cached with { FromCache = true };
         }
 
-        if (_l2Cache != null)
-        {
-            var l2Result = await _l2Cache.TryGetAsync(normalizedKey, ct);
-            if (l2Result != null)
-            {
-                _logger.LogDebug("L2 word cache hit");
-                _cache.Add(normalizedKey, l2Result);
-                return l2Result with { FromCache = true };
-            }
-        }
-
-        if (_dictionary.TryLookup(word, targetLang, out var dictResult))
+        var dictionaryHit = _dictionary.TryLookup(word, targetLang, out var dictResult);
+        ct.ThrowIfCancellationRequested();
+        if (dictionaryHit)
         {
             _logger.LogDebug("Local dictionary hit");
             // 本地词典是确定性、O(1) 内存查找：只写 L1 内存热缓存（重复词直接命中），
@@ -63,6 +55,14 @@ public class DefaultTranslationRouter : ITranslationRouter
             dictResult = dictResult with { NormalizedKey = normalizedKey };
             _cache.Add(normalizedKey, dictResult);
             return dictResult;
+        }
+
+        var l2Result = await TryReadL2Async(normalizedKey, ct);
+        if (l2Result != null)
+        {
+            _logger.LogDebug("L2 word cache hit");
+            _cache.Add(normalizedKey, l2Result);
+            return l2Result with { FromCache = true };
         }
 
         _logger.LogDebug("Calling online provider for word");
@@ -94,14 +94,14 @@ public class DefaultTranslationRouter : ITranslationRouter
         if (IsCurrent(identity))
         {
             _cache.Add(normalizedKey, result);
-            if (_l2Cache != null)
-                await _l2Cache.AddAsync(normalizedKey, result, ct);
+            await TryWriteL2Async(normalizedKey, result, ct);
         }
         return result;
     }
 
     public async Task<TranslationResult> TranslateBlockAsync(string blockText, string targetLang, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var identity = CaptureCacheIdentity(blockText, targetLang, TranslationMode.Block);
         var normalizedKey = identity.Key;
 
@@ -111,15 +111,12 @@ public class DefaultTranslationRouter : ITranslationRouter
             return cached with { FromCache = true };
         }
 
-        if (_l2Cache != null)
+        var l2Result = await TryReadL2Async(normalizedKey, ct);
+        if (l2Result != null)
         {
-            var l2Result = await _l2Cache.TryGetAsync(normalizedKey, ct);
-            if (l2Result != null)
-            {
-                _logger.LogDebug("L2 block cache hit");
-                _cache.Add(normalizedKey, l2Result);
-                return l2Result with { FromCache = true };
-            }
+            _logger.LogDebug("L2 block cache hit");
+            _cache.Add(normalizedKey, l2Result);
+            return l2Result with { FromCache = true };
         }
 
         _logger.LogDebug("Calling online provider for block");
@@ -149,11 +146,47 @@ public class DefaultTranslationRouter : ITranslationRouter
         if (IsCurrent(identity))
         {
             _cache.Add(normalizedKey, result);
-            if (_l2Cache != null)
-                await _l2Cache.AddAsync(normalizedKey, result, ct);
+            await TryWriteL2Async(normalizedKey, result, ct);
         }
         return result;
     }
+
+    private async Task<TranslationResult?> TryReadL2Async(string key, CancellationToken ct)
+    {
+        if (_l2Cache == null) return null;
+        try
+        {
+            var result = await _l2Cache.TryGetAsync(key, ct);
+            ct.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (Exception ex) when (IsRecoverableCacheFailure(ex))
+        {
+            ct.ThrowIfCancellationRequested();
+            _logger.LogWarning("Optional cache read skipped [ErrorCode=CACHE_L2_READ] [ExceptionType={ExceptionType}]", ex.GetType().Name);
+            return null;
+        }
+    }
+
+    private async Task TryWriteL2Async(string key, TranslationResult result, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (_l2Cache == null) return;
+        try
+        {
+            await _l2Cache.AddAsync(key, result, ct);
+            ct.ThrowIfCancellationRequested();
+        }
+        catch (Exception ex) when (IsRecoverableCacheFailure(ex))
+        {
+            ct.ThrowIfCancellationRequested();
+            _logger.LogWarning("Optional cache write skipped [ErrorCode=CACHE_L2_WRITE] [ExceptionType={ExceptionType}]", ex.GetType().Name);
+        }
+    }
+
+    private static bool IsRecoverableCacheFailure(Exception exception) => exception is
+        Microsoft.Data.Sqlite.SqliteException or IOException or UnauthorizedAccessException or
+        System.Text.Json.JsonException or InvalidOperationException;
 
     private sealed record CacheIdentity(string Key, TranslationQuality Quality, long Revision, AppSettings Settings);
 

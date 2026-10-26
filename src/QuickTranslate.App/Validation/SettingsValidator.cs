@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using QuickTranslate.Core.Abstractions;
 using QuickTranslate.Core.Options;
+using QuickTranslate.Infrastructure.Translation;
 
 namespace QuickTranslate.App.Validation;
 
@@ -31,16 +32,13 @@ public static class SettingsValidator
             return ValidationResult.Fail("自定义大模型缺少模型名称，例如 gpt-4o-mini");
         }
 
-        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        try
         {
-            return ValidationResult.Fail("自定义大模型 API 地址必须以 http:// 或 https:// 开头，例如 https://api.openai.com/v1");
+            _ = ChatCompletionsEndpoint.Normalize(url);
         }
-
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        catch (ArgumentException)
         {
-            return ValidationResult.Fail($"自定义大模型 API 地址不是合法 URL：{url}");
+            return ValidationResult.Fail("自定义大模型 API 地址须为有效 HTTP(S) 地址，且不能包含用户名、密码或片段标识");
         }
 
         return ValidationResult.Ok();

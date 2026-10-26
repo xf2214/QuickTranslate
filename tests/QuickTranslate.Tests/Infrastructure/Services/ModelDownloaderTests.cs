@@ -90,9 +90,9 @@ public class ModelDownloaderTests : IDisposable
         foreach (var name in ModelDownloader.DefaultUrls.Keys)
             File.WriteAllText(Path.Combine(dl.TargetDirectory, name), "content");
         Assert.True(dl.AllModelFilesExist());
-        // Remove optional cls.onnx - AllModelFilesExist still requires it (all keys)
+        // The angle classifier is optional; det/rec/dictionary remain usable without it.
         File.Delete(Path.Combine(dl.TargetDirectory, "cls.onnx"));
-        Assert.False(dl.AllModelFilesExist());
+        Assert.True(dl.AllModelFilesExist());
     }
 
     [Fact]
@@ -107,26 +107,26 @@ public class ModelDownloaderTests : IDisposable
 
     // ---- VerifySha256 ----
     [Fact]
-    public void VerifySha256_MissingVersionJson_FallsBackToAllModelFilesExist()
+    public void VerifySha256_MissingVersionJson_DoesNotClaimIntegrity()
     {
         var dl = CreateDownloader();
         // No version.json, no models => AllModelFilesExist false => Verify returns false
         Assert.False(dl.VerifySha256());
-        // Create all model files but still no version.json => should return true (all exist)
+        // Existence alone cannot establish integrity.
         foreach (var name in ModelDownloader.DefaultUrls.Keys)
             File.WriteAllText(Path.Combine(dl.TargetDirectory, name), "dummy");
-        Assert.True(dl.VerifySha256());
+        Assert.False(dl.VerifySha256());
     }
 
     [Fact]
-    public void VerifySha256_WithVersionJson_AndAllFilesExist_ReturnsTrue()
+    public void VerifySha256_EmptyManifest_AndAllFilesExist_ReturnsFalse()
     {
         var dl = CreateDownloader();
         var versionJson = Path.Combine(dl.TargetDirectory, "version.json");
-        File.WriteAllText(versionJson, "{}"); // content not parsed beyond existence; VerifySha256 just hashes files
+        File.WriteAllText(versionJson, "{}");
         foreach (var name in ModelDownloader.DefaultUrls.Keys)
             File.WriteAllText(Path.Combine(dl.TargetDirectory, name), "filecontent " + name);
-        Assert.True(dl.VerifySha256());
+        Assert.False(dl.VerifySha256());
     }
 
     [Fact]
@@ -341,6 +341,49 @@ public class ModelDownloaderTests : IDisposable
         var target = Path.Combine(_tempRoot, "tiny_out.txt");
         Assert.False(InvokeGenerate(zipPath, target));
         Assert.False(File.Exists(target));
+    }
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(4)]
+    public void GenerateDictFromZipYml_NestedOfficialLayout_ReadsOnlyCharacterDictionary(int listIndent)
+    {
+        const int lines = 2000;
+        var yml = BuildYmlContent(lines, "PostProcess:\n  name: CTCLabelDecode\n  character_dict:")
+            .Replace("  - ", new string(' ', listIndent) + "- ", StringComparison.Ordinal)
+            .Replace("other_key: value", "  ignored_list:\n  - do-not-include\nNextSection:\n  - also-not-a-character", StringComparison.Ordinal);
+        var zipPath = Path.Combine(_tempRoot, "nested.zip");
+        using (var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+        {
+            var entry = zip.CreateEntry("model/inference.yml");
+            using var writer = new StreamWriter(entry.Open(), Encoding.UTF8);
+            writer.Write(yml);
+        }
+
+        var target = Path.Combine(_tempRoot, "nested_keys.txt");
+        Assert.True(InvokeGenerate(zipPath, target));
+        var characters = File.ReadAllLines(target);
+        Assert.Equal(lines, characters.Length);
+        Assert.Equal("0_char", characters[0]);
+        Assert.Equal("1999_char", characters[^1]);
+    }
+
+    [Fact]
+    public void GenerateDictFromZipYml_DoubleQuotedUnicodeEscape_IsDecoded()
+    {
+        var yml = BuildYmlContent(2000)
+            .Replace("  - '0_char'", "  - \"\\u4e2d\"", StringComparison.Ordinal);
+        var zipPath = Path.Combine(_tempRoot, "escaped.zip");
+        using (var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+        {
+            var entry = zip.CreateEntry("inference.yml");
+            using var writer = new StreamWriter(entry.Open(), Encoding.UTF8);
+            writer.Write(yml);
+        }
+
+        var target = Path.Combine(_tempRoot, "escaped_keys.txt");
+        Assert.True(InvokeGenerate(zipPath, target));
+        Assert.Equal("中", File.ReadAllLines(target)[0]);
     }
 
     [Fact]

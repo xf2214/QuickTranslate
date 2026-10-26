@@ -303,7 +303,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IOptions<AppSettings>>(),
                 sp.GetRequiredService<IAppDataProvider>(),
                 sp.GetRequiredService<ILogger<PaddleOcrV6Engine>>(),
-                isPlausibleWord: dictionary is null ? null : word => dictionary.TryLookup(word, "zh", out _));
+                isPlausibleWord: dictionary is null ? null : dictionary.ContainsWord);
         });
         services.AddSingleton<MockOcrEngine>();
 
@@ -337,7 +337,13 @@ public static class ServiceCollectionExtensions
 public static class HttpProxyHelper
 {
     public static SocketsHttpHandler CreateHandler(AppSettings settings) =>
-        new SocketsHttpHandler { UseProxy = !settings.DisableSystemProxy };
+        new SocketsHttpHandler
+        {
+            UseProxy = !settings.DisableSystemProxy,
+            // Providers are held for the application lifetime. Refresh pooled
+            // connections so gateway DNS changes do not require an app restart.
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+        };
 }
 
 internal class SerilogAppLoggingProvider : ILoggerProvider

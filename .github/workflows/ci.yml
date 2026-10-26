@@ -1,4 +1,4 @@
-# CI — Windows build + test
+# CI — Windows application build/tests + Linux engine tests
 # QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS=1 disables dev-local model path probing
 # so tests don't accidentally pick up assets/models from the dev machine.
 # ModelValidationTests (Category=Model) and RealOcrRecognitionTests require external
@@ -12,6 +12,19 @@ on:
     branches: ["**"]
 
 jobs:
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.400"
+      - name: Test platform-independent engine behavior
+        env:
+          QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS: "1"
+        run: dotnet test tests/QuickTranslate.Engine.Tests/QuickTranslate.Engine.Tests.csproj -c Release -p:EnableWindowsTargeting=true
+
   build:
     runs-on: windows-latest
     steps:
@@ -20,6 +33,9 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.400"
+      - name: Test model dictionary download script
+        shell: pwsh
+        run: ./tests/QuickTranslate.Tests/Scripts/ModelDictionary.Tests.ps1
       - name: Restore
         run: dotnet restore QuickTranslate.sln
       - name: Build

@@ -21,9 +21,10 @@ public class CustomLlmValidationTests
     }
 
     [Theory]
-    [InlineData("api.openai.com/v1")]           // 缺 scheme
     [InlineData("ftp://api.openai.com/v1")]     // 非 http(s)
     [InlineData("http://a b.com")]              // 非法 URL
+    [InlineData("https://user:secret@host.test/v1")]
+    [InlineData("https://host.test/v1#secret")]
     public void InvalidBaseUrl_Fails(string url)
     {
         var r = SettingsValidator.ValidateCustomLlm(url, "gpt-4o-mini", allowEmpty: false);
@@ -31,6 +32,9 @@ public class CustomLlmValidationTests
     }
 
     [Theory]
+    [InlineData("api.openai.com/v1")]
+    [InlineData("localhost:11434/v1")]
+    [InlineData("https://api.openai.com/v1/chat/completions?version=1")]
     [InlineData("https://api.openai.com/v1")]
     [InlineData("https://api.openai.com/v1/")]
     [InlineData("http://127.0.0.1:11434/v1")]

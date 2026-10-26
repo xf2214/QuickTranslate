@@ -928,8 +928,8 @@
                                                  Style="{StaticResource StyledTextBox}"
                                                  Margin="0 0 0 2"/>
                                     </Grid>
-                                    <TextBlock Text="OpenAI 兼容端点，自动补全 /chat/completions"
-                                               ToolTip="OpenAI 兼容端点，例如 https://api.openai.com/v1、https://api.deepseek.com/v1 或本地 http://127.0.0.1:11434/v1（Ollama）。自动补全 /chat/completions。"
+                                    <TextBlock Text="填写基地址或完整 /chat/completions 地址"
+                                               ToolTip="OpenAI 兼容端点，例如 https://api.openai.com/v1、https://api.deepseek.com/v1 或本地 http://127.0.0.1:11434/v1（Ollama）。基地址会补全 /chat/completions；完整端点和查询参数会保留。常见服务的基地址需包含 /v1。"
                                                Style="{StaticResource SettingHint}"
                                                Margin="96 0 0 8"
                                                TextWrapping="NoWrap"
@@ -956,6 +956,22 @@
                                                TextWrapping="NoWrap"
                                                TextTrimming="CharacterEllipsis"
                                                MaxHeight="16"/>
+
+                                    <CheckBox x:Name="CustomLlmRequireApiKeyCheckBox"
+                                              Content="使用 API Key 鉴权"
+                                              Style="{StaticResource CompactCheckBox}"
+                                              ToolTip="关闭后不发送已存储的 Key，适用于无需鉴权的本地 Ollama / vLLM 服务。"
+                                              Margin="96 0 0 6"/>
+                                    <CheckBox x:Name="CustomLlmUseStreamingCheckBox"
+                                              Content="请求流式响应（SSE）"
+                                              Style="{StaticResource CompactCheckBox}"
+                                              ToolTip="服务不支持流式响应时可关闭；服务直接返回 JSON 时也可正常处理。"
+                                              Margin="96 0 0 6"/>
+                                    <CheckBox x:Name="CustomLlmSendTemperatureCheckBox"
+                                              Content="发送采样温度（temperature）"
+                                              Style="{StaticResource CompactCheckBox}"
+                                              ToolTip="模型不接受 temperature 参数时请关闭，使用服务默认采样策略。"
+                                              Margin="96 0 0 10"/>
 
                                     <!-- 模型连通性测试 -->
                                     <Grid Margin="0 0 0 6">
@@ -1016,7 +1032,7 @@
                                             FontSize="12"/>
                                 </Grid>
                                 <TextBlock Text="DPAPI 加密存储，绝不明文落盘"
-                                           ToolTip="自定义大模型：填 OpenAI 兼容服务的 Key（本地 Ollama 可填任意非空值）；Qwen-MT：DashScope 控制台 → API-KEY 管理。留空则使用内置演示翻译（占位结果）。"
+                                           ToolTip="自定义大模型：填服务的 Key；无鉴权本地服务请关闭 API Key 鉴权。Qwen-MT：填 DashScope Key。启用鉴权却留空时使用演示翻译。"
                                            Style="{StaticResource SettingHint}"
                                            TextWrapping="NoWrap"
                                            TextTrimming="CharacterEllipsis"
@@ -1024,7 +1040,7 @@
                                 <CheckBox x:Name="DisableSystemProxyCheckBox"
                                           Content="不使用系统代理（直连，本地 Ollama 推荐勾选）"
                                           Style="{StaticResource CompactCheckBox}"
-                                          ToolTip="勾选后在线翻译与模型下载将直连，不走系统代理；本地 Ollama 必需。修改后新请求生效，已复用的连接重启后完全生效。"
+                                          ToolTip="勾选后在线翻译与模型下载将直连，不走系统代理；本地 Ollama 必需。修改后重启应用生效。"
                                           Margin="0 8 0 0"/>
                             </StackPanel>
                         </Border>
