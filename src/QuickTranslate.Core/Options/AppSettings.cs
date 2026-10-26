@@ -33,10 +33,72 @@ public enum TranslationProviderKind
 
 public class AppSettings
 {
+    private readonly object _translationSettingsLock = new();
+    private long _translationSettingsRevision;
+    private TranslationQuality _translationQuality = TranslationQuality.Fast;
+    private TranslationProviderKind _translationProvider = TranslationProviderKind.CustomOpenAi;
+    private string _customLlmBaseUrl = "";
+    private string _customLlmModel = "";
+    private string? _resolvedApiKey;
+    private bool _customLlmRequireApiKey = true;
+    private bool _customLlmUseStreaming = true;
+    private bool _customLlmSendTemperature = true;
+
+    // Runtime-only revision: detects settings changing away and back during async translation.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public long TranslationSettingsRevision
+    {
+        get { lock (_translationSettingsLock) return _translationSettingsRevision; }
+    }
+
+    public readonly record struct TranslationSettingsSnapshot(
+        TranslationQuality Quality, TranslationProviderKind Provider,
+        string BaseUrl, string Model, bool HasCredentials, long Revision,
+        bool RequireApiKey = true, bool UseStreaming = true, bool SendTemperature = true);
+
+    /// <summary>One atomic runtime request view. Credentials are excluded from serialization and diagnostics.</summary>
+    public sealed class TranslationRequestSettings
+    {
+        public TranslationSettingsSnapshot Settings { get; }
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string? ApiKey { get; }
+        internal TranslationRequestSettings(TranslationSettingsSnapshot settings, string? apiKey)
+            => (Settings, ApiKey) = (settings, apiKey);
+        public override string ToString() => nameof(TranslationRequestSettings);
+    }
+
+    public TranslationRequestSettings CaptureTranslationRequestSettings()
+    {
+        lock (_translationSettingsLock)
+            return new(CaptureTranslationSettings(), _resolvedApiKey);
+    }
+
+    public TranslationSettingsSnapshot CaptureTranslationSettings()
+    {
+        lock (_translationSettingsLock)
+            return new(_translationQuality, _translationProvider, _customLlmBaseUrl, _customLlmModel,
+                !string.IsNullOrWhiteSpace(_resolvedApiKey), _translationSettingsRevision,
+                _customLlmRequireApiKey, _customLlmUseStreaming, _customLlmSendTemperature);
+    }
+
+    private void SetTranslationSetting<T>(ref T field, T value)
+    {
+        lock (_translationSettingsLock)
+        {
+            if (EqualityComparer<T>.Default.Equals(field, value)) return;
+            field = value;
+            _translationSettingsRevision++;
+        }
+    }
+
     public HotkeyCombo WordHotkey { get; set; } = new(HotkeyModifiers.Alt, KeyboardKey.D1);
     public HotkeyCombo BlockHotkey { get; set; } = new(HotkeyModifiers.Alt, KeyboardKey.D2);
     public string TargetLanguage { get; set; } = "zh-CN";
-    public TranslationQuality TranslationQuality { get; set; } = TranslationQuality.Fast;
+    public TranslationQuality TranslationQuality
+    {
+        get { lock (_translationSettingsLock) return _translationQuality; }
+        set => SetTranslationSetting(ref _translationQuality, value);
+    }
     public bool StartWithWindows { get; set; } = false;
     public bool CloseOnOutsideClick { get; set; } = true;
     /// <summary>核显加速：开启后尝试使用 AMD/Intel 核显 DirectML 加速 OCR 推理，关闭则强制 CPU。</summary>
@@ -51,13 +113,44 @@ public class AppSettings
     public bool EnableSelectedTextProbe { get; set; } = true;
 
     // ===== 自定义大模型接入（OpenAI 兼容）=====
-    public TranslationProviderKind TranslationProvider { get; set; } = TranslationProviderKind.CustomOpenAi;
+    public TranslationProviderKind TranslationProvider
+    {
+        get { lock (_translationSettingsLock) return _translationProvider; }
+        set => SetTranslationSetting(ref _translationProvider, value);
+    }
 
     /// <summary>OpenAI 兼容服务基地址，如 https://api.openai.com/v1 或 http://127.0.0.1:11434/v1。</summary>
-    public string CustomLlmBaseUrl { get; set; } = "";
+    public string CustomLlmBaseUrl
+    {
+        get { lock (_translationSettingsLock) return _customLlmBaseUrl; }
+        set => SetTranslationSetting(ref _customLlmBaseUrl, value);
+    }
 
     /// <summary>模型名，如 gpt-4o-mini、qwen2.5:7b、deepseek-chat。</summary>
-    public string CustomLlmModel { get; set; } = "";
+    public string CustomLlmModel
+    {
+        get { lock (_translationSettingsLock) return _customLlmModel; }
+        set => SetTranslationSetting(ref _customLlmModel, value);
+    }
+
+    /// <summary>Disable explicitly for anonymous compatible services; no stored key is then sent.</summary>
+    public bool CustomLlmRequireApiKey
+    {
+        get { lock (_translationSettingsLock) return _customLlmRequireApiKey; }
+        set => SetTranslationSetting(ref _customLlmRequireApiKey, value);
+    }
+
+    public bool CustomLlmUseStreaming
+    {
+        get { lock (_translationSettingsLock) return _customLlmUseStreaming; }
+        set => SetTranslationSetting(ref _customLlmUseStreaming, value);
+    }
+
+    public bool CustomLlmSendTemperature
+    {
+        get { lock (_translationSettingsLock) return _customLlmSendTemperature; }
+        set => SetTranslationSetting(ref _customLlmSendTemperature, value);
+    }
 
     /// <summary>对话上下文最大条数（提示词之外保留的原文轮次），0 = 不带上下文。</summary>
     public int CustomLlmMaxContextLines { get; set; } = 0;
@@ -66,9 +159,13 @@ public class AppSettings
     public bool IsApiKeyConfigured => !string.IsNullOrWhiteSpace(ResolvedApiKey);
 
     [System.Text.Json.Serialization.JsonIgnore]
-    public string? ResolvedApiKey { get; set; }
+    public string? ResolvedApiKey
+    {
+        get { lock (_translationSettingsLock) return _resolvedApiKey; }
+        set => SetTranslationSetting(ref _resolvedApiKey, value);
+    }
 
-    /// <summary>自定义大模型是否已具备真实调用条件（Base URL + 模型名 + API Key 齐全）。</summary>
+    /// <summary>Endpoint and model are configured; authentication policy is checked by the provider.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public bool IsCustomLlmConfigured =>
         !string.IsNullOrWhiteSpace(CustomLlmBaseUrl) &&
@@ -90,7 +187,6 @@ public class AppSettings
         WordHotkey = source.WordHotkey;
         BlockHotkey = source.BlockHotkey;
         TargetLanguage = source.TargetLanguage;
-        TranslationQuality = source.TranslationQuality;
         StartWithWindows = source.StartWithWindows;
         CloseOnOutsideClick = source.CloseOnOutsideClick;
         UseHardwareAcceleration = source.UseHardwareAcceleration;
@@ -98,12 +194,22 @@ public class AppSettings
         DebugOverlayMode = source.DebugOverlayMode;
         EnableTextToSpeech = source.EnableTextToSpeech;
         EnableSelectedTextProbe = source.EnableSelectedTextProbe;
-        TranslationProvider = source.TranslationProvider;
-        CustomLlmBaseUrl = source.CustomLlmBaseUrl;
-        CustomLlmModel = source.CustomLlmModel;
         CustomLlmMaxContextLines = source.CustomLlmMaxContextLines;
         PopupDisplayStyle = source.PopupDisplayStyle;
         DisableSystemProxy = source.DisableSystemProxy;
-        ResolvedApiKey = source.ResolvedApiKey;
+        // Capture the source before acquiring this instance's lock to avoid cross-copy deadlocks.
+        var request = source.CaptureTranslationRequestSettings();
+        var snapshot = request.Settings;
+        lock (_translationSettingsLock)
+        {
+            TranslationQuality = snapshot.Quality;
+            TranslationProvider = snapshot.Provider;
+            CustomLlmBaseUrl = snapshot.BaseUrl;
+            CustomLlmModel = snapshot.Model;
+            CustomLlmRequireApiKey = snapshot.RequireApiKey;
+            CustomLlmUseStreaming = snapshot.UseStreaming;
+            CustomLlmSendTemperature = snapshot.SendTemperature;
+            ResolvedApiKey = request.ApiKey;
+        }
     }
 }

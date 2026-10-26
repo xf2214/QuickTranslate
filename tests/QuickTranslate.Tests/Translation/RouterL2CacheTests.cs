@@ -12,7 +12,8 @@ namespace QuickTranslate.Tests.Translation;
 
 public class RouterL2CacheTests
 {
-    private static string NKey(string word, string lang) => $"{word.Trim().ToLowerInvariant()}||{lang.Trim().ToLowerInvariant()}";
+    private static string NKey(string word, string lang, TranslationMode mode = TranslationMode.Word)
+        => TranslationCacheKey.BuildForRequest(word, lang, mode, new AppSettings(), string.Empty);
 
     private static IAsyncEnumerable<TranslationChunk> SingleChunkStream(string targetText)
     {
@@ -29,7 +30,7 @@ public class RouterL2CacheTests
         Options.Create(new AppSettings { TranslationQuality = TranslationQuality.Fast });
 
     [Fact]
-    public async Task Case1_L1Miss_L2Hit_DoesNotCallProvider()
+    public async Task Case1_L1AndDictionaryMiss_L2Hit_DoesNotCallProvider()
     {
         var l1Cache = Substitute.For<ITranslationCache>();
         var l2Cache = Substitute.For<ITranslationL2Cache>();
@@ -37,7 +38,7 @@ public class RouterL2CacheTests
         var provider = Substitute.For<ITranslationProvider>();
         var logger = NullLogger<DefaultTranslationRouter>.Instance;
 
-        var key = NKey("hello", "zh-CN");
+        var key = NKey("Hello", "zh-CN");
         var l2Result = new TranslationResult(
             NormalizedKey: key,
             SourceText: "hello",
@@ -58,7 +59,6 @@ public class RouterL2CacheTests
         Assert.True(result.FromCache);
         Assert.Equal("你好L2", result.TargetText);
 
-        _ = dict.DidNotReceiveWithAnyArgs().TryLookup(default!, default!, out _);
         _ = provider.DidNotReceiveWithAnyArgs().TranslateAsync(default!, default);
         l1Cache.Received(1).Add(key, Arg.Is<TranslationResult>(r => r.TargetText == "你好L2"));
     }

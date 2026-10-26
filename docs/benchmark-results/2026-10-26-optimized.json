@@ -1,0 +1,67 @@
+{
+  "timestampUtc": "2026-10-26T05:59:15.5824634+00:00",
+  "runtime": ".NET 10.0.11",
+  "os": "Ubuntu 24.04.3 LTS",
+  "architecture": "X64",
+  "processors": 8,
+  "infrastructureVersion": "0.9.0\u002B4859c4527bda0d582b47a3d0503ded40feb7c9e1",
+  "infrastructureSha256": "c35dfa9d5002fb02c4fa4e8fb151886b013ec91b86eb1256104b6770a9a69297",
+  "dictionaryBytes": 30070636,
+  "dictionarySha256": "918709a3067871f0a8dbf6650afcce2531ef514a40daa822144c87a1d2d00770",
+  "dictionaryEntries": 500000,
+  "tensorShape": [
+    1,
+    320,
+    18710
+  ],
+  "tensorBytes": 23948800,
+  "metrics": [
+    {
+      "Name": "dictionary_load_warm_filesystem",
+      "Samples": 5,
+      "OperationsPerSample": 1,
+      "P50MillisecondsPerOperation": 357.8916,
+      "P95MillisecondsPerOperation": 565.674,
+      "AllocatedBytesPerOperation": 142222772.8
+    },
+    {
+      "Name": "dictionary_lookup_with_result",
+      "Samples": 25,
+      "OperationsPerSample": 10000,
+      "P50MillisecondsPerOperation": 0.00028773,
+      "P95MillisecondsPerOperation": 0.00049628,
+      "AllocatedBytesPerOperation": 212.0192
+    },
+    {
+      "Name": "dictionary_membership",
+      "Samples": 25,
+      "OperationsPerSample": 10000,
+      "P50MillisecondsPerOperation": 9.535E-05,
+      "P95MillisecondsPerOperation": 0.00013205,
+      "AllocatedBytesPerOperation": 0.0031999999999999997
+    },
+    {
+      "Name": "ctc_copy_then_decode",
+      "Samples": 31,
+      "OperationsPerSample": 1,
+      "P50MillisecondsPerOperation": 21.4815,
+      "P95MillisecondsPerOperation": 29.0833,
+      "AllocatedBytesPerOperation": 23950844.903225806
+    },
+    {
+      "Name": "ctc_direct_tensor_decode",
+      "Samples": 31,
+      "OperationsPerSample": 1,
+      "P50MillisecondsPerOperation": 14.0812,
+      "P95MillisecondsPerOperation": 18.0699,
+      "AllocatedBytesPerOperation": 1248
+    }
+  ],
+  "notes": [
+    "CPU microbenchmarks only: no ONNX inference, screen capture, UI or network.",
+    "CTC comparison holds decoding constant and isolates the removed output copy.",
+    "Dictionary load follows a file hash and includes parsing/index construction, not cold disk I/O.",
+    "P50/P95 use nearest-rank percentiles; bytes are managed allocations on the executing thread.",
+    "No measurements imply an end-to-end OCR speedup or recognition-accuracy change."
+  ]
+}

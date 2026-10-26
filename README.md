@@ -66,7 +66,7 @@ QuickTranslate 的解法只有一步：**鼠标指上去，按一下。**
 
 ![设置：翻译服务](assets/screenshots/settings-engine.png)
 
-- **翻译服务**：任意 OpenAI 兼容端点（DeepSeek / 智谱 / Moonshot / 本地 Ollama…），填 API 地址 + 模型名 + Key，带「测试连接」一键验证；Key 经 **DPAPI 加密存储，绝不明文落盘**
+- **翻译服务**：任意 OpenAI 兼容端点（DeepSeek / 智谱 / Moonshot / 本地 Ollama…），填 API 地址 + 模型名；支持按服务配置 API Key、流式和 temperature，带「测试连接」一键验证；Key 经 **DPAPI 加密存储，绝不明文落盘**
 
 - **翻译与显示**：目标语言、翻译质量三档（**Fast 速度优先 / Balanced 均衡 / Best 最佳质量**）、弹窗显示样式（详细 / 简洁）
 
@@ -84,11 +84,11 @@ QuickTranslate 的解法只有一步：**鼠标指上去，按一下。**
 
 |     <br />    | <br />                                        |
 | :-----------: | --------------------------------------------- |
-|    ⚡ **快**    | 按键到出框 P50 ≈ 110ms；多级缓存命中时零网络请求                |
+|    ⚡ **快**    | 本地词典和多级缓存命中时零网络请求；实测范围见性能基准                |
 | 🧠 **本地 OCR** | PP-OCRv6 全链路在本机推理，离线也能识别；可选核显加速（DirectML）     |
 |   🔒 **真隐私**  | 截图只在内存、用完即毁；只上传识别出的文字；Key 用 Windows DPAPI 加密  |
 |  🧩 **模型自由**  | 不被任何厂商绑定，OpenAI 兼容端点随便换                       |
-|   🪶 **轻量**   | 无主窗口托盘常驻，后台 \~25MB 内存、CPU ≈ 0                 |
+|   🪶 **轻量**   | 无主窗口托盘常驻，按需执行识别；内存取决于加载的 OCR 模型                 |
 | 🖥️ **高分屏友好** | PerMonitorV2，多显示器 / 125% / 150% / 200% 缩放定位精准 |
 
 ***
@@ -123,7 +123,7 @@ dotnet run --project src/QuickTranslate.App
    → PP-OCRv6 ONNX 本地识别（det → cls → rec → CTC 解码）
    → 单词命中 / 段落生长 / 拖动行过滤
    → 无焦点选择框（WS_EX_NOACTIVATE）
-   → 翻译路由（L1 内存 LRU → L2 SQLite → ECDICT 本地词典 → 在线 Provider）
+   → 翻译路由（L1 内存 LRU → ECDICT 本地词典 → L2 SQLite → 在线 Provider）
    → 弹窗展示（自动定位 + 尺寸自适应 + SSE 流式 + 可选朗读）
 ```
 
@@ -135,11 +135,11 @@ dotnet run --project src/QuickTranslate.App
 | UI       | WPF + Win32 P/Invoke（无焦点弹窗、全局热键、长按检测）                             |
 | OCR      | PP-OCRv6 + ONNX Runtime（Session 常驻预热；可选 DirectML 核显加速，失败自动回退 CPU） |
 | 缓存       | 内存 LRU (1000 项) + SQLite L2（SHA-256 索引，WAL）                       |
-| 词典       | ECDICT-lite（用户自定义 overlay → packed 高频词二进制）                        |
+| 词典       | ECDICT-lite（用户 overlay → 50 万条 packed 词典；OCR 使用无结果对象的成员查询）                        |
 | 翻译       | `ITranslationProvider` 抽象：自定义 OpenAI SSE 流式 / Qwen-MT             |
 | 密钥       | Windows DPAPI CurrentUser + entropy.dat                           |
 | 日志       | Serilog 分级过滤（默认不记录原文）                                             |
-| 测试       | xUnit，约 580+ 用例；GitHub Actions CI（Windows 全量测试）                   |
+| 测试       | xUnit；GitHub Actions CI（Windows 应用测试 + Linux 核心测试；真实模型另行验证）       |
 
 ### 解决方案结构
 
@@ -154,7 +154,8 @@ dotnet run --project src/QuickTranslate.App
 
 ### 性能基准
 
-来自 [docs/benchmark-results/](docs/benchmark-results/)（Mock OCR + 离线翻译基线）：
+下表为历史 **Mock OCR + 离线翻译** 基线，不代表加载真实 ONNX 模型后的内存或端到端识别延迟。
+本轮词典加载、成员查询和 CTC 解码实测见 [2026-10-26 热路径基准](docs/benchmark-results/2026-10-26-hot-paths.md)。
 
 | 指标       |                 P50 |                 P95 |
 | -------- | ------------------: | ------------------: |
@@ -175,10 +176,31 @@ dotnet run --project src/QuickTranslate.App
 
 ### 模型资产
 
-`assets/models/version.json` 内置 SHA-256 校验清单；缺失模型时自动回退 Mock OCR。一键下载：
+默认模型为 **PP-OCRv6 medium**。`assets/models/version.json` 记录检测、识别与字典文件的 SHA-256，应用下载器完成后必须通过校验；方向分类器可选。缺失模型时仍会回退 Mock OCR，Mock 输出不可当成真实识别结果。源码环境下载：
 
 ```powershell
 .\scripts\download-v6-final.ps1
+```
+
+### 运行测试（Windows）
+
+CI 不下载大型 ONNX 资产，运行不依赖真实模型的测试：
+
+```powershell
+dotnet test QuickTranslate.sln -c Release --filter "FullyQualifiedName!~RealOcrRecognitionTests&Category!=Model"
+```
+
+无 WPF 的核心回归可在 Linux / Windows 运行（直接引用生产项目并链接原测试，不复制业务实现）：
+
+```sh
+dotnet test tests/QuickTranslate.Engine.Tests/QuickTranslate.Engine.Tests.csproj -c Release -p:EnableWindowsTargeting=true
+```
+
+下载模型后，在项目根目录另行运行模型完整性与真实识别测试。此时请清除 `QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS` 环境变量，以允许引擎读取开发目录中的模型：
+
+```powershell
+Remove-Item Env:QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS -ErrorAction SilentlyContinue
+dotnet test QuickTranslate.sln -c Release --filter "Category=Model|FullyQualifiedName~RealOcrRecognitionTests"
 ```
 
 </details>
@@ -190,6 +212,8 @@ dotnet run --project src/QuickTranslate.App
 - [QuickTranslate\_Agent\_Project\_Spec\_v0.1.md](QuickTranslate_Agent_Project_Spec_v0.1.md) — PRD + 系统设计 + 接口契约
 
 - [docs/ocr-models-and-custom-llm.md](docs/ocr-models-and-custom-llm.md) — OCR 模型来源与自定义大模型接入
+
+- [docs/optimization-2026-10-26.md](docs/optimization-2026-10-26.md) — OCR 方案比较、本轮优化决策与验证边界
 
 - [docs/superpowers/specs/2026-08-27-block-drag-design.md](docs/superpowers/specs/2026-08-27-block-drag-design.md) — 长按拖选设计稿
 

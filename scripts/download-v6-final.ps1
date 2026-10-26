@@ -1,9 +1,10 @@
 param(
-    [string]$TargetDir = 'E:\翻译\assets\models'
+    [string]$TargetDir = (Join-Path $PSScriptRoot '..\assets\models')
 )
 Add-Type -AssemblyName System.Net.Http
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'PaddleModelDictionary.ps1')
 
 function Sz([long]$b) {
     if ($b -ge 1GB) { return '{0:N2}GB' -f ($b / 1GB) }
@@ -117,28 +118,7 @@ function ExtractAndPlace([string]$zipPath, [string]$kind, [string]$TargetDir, [s
         $yml = Get-ChildItem $sub -Recurse -Include '*.yml', '*.yaml' | Select-Object -First 1
         if (-not $yml) { throw "rec zip has no inference.yml; cannot generate dictionary" }
         $kp = Join-Path $TargetDir 'ppocr_keys.txt'
-        $inDict = $false
-        $sb = New-Object System.Text.StringBuilder
-        foreach ($line in [IO.File]::ReadAllLines($yml.FullName)) {
-            if ($line -match '^[A-Za-z_]') {
-                $inDict = $line.TrimStart().StartsWith('character_dict:')
-                continue
-            }
-            if (-not $inDict) { continue }
-            if ($line -match '^\s*-\s+(.+?)\s*$') {
-                $v = $Matches[1]
-                if ($v.Length -ge 2 -and $v.StartsWith("'") -and $v.EndsWith("'")) {
-                    $v = $v.Substring(1, $v.Length - 2).Replace("''", "'")
-                } elseif ($v.Length -ge 2 -and $v.StartsWith('"') -and $v.EndsWith('"')) {
-                    $v = $v.Substring(1, $v.Length - 2)
-                }
-                [void]$sb.Append($v); [void]$sb.Append("`n")
-            }
-        }
-        $dictText = $sb.ToString()
-        if ($dictText.Length -lt 10000) { throw "generated dictionary too small ($($dictText.Length) chars)" }
-        [IO.File]::WriteAllText($kp, $dictText, (New-Object System.Text.UTF8Encoding($false)))
-        $lineCount = ($dictText -split "`n").Count - 1
+        $lineCount = Write-PaddleCharacterDictionary -Lines ([IO.File]::ReadAllLines($yml.FullName, [Text.Encoding]::UTF8)) -Path $kp
         Write-Host ("==> generated ppocr_keys.txt ({0}, {1} lines, from {2})" -f (Sz (Get-Item $kp).Length), $lineCount, $yml.Name) -ForegroundColor Green
     }
 

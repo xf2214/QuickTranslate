@@ -63,7 +63,7 @@ Open Settings from the tray menu. The top status bar shows **live OCR engine ava
 
 ![Settings: translation service](assets/screenshots/settings-engine.png)
 
-- **Translation service**: any OpenAI-compatible endpoint (DeepSeek / Zhipu / Moonshot / local Ollama…). Fill in the API URL + model name + key, with a one-click "Test connection" probe; the key is **DPAPI-encrypted and never written to disk in plaintext**
+- **Translation service**: any OpenAI-compatible endpoint (DeepSeek / Zhipu / Moonshot / local Ollama…). Set the API URL and model, then choose API-key authentication, streaming, and temperature support, with a one-click "Test connection" probe; the key is **DPAPI-encrypted and never written to disk in plaintext**
 - **Translation & display**: target language, three quality tiers (**Fast / Balanced / Best**), popup style (detailed / compact)
 
 ![Settings: options & performance](assets/screenshots/settings-general.png)
@@ -78,11 +78,11 @@ Open Settings from the tray menu. The top status bar shows **live OCR engine ava
 
 | | |
 |:-:|---|
-| ⚡ **Fast** | Keypress → selection box in ~110 ms (P50); cache hits skip the network entirely |
+| ⚡ **Fast** | Local dictionary and cache hits skip network requests; see the scoped benchmarks below |
 | 🧠 **Local OCR** | Full PP-OCRv6 pipeline runs on your machine — works offline |
 | 🔒 **Real privacy** | Screenshots live only in memory and are destroyed after use; only recognized text is uploaded; keys encrypted with Windows DPAPI |
 | 🧩 **Model freedom** | Not locked to any vendor — swap OpenAI-compatible endpoints at will |
-| 🪶 **Lightweight** | Tray-resident, no main window; ~25 MB RAM and ~0% CPU in the background |
+| 🪶 **Lightweight** | Tray-resident, no main window; recognition runs on demand and memory depends on the OCR model |
 | 🖥️ **HiDPI-ready** | PerMonitorV2 awareness; pixel-accurate across multi-monitor 125/150/200% scaling |
 
 ---
@@ -117,7 +117,7 @@ Hotkey (Alt+1 / Alt+2 tap / hold-and-drag)
    → PP-OCRv6 ONNX recognition on-device (det → cls → rec → CTC decode)
    → Word hit-test / paragraph growth / drag-line filtering
    → Unfocused selection overlay (WS_EX_NOACTIVATE)
-   → Translation routing (L1 in-memory LRU → L2 SQLite → ECDICT local dict → online provider)
+   → Translation routing (L1 in-memory LRU → ECDICT local dict → L2 SQLite → online provider)
    → Popup (auto-positioned + size-adaptive + SSE streaming + optional TTS)
 ```
 
@@ -129,11 +129,11 @@ Hotkey (Alt+1 / Alt+2 tap / hold-and-drag)
 | UI | WPF + Win32 P/Invoke (unfocused popups, global hotkeys, hold detection) |
 | OCR | PP-OCRv6 + ONNX Runtime (session kept warm; optional DirectML iGPU acceleration with CPU fallback) |
 | Cache | In-memory LRU (1000 entries) + SQLite L2 (SHA-256 indexed, WAL) |
-| Dictionary | ECDICT-lite (user overlay → packed high-frequency binary) |
+| Dictionary | ECDICT-lite (user overlay → 500,000 packed entries; membership-only checks for OCR) |
 | Translation | `ITranslationProvider` abstraction: custom OpenAI SSE streaming / Qwen-MT |
 | Key storage | Windows DPAPI CurrentUser + entropy.dat |
 | Logging | Serilog leveled filtering (source text excluded by default) |
-| Tests | xUnit, ~580+ cases; GitHub Actions CI (full Windows test suite) |
+| Tests | xUnit; GitHub Actions CI (Windows application tests plus Linux core tests; real OCR models are verified separately) |
 
 ### Solution layout
 
@@ -148,7 +148,8 @@ Hotkey (Alt+1 / Alt+2 tap / hold-and-drag)
 
 ### Performance baseline
 
-From [docs/benchmark-results/](docs/benchmark-results/) (Mock OCR + offline translation baseline):
+The table below is a historical **Mock OCR + offline translation** baseline. It does not measure memory with real ONNX models or end-to-end OCR latency.
+See the [2026-10-26 hot-path measurements](docs/benchmark-results/2026-10-26-hot-paths.md) for dictionary loading, membership queries, and CTC decoding.
 
 | Metric | P50 | P95 |
 |--------|----:|----:|
@@ -166,10 +167,31 @@ From [docs/benchmark-results/](docs/benchmark-results/) (Mock OCR + offline tran
 
 ### Model assets
 
-`assets/models/version.json` ships SHA-256 verification manifests; missing models fall back to Mock OCR automatically. One-shot download:
+The default is **PP-OCRv6 medium**. `assets/models/version.json` pins detector, recognizer, and character-dictionary SHA-256 hashes; the in-app downloader verifies them before reporting success. The orientation classifier is optional. Missing models still fall back to Mock OCR, whose output is not a real recognition result. Download for a source checkout:
 
 ```powershell
 .\scripts\download-v6-final.ps1
+```
+
+### Running tests (Windows)
+
+CI does not download the large ONNX assets. Run tests that do not require real models with:
+
+```powershell
+dotnet test QuickTranslate.sln -c Release --filter "FullyQualifiedName!~RealOcrRecognitionTests&Category!=Model"
+```
+
+The WPF-free core suite also runs on Linux and Windows, linking the existing tests to the production projects:
+
+```sh
+dotnet test tests/QuickTranslate.Engine.Tests/QuickTranslate.Engine.Tests.csproj -c Release -p:EnableWindowsTargeting=true
+```
+
+After downloading models, run integrity and recognition tests separately from the repository root. Clear the model-isolation variable so the engine can find development assets:
+
+```powershell
+Remove-Item Env:QUICKTRANSLATE_DISABLE_DEV_MODEL_PATHS -ErrorAction SilentlyContinue
+dotnet test QuickTranslate.sln -c Release --filter "Category=Model|FullyQualifiedName~RealOcrRecognitionTests"
 ```
 
 </details>
@@ -180,6 +202,7 @@ From [docs/benchmark-results/](docs/benchmark-results/) (Mock OCR + offline tran
 
 - [QuickTranslate_Agent_Project_Spec_v0.1.md](QuickTranslate_Agent_Project_Spec_v0.1.md) — PRD + system design + interface contracts
 - [docs/ocr-models-and-custom-llm.md](docs/ocr-models-and-custom-llm.md) — OCR model provenance & custom LLM integration
+- [docs/optimization-2026-10-26.md](docs/optimization-2026-10-26.md) — OCR alternatives, optimization decisions, and validation limits
 - [docs/superpowers/specs/2026-08-27-block-drag-design.md](docs/superpowers/specs/2026-08-27-block-drag-design.md) — Hold-and-drag selection design doc
 - [docs/benchmark-results/](docs/benchmark-results/) — Performance reports
 - [docs/per-monitor-dpi-test-guide.md](docs/per-monitor-dpi-test-guide.md) — High-DPI testing checklist
