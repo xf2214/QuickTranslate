@@ -88,6 +88,24 @@ public class DisableSystemProxySettingsTests
     }
 
     [Fact]
+    public void ProxyHandler_DirectConnection_PrefersIpv4Connect()
+    {
+        var settings = new AppSettings { DisableSystemProxy = true };
+        var sh = HttpProxyHelper.CreateHandler(settings);
+        Assert.False(sh.UseProxy);
+        Assert.NotNull(sh.ConnectCallback);
+    }
+
+    [Fact]
+    public void ProxyHandler_ProxyConnection_KeepsDefaultConnect()
+    {
+        var settings = new AppSettings { DisableSystemProxy = false };
+        var sh = HttpProxyHelper.CreateHandler(settings);
+        Assert.True(sh.UseProxy);
+        Assert.Null(sh.ConnectCallback);
+    }
+
+    [Fact]
     public void ModelDownloader_CreateHttpClient_Respects_DisableSystemProxy()
     {
         var tmp = Path.Combine(Path.GetTempPath(), $"qt_proxy_dl_{Guid.NewGuid():N}");

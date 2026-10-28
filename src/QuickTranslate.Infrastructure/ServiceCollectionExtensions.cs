@@ -1,4 +1,6 @@
+using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -336,14 +338,57 @@ public static class ServiceCollectionExtensions
 
 public static class HttpProxyHelper
 {
+    /// <summary>单次 TCP 连接尝试的上限，避免某个不可达地址把整个请求拖到超时。</summary>
+    private static readonly TimeSpan ConnectAttemptTimeout = TimeSpan.FromSeconds(5);
+
     public static SocketsHttpHandler CreateHandler(AppSettings settings) =>
         new SocketsHttpHandler
         {
             UseProxy = !settings.DisableSystemProxy,
             // Providers are held for the application lifetime. Refresh pooled
             // connections so gateway DNS changes do not require an app restart.
-            PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+            // 直连时自行建连：AAAA 排在 A 之前且本机 IPv6 不可达时，
+            // 默认按解析顺序连接会卡在 IPv6 上直到请求超时（云端 API 全部不可用）。
+            // 走代理时保持默认行为，避免绕开代理。
+            ConnectCallback = settings.DisableSystemProxy ? ConnectPreferringIpv4Async : null
         };
+
+    /// <summary>优先 IPv4 建连，全部 IPv4 失败后再回退 IPv6，每次尝试限时。</summary>
+    internal static async ValueTask<Stream> ConnectPreferringIpv4Async(
+        SocketsHttpConnectionContext context, CancellationToken ct)
+    {
+        var uri = context.InitialRequestMessage.RequestUri
+            ?? throw new HttpRequestException("翻译请求缺少目标地址");
+        var addresses = await Dns.GetHostAddressesAsync(uri.Host, ct).ConfigureAwait(false);
+        if (addresses.Length == 0)
+            throw new HttpRequestException($"无法解析主机 {uri.Host}");
+        var ipv4 = Array.FindAll(addresses, a => a.AddressFamily == AddressFamily.InterNetwork);
+        Exception? lastError = null;
+        foreach (var candidates in ipv4.Length > 0 && ipv4.Length != addresses.Length
+                     ? new[] { ipv4, addresses }
+                     : new[] { addresses })
+        {
+            foreach (var address in candidates)
+            {
+                var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+                try
+                {
+                    using var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    attempt.CancelAfter(ConnectAttemptTimeout);
+                    await socket.ConnectAsync(new IPEndPoint(address, uri.Port), attempt.Token).ConfigureAwait(false);
+                    return new NetworkStream(socket, ownsSocket: true);
+                }
+                catch (Exception ex) when (ex is SocketException or OperationCanceledException)
+                {
+                    socket.Dispose();
+                    ct.ThrowIfCancellationRequested();
+                    lastError = ex;
+                }
+            }
+        }
+        throw new HttpRequestException($"无法连接到 {uri.Host}:{uri.Port}", lastError);
+    }
 }
 
 internal class SerilogAppLoggingProvider : ILoggerProvider
