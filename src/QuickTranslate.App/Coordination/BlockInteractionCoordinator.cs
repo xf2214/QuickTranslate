@@ -131,40 +131,31 @@ public class BlockInteractionCoordinator : IDisposable
     }
 
     public static PhysicalRect ExpandSelectedLines(IReadOnlyList<OcrLine> lines, PhysicalPoint anchor, int dragY)
+        => UnionRect(SelectDraggedLines(lines, anchor, dragY));
+
+    // Both the visual preview and the translated text must use this same selection.
+    // A Y-only selection includes unrelated parallel columns and can disagree with the overlay.
+    private static IReadOnlyList<OcrLine> SelectDraggedLines(
+        IReadOnlyList<OcrLine> lines, PhysicalPoint anchor, int dragY)
     {
-        if (lines.Count == 0) return PhysicalRect.Empty;
+        if (lines.Count == 0) return Array.Empty<OcrLine>();
         var anchorLine = FindAnchorLine(lines, anchor);
-        if (anchorLine == null) return PhysicalRect.Empty;
-        if (dragY <= anchor.Y)
-        {
-            return anchorLine.Box;
-        }
-        // 行扩展策略：按 Y 排序后从锚点行向下收集，所有候选需通过段落启发式的
-        // 轻量护栏（垂直间隙、高度比、水平相交），避免把下一段落或另一栏文本误吸入；
-        // 同时受 dragY + snap 截断，保证“拖到哪选到哪”的显式语义。
-        var sorted = lines.OrderBy(l => l.Box.Top).ToList();
-        int anchorIdx = sorted.FindIndex(l => ReferenceEquals(l, anchorLine) || l.Box.Equals(anchorLine.Box));
-        if (anchorIdx < 0) anchorIdx = 0;
+        if (anchorLine == null) return Array.Empty<OcrLine>();
+        if (dragY <= anchor.Y) return new[] { anchorLine };
+
+        var sorted = lines.OrderBy(line => line.Box.Top).ToList();
         int medianH = ComputeMedianHeightForExpand(sorted, anchorLine);
-        int snap = anchorLine.Box.Height / 2;
-        double dragLimit = dragY + snap;
+        double dragLimit = dragY + anchorLine.Box.Height / 2.0;
         var selected = new List<OcrLine> { anchorLine };
-        PhysicalRect union = anchorLine.Box;
-        PhysicalRect coreUnion = anchorLine.Box;
-        for (int i = anchorIdx + 1; i < sorted.Count; i++)
+        var column = anchorLine.Box;
+        foreach (var line in sorted)
         {
-            var cand = sorted[i];
-            if (cand.Box.Top > dragLimit) break;
-            // 仅向下：跳过锚点上方行
-            if (cand.Box.Top < anchorLine.Box.Top) continue;
-            // 显式拖选：忽略段落垂直间隙护栏（用户明确拖到该 Y 就应选中），仅保留高度比与水平相交护栏，避免跨栏误吸
-            if (!IsCandidateForDragExpand(cand, coreUnion, medianH)) continue;
-            union = UnionRect(union, cand.Box);
-            if (IsCoreWidth(cand, sorted, anchorLine))
-                coreUnion = UnionRect(coreUnion, cand.Box);
-            selected.Add(cand);
+            if (ReferenceEquals(line, anchorLine)) continue;
+            if (line.Box.Top < anchorLine.Box.Top || line.Box.Top > dragLimit) continue;
+            if (!IsCandidateForDragExpand(line, column, medianH)) continue;
+            selected.Add(line);
         }
-        return UnionRect(selected);
+        return selected.OrderBy(line => line.Box.Top).ToList();
     }
 
     private static int ComputeMedianHeightForExpand(List<OcrLine> sorted, OcrLine anchorLine)
@@ -211,38 +202,7 @@ public class BlockInteractionCoordinator : IDisposable
     }
 
     private PhysicalRect ExpandSelectedLinesCached(IReadOnlyList<OcrLine> lines, PhysicalPoint anchor, int dragY, OcrLayoutResult? ocrRef)
-    {
-        if (lines.Count == 0) return PhysicalRect.Empty;
-        var anchorLine = FindAnchorLine(lines, anchor);
-        if (anchorLine == null) return PhysicalRect.Empty;
-        if (dragY <= anchor.Y) return anchorLine.Box;
-        var sorted = GetOrCreateDragSortedCache(lines, ocrRef);
-        int anchorIdx = sorted.FindIndex(l => ReferenceEquals(l, anchorLine) || l.Box.Equals(anchorLine.Box));
-        if (anchorIdx < 0) anchorIdx = 0;
-        int medianH;
-        lock (_dragLock)
-        {
-            medianH = sorted.Count < 3 ? anchorLine.Box.Height : _dragHeightsMedianCache;
-        }
-        if (medianH == 0) medianH = anchorLine.Box.Height;
-        int snap = anchorLine.Box.Height / 2;
-        double dragLimit = dragY + snap;
-        var selected = new List<OcrLine> { anchorLine };
-        PhysicalRect union = anchorLine.Box;
-        PhysicalRect coreUnion = anchorLine.Box;
-        for (int i = anchorIdx + 1; i < sorted.Count; i++)
-        {
-            var cand = sorted[i];
-            if (cand.Box.Top > dragLimit) break;
-            if (cand.Box.Top < anchorLine.Box.Top) continue;
-            if (!IsCandidateForDragExpand(cand, coreUnion, medianH)) continue;
-            union = UnionRect(union, cand.Box);
-            if (IsCoreWidth(cand, sorted, anchorLine))
-                coreUnion = UnionRect(coreUnion, cand.Box);
-            selected.Add(cand);
-        }
-        return UnionRect(selected);
-    }
+        => ExpandSelectedLines(lines, anchor, dragY);
 
     private static bool TryComputeMedianGapForExpand(List<OcrLine> sorted, out int medianGap)
     {
@@ -282,13 +242,15 @@ public class BlockInteractionCoordinator : IDisposable
         return true;
     }
 
-    private static bool IsCandidateForDragExpand(OcrLine cand, PhysicalRect coreUnion, int medianH)
+    private static bool IsCandidateForDragExpand(OcrLine cand, PhysicalRect anchorColumn, int medianH)
     {
-        // 显式拖选：用户明确拖到该 Y 的行就应选中，不应因段落/栏的水平护栏被过滤；
-        // 仅保留高度比护栏（过滤异常高/矮的 UI 栏），水平位置完全放开。
-        double ratio = cand.Box.Height / (double)medianH;
+        double ratio = cand.Box.Height / (double)Math.Max(1, medianH);
         if (ratio < 0.65 || ratio > 1.5) return false;
-        return true;
+        // Enforce continuity with the anchor's column, not the growing union.
+        // Otherwise an unrelated sidebar/title can bridge to a parallel column.
+        int overlap = Math.Min(cand.Box.Right, anchorColumn.Right)
+                    - Math.Max(cand.Box.Left, anchorColumn.Left);
+        return overlap > 0 && overlap >= Math.Min(cand.Box.Width, anchorColumn.Width) * 0.2;
     }
 
     private static OcrLine? FindAnchorLine(IReadOnlyList<OcrLine> lines, int anchorY)
@@ -529,45 +491,31 @@ public class BlockInteractionCoordinator : IDisposable
         StopDragTimer();
         PhysicalRect finalUnion;
         BlockSelectionResult? blockToTranslate;
+        var releasePoint = _cursorService.GetPhysicalCursorPos(out _);
         lock (_dragLock)
         {
-            finalUnion = _lastExpandedUnion;
             _isDragging = false;
-            // Build expanded block from dragOcr lines
             if (_dragOcr != null && _dragOcr.Lines.Count > 0)
             {
-                var expandedBox = finalUnion;
-                var expandedLines = new List<OcrLine>();
-                // Re-derive which lines contributed to union (geometric filter)
-                // Use same logic as ExpandSelectedLines but collect lines
-                var anchorLine = FindAnchorLine(_dragOcr.Lines, _anchorPoint.Y);
-                if (anchorLine != null)
+                // Do not rely on the most recent 32ms timer tick when the user releases.
+                var selected = SelectDraggedLines(_dragOcr.Lines, _anchorPoint, releasePoint.Y);
+                if (selected.Count > 0)
                 {
-                    int anchorTop = anchorLine.Box.Top;
-                    int dragY = expandedBox.Bottom;
-                    int snap = anchorLine.Box.Height / 2;
-                    foreach (var line in _dragOcr.Lines)
-                    {
-                        if (line.Box.Top < anchorTop) continue;
-                        if (line.Box.Top <= dragY + snap) // includes last line
-                            expandedLines.Add(line);
-                        else if (expandedLines.Count > 0 && line.Box.Top <= expandedBox.Bottom + 5)
-                            expandedLines.Add(line);
-                    }
-                    // Ensure union matches finalUnion: if expandedLines union != finalUnion, trust finalUnion
-                    if (expandedLines.Count == 0 && _dragBlock != null)
-                        expandedLines.AddRange(_dragBlock.SelectedLines);
-                    var text = string.Join("\n", expandedLines.Select(l => l.Text));
-                    var opId = _current?.Id ?? Guid.NewGuid();
-                    blockToTranslate = new BlockSelectionResult(text, expandedBox, expandedLines.AsReadOnly(), SelectionKind.Block, opId, NoBlockFound: false);
+                    finalUnion = UnionRect(selected);
+                    _lastExpandedUnion = finalUnion;
+                    var text = string.Join("\n", selected.Select(line => line.Text));
+                    blockToTranslate = new BlockSelectionResult(text, finalUnion, selected,
+                        SelectionKind.Block, _current?.Id ?? Guid.NewGuid(), NoBlockFound: false);
                 }
                 else
                 {
+                    finalUnion = _lastExpandedUnion;
                     blockToTranslate = _dragBlock;
                 }
             }
             else
             {
+                finalUnion = _lastExpandedUnion;
                 blockToTranslate = _dragBlock;
             }
         }
