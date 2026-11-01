@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using QuickTranslate.Core.Abstractions;
+using QuickTranslate.Core.Capture;
 using QuickTranslate.Core.Geometry;
 using QuickTranslate.Core.Ocr;
 using QuickTranslate.Core.Options;
@@ -23,7 +24,10 @@ public class BlockRetryCoordinator
         IOptions<AppSettings> settings)
     {
         Capture = capture;
-        Ocr = ocr;
+        // The ONNX inference path can run synchronously even though it returns a Task.
+        // Never let an already-warmed engine execute the expensive detector/recognizer
+        // on the hotkey or WPF dispatcher thread.
+        Ocr = new BackgroundOcrEngine(ocr);
         Selector = selector;
         Monitors = monitors;
         Settings = settings;
@@ -55,11 +59,15 @@ public class BlockRetryCoordinator
             // 直到块不再触带、带已覆盖整帧或达到扩展上限。
             for (int expand = 0; expand < MaxBandExpansions && !block.NoBlockFound; expand++)
             {
-                bool touchBandTop = block.UnionBox.Top - band.Top < edgeRetry;
-                bool touchBandBottom = band.Bottom - block.UnionBox.Bottom < edgeRetry;
-                if (!touchBandTop && !touchBandBottom) break;
-                if (band.Top <= frame.Region.Top && band.Bottom >= frame.Region.Bottom)
-                    break; // 当前带已覆盖整帧，再扩无意义
+                // Only expand if the block reaches a side where the original
+                // screenshot actually contains more pixels. When band.Top already
+                // meets frame.Top, widening symmetrically only recognizes unrelated
+                // rows below the cursor and adds another expensive recognition pass.
+                bool needAbove = block.UnionBox.Top - band.Top < edgeRetry
+                                 && band.Top > frame.Region.Top;
+                bool needBelow = band.Bottom - block.UnionBox.Bottom < edgeRetry
+                                 && band.Bottom < frame.Region.Bottom;
+                if (!needAbove && !needBelow) break;
 
                 int newHalf = (int)Math.Round(bandHalf * BandExpansionFactor);
                 var newBand = MakeBand(anchor, newHalf);
@@ -79,6 +87,20 @@ public class BlockRetryCoordinator
             // 无关宽行（UI 栏等）触边不影响目标句子的完整性，避免整块双倍 OCR 加重卡顿。
             bool anchorClippedHorizontally = AnchorLineTouchesHorizontalEdge(block, anchor, captureRegion, edgeRetry);
             if (!touchTop && !touchBottom && !anchorClippedHorizontally) return (ocr, block, count);
+
+            // A screenshot already spanning the monitor cannot reveal any
+            // additional pixels by increasing the capture dimensions. In
+            // particular, content near the physical monitor edge must not
+            // trigger an identical capture followed by another full OCR pass.
+            var monitor = Monitors.TryGetMonitorFromPoint(anchor) ?? Monitors.TryGetPrimary();
+            if (monitor != null &&
+                captureRegion.Left <= monitor.Bounds.Left &&
+                captureRegion.Top <= monitor.Bounds.Top &&
+                captureRegion.Right >= monitor.Bounds.Right &&
+                captureRegion.Bottom >= monitor.Bounds.Bottom)
+            {
+                return (ocr, block, count);
+            }
             size = new PhysicalSize((int)Math.Round(size.Width * 1.4), (int)Math.Round(size.Height * 1.4));
         }
 
@@ -153,4 +175,34 @@ public class BlockRetryCoordinator
 
         return Math.Sqrt(dx * dx + dy * dy);
     }
+    // A light adapter local to Block mode: one hop onto the thread pool before
+    // entering CPU-bound ONNX inference. This preserves the engine's cache and
+    // operation gate, unlike creating an extra Paddle session.
+    private sealed class BackgroundOcrEngine : IOcrEngine
+    {
+        private readonly IOcrEngine _inner;
+
+        public BackgroundOcrEngine(IOcrEngine inner) => _inner = inner;
+
+        public string EngineName => _inner.EngineName;
+        public bool IsAvailable => _inner.IsAvailable;
+
+        public event EventHandler? SessionCreated
+        {
+            add => _inner.SessionCreated += value;
+            remove => _inner.SessionCreated -= value;
+        }
+
+        public Task WarmUpAsync(CancellationToken ct = default) =>
+            _inner.WarmUpAsync(ct);
+
+        public Task<OcrLayoutResult> RecognizeAsync(
+            ScreenFrame frame, CancellationToken ct = default, bool forceCpu = false) =>
+            Task.Run(() => _inner.RecognizeAsync(frame, ct, forceCpu), ct);
+
+        public Task<OcrLayoutResult> RecognizeAsync(
+            ScreenFrame frame, PhysicalRect? focusBand, CancellationToken ct = default, bool forceCpu = false) =>
+            Task.Run(() => _inner.RecognizeAsync(frame, focusBand, ct, forceCpu), ct);
+    }
+
 }
