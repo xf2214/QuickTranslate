@@ -13,10 +13,20 @@ namespace QuickTranslate.App.Windows;
 public partial class SelectionOverlayWindow : Window
 {
     public DipRect LastLayoutRect { get; private set; }
+    public DipRect TargetLayoutRect => LastLayoutRect;
     public PhysicalRect? LastPhysicalBox { get; private set; }
     public uint LastDpiX { get; private set; } = 96;
     public uint LastDpiY { get; private set; } = 96;
     public bool IsPreviewMode { get; private set; }
+    public bool IsDragging { get; private set; }
+
+    /// <summary>切换拖拽选区状态：拖拽中高亮展示纯净选框，松开确认时才播放扫描光效。</summary>
+    public void SetDragState(bool isDragging)
+    {
+        if (IsDragging == isDragging) return;
+        IsDragging = isDragging;
+        ApplyElementVisibility();
+    }
 
     /// <summary>调试模式：true 时选定区域显示为实线框；false 时显示扫描式动画。</summary>
     public bool IsDebugBoxMode { get; private set; }
@@ -24,8 +34,16 @@ public partial class SelectionOverlayWindow : Window
     public SelectionOverlayWindow()
     {
         InitializeComponent();
+        ScanLine.Width = 16;
         // 每次窗口变为可见时播放进场动效（只动画边框元素，绝不动窗口 Opacity，避免隐形）
         IsVisibleChanged += OnIsVisibleChanged;
+        ScanLineContainer.SizeChanged += (_, e) =>
+        {
+            if (e.NewSize.Width > 0 && e.NewSize.Height > 0)
+            {
+                UpdateClipGeometry(e.NewSize.Width, e.NewSize.Height);
+            }
+        };
     }
 
     /// <summary>切换预览（虚线截图范围框）/ 选定（扫描动画或调试框）样式。</summary>
@@ -46,9 +64,25 @@ public partial class SelectionOverlayWindow : Window
 
     private void ApplyElementVisibility()
     {
-        PreviewBorder.Visibility = IsPreviewMode ? Visibility.Visible : Visibility.Collapsed;
-        SelectionBorder.Visibility = (!IsPreviewMode && IsDebugBoxMode) ? Visibility.Visible : Visibility.Collapsed;
-        ScanPanel.Visibility = (!IsPreviewMode && !IsDebugBoxMode) ? Visibility.Visible : Visibility.Collapsed;
+        if (IsPreviewMode)
+        {
+            PreviewBorder.Visibility = Visibility.Visible;
+            SelectionBorder.Visibility = Visibility.Collapsed;
+            ScanPanel.Visibility = Visibility.Collapsed;
+        }
+        else if (IsDebugBoxMode)
+        {
+            PreviewBorder.Visibility = Visibility.Collapsed;
+            SelectionBorder.Visibility = Visibility.Visible;
+            ScanPanel.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            PreviewBorder.Visibility = Visibility.Collapsed;
+            SelectionBorder.Visibility = Visibility.Collapsed;
+            ScanPanel.Visibility = Visibility.Visible;
+            ScanLineContainer.Visibility = IsDragging ? Visibility.Collapsed : Visibility.Visible;
+        }
     }
 
     private void OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
@@ -97,16 +131,16 @@ public partial class SelectionOverlayWindow : Window
         };
         guard.Start();
 
-        BeginScanSweep();
+        BeginScanSweep(TargetLayoutRect.Width);
     }
 
-    private void BeginScanSweep()
+    private void BeginScanSweep(double? sweepWidth = null)
     {
         // 苹果风格：扫描线从左外侧单次扫到右外侧（缓入缓出），扫完即停；
-        // 结束后清除动画并把扫描线停靠在右外侧，避免残留在可见区域。
-        double regionWidth = ScanPanel.ActualWidth > 0
-            ? ScanPanel.ActualWidth
-            : Math.Max(0, LastLayoutRect.Width);
+        // 动画终点严格基于当前权威的 TargetLayoutRect.Width（或 ApplyLayout 传入的宽度），
+        // 不得使用可能尚未经过 Measure/Arrange 的旧 ScanPanel.ActualWidth（避免从 740px 截图预览框切换到 45px 选词框时动画飞出屏幕）。
+        double targetWidth = sweepWidth ?? TargetLayoutRect.Width;
+        double regionWidth = Math.Max(0, targetWidth);
         double lineWidth = ScanLine.Width;
 
         var sweep = new DoubleAnimation(
@@ -183,6 +217,19 @@ public partial class SelectionOverlayWindow : Window
         guard.Start();
     }
 
+    private void UpdateClipGeometry(double width, double height)
+    {
+        var clipRect = new Rect(0, 0, Math.Max(0, width), Math.Max(0, height));
+        if (ScanClipGeometry != null && !ScanClipGeometry.IsFrozen)
+        {
+            ScanClipGeometry.Rect = clipRect;
+        }
+        else if (ScanLineContainer != null)
+        {
+            ScanLineContainer.Clip = new RectangleGeometry(clipRect, 4, 4);
+        }
+    }
+
     public void ApplyLayout(DipRect dipRect)
     {
         LastLayoutRect = dipRect;
@@ -192,16 +239,28 @@ public partial class SelectionOverlayWindow : Window
         this.Width = dipRect.Width + 4;
         this.Height = dipRect.Height + 4;
 
-        SelectionBorder.Width = dipRect.Width;
-        SelectionBorder.Height = dipRect.Height;
+        SelectionBorder.Width = Math.Max(0, dipRect.Width);
+        SelectionBorder.Height = Math.Max(0, dipRect.Height);
         SelectionBorder.HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch;
         SelectionBorder.VerticalAlignment = System.Windows.VerticalAlignment.Stretch;
 
+        ScanPanel.Width = Math.Max(0, dipRect.Width);
+        ScanPanel.Height = Math.Max(0, dipRect.Height);
+        ScanPanel.HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch;
+        ScanPanel.VerticalAlignment = System.Windows.VerticalAlignment.Stretch;
+
+        // 动态根据当前物理选框宽度自适应计算扫描线宽度：
+        // ScanLine.Width = Math.Clamp(boxWidth * 0.35, 8.0, 32.0)，短词不再穿模
+        double boxWidth = dipRect.Width;
+        ScanLine.Width = Math.Clamp(boxWidth * 0.35, 8.0, 32.0);
+
+        UpdateClipGeometry(dipRect.Width, dipRect.Height);
+
         // 窗口已可见时（如预览→选定切换）不会触发 IsVisibleChanged，
         // 在这里补播一次单次扫描，并与新宽度对齐
-        if (!IsPreviewMode && !IsDebugBoxMode && IsVisible)
+        if (!IsPreviewMode && !IsDebugBoxMode && !IsDragging && IsVisible)
         {
-            BeginScanSweep();
+            BeginScanSweep(dipRect.Width);
         }
     }
 

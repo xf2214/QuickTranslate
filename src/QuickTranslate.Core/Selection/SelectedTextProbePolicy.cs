@@ -44,6 +44,11 @@ public static class SelectedTextProbePolicy
         PhysicalPoint cursor,
         bool wordMode)
     {
+        if (lineRects == null || lineRects.Count == 0 || unionBox.IsEmpty)
+        {
+            return false;
+        }
+
         int pad = wordMode ? SpatialPadWordPx : SpatialPadBlockLinePx;
         for (int i = 0; i < lineRects.Count; i++)
         {

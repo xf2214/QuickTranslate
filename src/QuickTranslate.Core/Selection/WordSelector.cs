@@ -10,7 +10,7 @@ public class WordSelector : IWordSelector
     // Alt+1 取词：候选必须是"词"——包含英文字母（英文单词，允许撇号/连字符），
     // 或包含 CJK 字符（中文单字/词组）。过滤纯标点、纯数字、纯空白。
     private static readonly Regex WordLike = new(
-        @"[A-Za-z][A-Za-z'\-]*[A-Za-z]|[A-Za-z]",
+        @"[A-Za-z][A-Za-z'\-_]*[A-Za-z]|[A-Za-z]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static bool IsWordLike(string text)
@@ -35,7 +35,7 @@ public class WordSelector : IWordSelector
     {
         opts = opts ?? SelectionOptions.Default;
 
-        var h1 = new List<(WordCandidate Candidate, string LineText)>();
+        var h1 = new List<(WordCandidate Candidate, string LineText, PhysicalRect LineBox)>();
         var h2 = new List<(WordCandidate Candidate, string LineText, PhysicalRect LineBox, double Distance)>();
 
         for (int i = 0; i < ocr.Lines.Count; i++)
@@ -79,7 +79,30 @@ public class WordSelector : IWordSelector
                 // 同一行内水平命中即视为指向该词（行的垂直范围由行框覆盖）。
                 if (ContainsTolerant(c.Box, line.Box, anchor))
                 {
-                    h1.Add((c, line.Text));
+                    // 激活驼峰与下划线子词拆分：为类似 SelectionOverlayWindow、user_id 生成子词候选及局部物理框
+                    var subwords = TextRunSplitter.SplitSubwords(c.Text);
+                    if (subwords.Count > 1)
+                    {
+                        h1.Add((c, line.Text, line.Box));
+                        for (int s = 0; s < subwords.Count; s++)
+                        {
+                            var (sStart, sLen) = subwords[s];
+                            string subText = c.Text.Substring(sStart, sLen);
+                            if (string.IsNullOrWhiteSpace(subText) || !IsWordLike(subText))
+                                continue;
+
+                            var subBox = DefaultWordBoxResolver.ComputeSubBox(c.Box, c.Text, sStart, sLen);
+                            var subCand = new WordCandidate(c.LineIndex, c.WordIndex, subBox, subText, c.Confidence);
+                            if (ContainsTolerant(subBox, line.Box, anchor))
+                            {
+                                h1.Add((subCand, line.Text, line.Box));
+                            }
+                        }
+                    }
+                    else
+                    {
+                        h1.Add((c, line.Text, line.Box));
+                    }
                 }
                 else
                 {
@@ -100,7 +123,7 @@ public class WordSelector : IWordSelector
             // 2) 仅靠行容差命中的候选（光标在两行容差重叠区等）不再按面积取小——
             //    那样会选中另一行的小词导致选框偏离鼠标，改按到词框距离取近，
             //    平局取中心更近者。
-            var insideHits = h1.Where(x => BoxContainsPadded(x.Candidate.Box, anchor)).ToList();
+            var insideHits = h1.Where(x => BoxContainsPadded(x.Candidate.Box, anchor, x.LineBox.Height)).ToList();
             var best = insideHits.Count > 0
                 ? insideHits
                     .OrderBy(x => x.Candidate.Box.Width * x.Candidate.Box.Height)
@@ -154,11 +177,12 @@ public class WordSelector : IWordSelector
     }
 
     /// <summary>光标是否落在词框内（四周各留 2px 容差），用于区分“真命中”与“行容差命中”。</summary>
-    private static bool BoxContainsPadded(PhysicalRect box, PhysicalPoint anchor)
+    private static bool BoxContainsPadded(PhysicalRect box, PhysicalPoint anchor, int lineBoxHeight)
     {
-        const int pad = 2;
-        return anchor.X >= box.Left - pad && anchor.X < box.Right + pad &&
-               anchor.Y >= box.Top - pad && anchor.Y < box.Bottom + pad;
+        int hPad = Math.Max(3, lineBoxHeight / 8);
+        int vPad = Math.Max(3, lineBoxHeight / 4);
+        return anchor.X >= box.Left - hPad && anchor.X < box.Right + hPad &&
+               anchor.Y >= box.Top - vPad && anchor.Y < box.Bottom + vPad;
     }
 
     /// <summary>
@@ -168,8 +192,9 @@ public class WordSelector : IWordSelector
     /// </summary>
     private static bool ContainsTolerant(PhysicalRect wordBox, PhysicalRect lineBox, PhysicalPoint anchor)
     {
-        if (anchor.X < wordBox.Left || anchor.X >= wordBox.Right) return false;
-        int pad = Math.Max(2, lineBox.Height / 6);
+        int hPad = Math.Max(4, lineBox.Height / 6);
+        if (anchor.X < wordBox.Left - hPad || anchor.X >= wordBox.Right + hPad) return false;
+        int pad = Math.Max(3, lineBox.Height / 5);
         return anchor.Y >= lineBox.Top - pad && anchor.Y < lineBox.Bottom + pad;
     }
 

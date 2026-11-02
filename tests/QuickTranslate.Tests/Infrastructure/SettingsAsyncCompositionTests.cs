@@ -113,4 +113,30 @@ public class SettingsAsyncCompositionTests : IDisposable
             host.Dispose();
         }
     }
+
+    [Fact]
+    public async Task StartAsync_WhenHardwareAccelerationEnabled_RebuildsOcrSessions()
+    {
+        var config = new ConfigurationBuilder().Build();
+        var host = Host.CreateDefaultBuilder()
+            .ConfigureServices((ctx, services) =>
+            {
+                services.AddInfrastructure(config);
+                services.AddSingleton(new SettingsLoadState
+                {
+                    LoadTask = Task.FromResult(new AppSettings { UseHardwareAcceleration = true })
+                });
+            })
+            .Build();
+
+        await host.StartAsync();
+
+        var engine = host.Services.GetService<QuickTranslate.Infrastructure.Ocr.PaddleOcrV6Engine>();
+        Assert.NotNull(engine);
+        var opts = host.Services.GetRequiredService<IOptions<AppSettings>>().Value;
+        Assert.True(opts.UseHardwareAcceleration);
+
+        await host.StopAsync();
+        host.Dispose();
+    }
 }

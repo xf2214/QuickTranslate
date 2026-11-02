@@ -135,10 +135,10 @@ public class BlockPerformanceRegressionTests
         var capture = new FakeScreenCapture { CaptureAroundFunc = (_, _) => FakeScreenCapture.CreateFrame(region, Monitor) };
         var monitors = new FakeMonitorService();
         monitors.Primary = monitors.Primary with { Bounds = region, WorkArea = region };
-        var selector = new FakeBlockSelector { SelectFunc = (_, _, _) => Block(new PhysicalRect(400, 5, 400, 300)) };
+        var selector = new FakeBlockSelector { SelectFunc = (_, _, _) => Block(new PhysicalRect(400, 5, 400, 100)) };
         var engine = new RecordingEngine();
         var coordinator = Create(engine, capture, monitors, selector);
-        var result = await coordinator.SelectBlockWithRetryAsync(new PhysicalPoint(600, 280), Monitor, 96, 96, CancellationToken.None);
+        var result = await coordinator.SelectBlockWithRetryAsync(new PhysicalPoint(600, 120), Monitor, 96, 96, CancellationToken.None);
         Assert.Equal(1, engine.Calls);
         Assert.Equal(1, result.captures);
         Assert.False(result.block.NoBlockFound);

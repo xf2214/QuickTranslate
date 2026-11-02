@@ -22,16 +22,30 @@ public sealed class GdiScreenCapture : IScreenCapture
     {
         ct.ThrowIfCancellationRequested();
 
-        var monitor = _monitorService.TryGetMonitorFromPoint(anchor)
-                      ?? _monitorService.EnumerateMonitors().FirstOrDefault()
-                      ?? _monitorService.TryGetPrimary();
+        var monitors = _monitorService.EnumerateMonitors();
+        var monitor = _monitorService.TryGetMonitorFromPoint(anchor);
+
+        if (monitor == null)
+        {
+            // anchor 点落入虚拟桌面死角时，优先用粗估矩形与各监视器的最大重叠进行匹配，避免错误退回主屏
+            var roughRegion = new PhysicalRect(anchor.X - size.Width / 2, anchor.Y - size.Height / 2, size.Width, size.Height);
+            monitor = FindBestOverlappingMonitor(roughRegion, monitors)
+                      ?? _monitorService.TryGetPrimary()
+                      ?? monitors.FirstOrDefault();
+        }
 
         if (monitor == null)
             throw new InvalidOperationException("No monitors available.");
 
-        int x = anchor.X - size.Width / 2;
-        int y = anchor.Y - size.Height / 2;
-        var region = new PhysicalRect(x, y, size.Width, size.Height);
+        // 对截屏物理尺寸做屏幕边界 clamp，防止 4K 200% DPI 下申请 2400x2400 等超大位图
+        int maxW = Math.Max(1, monitor.Bounds.Width);
+        int maxH = Math.Max(1, monitor.Bounds.Height);
+        int clampedW = Math.Clamp(size.Width, 1, maxW);
+        int clampedH = Math.Clamp(size.Height, 1, maxH);
+
+        int x = anchor.X - clampedW / 2;
+        int y = anchor.Y - clampedH / 2;
+        var region = new PhysicalRect(x, y, clampedW, clampedH);
         region = ClampRegionToBounds(region, monitor.Bounds);
 
         return Task.Run(() => CaptureGdiInternal(region, monitor, ct), ct);
@@ -41,14 +55,15 @@ public sealed class GdiScreenCapture : IScreenCapture
     {
         ct.ThrowIfCancellationRequested();
 
-        MonitorInfo? monitor = null;
-        if (monitorHint.HasValue && !monitorHint.Value.IsEmpty)
+        var monitors = _monitorService.EnumerateMonitors();
+        // 优先采用与各显示器重叠面积最大的显示器，避免落入虚拟桌面死角时错误 fallback 到主屏截错屏
+        var monitor = FindBestOverlappingMonitor(region, monitors);
+
+        if (monitor == null)
         {
-            var center = new PhysicalPoint(region.X + region.Width / 2, region.Y + region.Height / 2);
-            monitor = _monitorService.TryGetMonitorFromPoint(center);
-            if (monitor == null || monitor.Id != monitorHint.Value)
+            if (monitorHint.HasValue && !monitorHint.Value.IsEmpty)
             {
-                foreach (var m in _monitorService.EnumerateMonitors())
+                foreach (var m in monitors)
                 {
                     if (m.Id == monitorHint.Value)
                     {
@@ -57,14 +72,14 @@ public sealed class GdiScreenCapture : IScreenCapture
                     }
                 }
             }
-        }
 
-        if (monitor == null)
-        {
-            var center = new PhysicalPoint(region.X + region.Width / 2, region.Y + region.Height / 2);
-            monitor = _monitorService.TryGetMonitorFromPoint(center)
-                      ?? _monitorService.EnumerateMonitors().FirstOrDefault()
-                      ?? _monitorService.TryGetPrimary();
+            if (monitor == null)
+            {
+                var center = new PhysicalPoint(region.X + region.Width / 2, region.Y + region.Height / 2);
+                monitor = _monitorService.TryGetMonitorFromPoint(center)
+                          ?? _monitorService.TryGetPrimary()
+                          ?? monitors.FirstOrDefault();
+            }
         }
 
         if (monitor == null)
@@ -73,6 +88,37 @@ public sealed class GdiScreenCapture : IScreenCapture
         region = ClampRegionToBounds(region, monitor.Bounds);
 
         return Task.Run(() => CaptureGdiInternal(region, monitor, ct), ct);
+    }
+
+    public static MonitorInfo? FindBestOverlappingMonitor(PhysicalRect region, IEnumerable<MonitorInfo> monitors)
+    {
+        MonitorInfo? best = null;
+        long maxOverlap = 0;
+
+        foreach (var m in monitors)
+        {
+            long overlap = ComputeOverlapArea(region, m.Bounds);
+            if (overlap > maxOverlap)
+            {
+                maxOverlap = overlap;
+                best = m;
+            }
+        }
+
+        return maxOverlap > 0 ? best : null;
+    }
+
+    public static long ComputeOverlapArea(PhysicalRect r1, PhysicalRect r2)
+    {
+        int left = Math.Max(r1.X, r2.X);
+        int top = Math.Max(r1.Y, r2.Y);
+        int right = Math.Min(r1.Right, r2.Right);
+        int bottom = Math.Min(r1.Bottom, r2.Bottom);
+
+        if (right <= left || bottom <= top)
+            return 0;
+
+        return (long)(right - left) * (bottom - top);
     }
 
     public static PhysicalRect ClampRegionToBounds(PhysicalRect region, PhysicalRect bounds)

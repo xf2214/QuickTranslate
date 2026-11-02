@@ -13,7 +13,7 @@ public class DefaultWordBoxResolver : IWordBoxResolver
             for (int i = 0; i < line.Words.Count; i++)
             {
                 var w = line.Words[i];
-                result.Add(new WordCandidate(lineIndex, i, w.Box, w.Text, w.Confidence));
+                AddCandidatesForWord(result, lineIndex, i, w.Box, w.Text, w.Confidence);
             }
             return result;
         }
@@ -46,11 +46,58 @@ public class DefaultWordBoxResolver : IWordBoxResolver
                 tokenWidth = line.Box.Right - currentX;
             }
 
-            var box = new PhysicalRect(currentX, lineY, tokenWidth, lineHeight);
-            candidates.Add(new WordCandidate(lineIndex, i, box, token, 1.0f));
+            var rawBox = new PhysicalRect(currentX, lineY, tokenWidth, lineHeight);
             currentX += tokenWidth;
+
+            AddCandidatesForWord(candidates, lineIndex, i, rawBox, token, 1.0f);
         }
 
         return candidates;
+    }
+
+    private static void AddCandidatesForWord(
+        List<WordCandidate> dest,
+        int lineIndex,
+        int wordIndex,
+        PhysicalRect rawBox,
+        string rawText,
+        float confidence)
+    {
+        if (string.IsNullOrEmpty(rawText)) return;
+
+        // 1. 标点清洗与物理框收敛：去除外围标点并按比例收缩物理框，避免标点符号被圈入词框
+        var (cleanStart, cleanLength) = TextRunSplitter.TrimPeripheralPunctuation(rawText);
+        if (cleanLength == 0) return;
+
+        string cleanText = (cleanStart == 0 && cleanLength == rawText.Length)
+            ? rawText
+            : rawText.Substring(cleanStart, cleanLength);
+
+        PhysicalRect cleanBox = ComputeSubBox(rawBox, rawText, cleanStart, cleanLength);
+        dest.Add(new WordCandidate(lineIndex, wordIndex, cleanBox, cleanText, confidence));
+    }
+
+    public static PhysicalRect ComputeSubBox(PhysicalRect parentBox, string fullText, int subStart, int subLength)
+    {
+        if (subStart == 0 && subLength == fullText.Length)
+            return parentBox;
+
+        double totalWeight = 0.0;
+        for (int i = 0; i < fullText.Length; i++)
+            totalWeight += TextRunSplitter.CharWeight(fullText[i]);
+        if (totalWeight <= 0) totalWeight = fullText.Length;
+
+        double leadWeight = 0.0;
+        for (int i = 0; i < subStart; i++)
+            leadWeight += TextRunSplitter.CharWeight(fullText[i]);
+
+        double subWeight = 0.0;
+        for (int i = subStart; i < subStart + subLength; i++)
+            subWeight += TextRunSplitter.CharWeight(fullText[i]);
+
+        int subX = parentBox.X + (int)Math.Round(parentBox.Width * (leadWeight / totalWeight));
+        int subW = (int)Math.Round(parentBox.Width * (subWeight / totalWeight));
+        subW = Math.Max(1, Math.Min(subW, parentBox.Right - subX));
+        return new PhysicalRect(subX, parentBox.Y, subW, parentBox.Height);
     }
 }

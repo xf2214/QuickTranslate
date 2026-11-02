@@ -81,11 +81,11 @@ public class BlockRetryTests
 
         Assert.Equal(1, captures);
         Assert.Equal(1, capture.CaptureAroundCount);
-        // Block 模式识别必须携带以光标为中心的焦点带（半高 280px）
+        // Block 模式识别必须携带以光标为中心的焦点带（半高 120px）
         var band = Assert.Single(ocr.FocusBands);
         Assert.NotNull(band);
-        Assert.Equal(360 - 280, band!.Value.Top);
-        Assert.Equal(360 + 280, band.Value.Bottom);
+        Assert.Equal(360 - 120, band!.Value.Top);
+        Assert.Equal(360 + 120, band.Value.Bottom);
     }
 
     [Fact]
@@ -105,11 +105,11 @@ public class BlockRetryTests
             call++;
             if (call == 1)
             {
-                // union 底边 635 距初始焦点带底边 640 仅 5px < 阈值 20 → 触带；
-                // 扩展后（半高 448，底边 808）不再触带也不触截图边缘 → 直接返回
+                // union 底边 475 距初始焦点带底边 480 仅 5px < 阈值 20 → 触带；
+                // 扩展后（半高 192，底边 552）不再触带也不触截图边缘 → 直接返回
                 return new BlockSelectionResult(
                     BlockText: "band edge block",
-                    UnionBox: new PhysicalRect(400, 400, 400, 235),
+                    UnionBox: new PhysicalRect(400, 300, 400, 175),
                     SelectedLines: new[] { new OcrLine(new PhysicalRect(400, 330, 400, 60), Array.Empty<OcrWord>(), "anchor line") },
                     Kind: SelectionKind.Block,
                     OperationId: Guid.NewGuid(),
@@ -117,7 +117,7 @@ public class BlockRetryTests
             }
             return new BlockSelectionResult(
                 BlockText: "expanded block",
-                UnionBox: new PhysicalRect(400, 400, 400, 300),
+                UnionBox: new PhysicalRect(400, 300, 400, 200),
                 SelectedLines: new[] { new OcrLine(new PhysicalRect(400, 330, 400, 60), Array.Empty<OcrWord>(), "anchor line") },
                 Kind: SelectionKind.Block,
                 OperationId: Guid.NewGuid(),
@@ -141,9 +141,9 @@ public class BlockRetryTests
         Assert.Equal(1, capture.CaptureAroundCount);
         Assert.Equal(2, ocr.RecognizeCount);            // 同帧再识别一次
         Assert.Equal("expanded block", block.BlockText);
-        // 焦点带加宽 ×1.6（半高 280 → 448）
+        // 焦点带加宽 ×1.6（半高 120 → 192）
         Assert.Equal(2, ocr.FocusBands.Count);
-        Assert.Equal(2 * 448, ocr.FocusBands[1]!.Value.Height);
+        Assert.Equal(2 * 192, ocr.FocusBands[1]!.Value.Height);
     }
 
     [Fact]
@@ -257,10 +257,10 @@ public class BlockRetryTests
             call++;
             if (call == 1)
             {
-                // 触初始焦点带顶边（union top 5 < 带顶 80 + 20）→ 同帧扩展
+                // 触初始焦点带顶边（union top 235 < 带顶 240 + 20）→ 同帧扩展
                 return new BlockSelectionResult(
                     BlockText: "top block",
-                    UnionBox: new PhysicalRect(400, 5, 400, 200),
+                    UnionBox: new PhysicalRect(400, 235, 400, 100),
                     SelectedLines: new[] { new OcrLine(new PhysicalRect(400, 330, 400, 60), Array.Empty<OcrWord>(), "anchor line") },
                     Kind: SelectionKind.Block,
                     OperationId: Guid.NewGuid(),
@@ -268,7 +268,18 @@ public class BlockRetryTests
             }
             if (call == 2)
             {
-                // 扩展后不再触带，但触截图顶边 → 换更大截图重抓
+                // 第一次扩展后仍触焦点带顶边（union top 160 < 扩展带顶 168 + 20）→ 再次同帧扩展
+                return new BlockSelectionResult(
+                    BlockText: "still expanding block",
+                    UnionBox: new PhysicalRect(400, 160, 400, 200),
+                    SelectedLines: new[] { new OcrLine(new PhysicalRect(400, 330, 400, 60), Array.Empty<OcrWord>(), "anchor line") },
+                    Kind: SelectionKind.Block,
+                    OperationId: Guid.NewGuid(),
+                    NoBlockFound: false);
+            }
+            if (call == 3)
+            {
+                // 达到扩展上限后仍触截图顶边 (Top=5 < 20) → 换更大截图重抓
                 return new BlockSelectionResult(
                     BlockText: "still clipped block",
                     UnionBox: new PhysicalRect(400, 5, 400, 300),
@@ -288,7 +299,8 @@ public class BlockRetryTests
 
         var coord = new BlockRetryCoordinator(capture, ocr, selector, monitors, settings);
 
-        // 三次识别的预置结果：同帧两次（初始带/扩展带） + 重抓帧一次
+        // 预置结果：同帧三次（初始带 + 两次扩展） + 重抓帧一次
+        ocr.QueuedResults.Enqueue(CreateOcrResult(frameRegion1));
         ocr.QueuedResults.Enqueue(CreateOcrResult(frameRegion1));
         ocr.QueuedResults.Enqueue(CreateOcrResult(frameRegion1));
         ocr.QueuedResults.Enqueue(CreateOcrResult(new PhysicalRect(0, 0, 1680, 1008)));
@@ -301,8 +313,8 @@ public class BlockRetryTests
         var (_, block, captures) = await captureTask;
 
         Assert.Equal(2, captures);              // 重抓一次
-        Assert.Equal(3, ocr.RecognizeCount);    // 初始 + 同帧扩展 + 重抓帧
-        Assert.Equal(3, ocr.FocusBands.Count);
+        Assert.Equal(4, ocr.RecognizeCount);    // 初始 + 两次同帧扩展 + 重抓帧
+        Assert.Equal(4, ocr.FocusBands.Count);
         Assert.Equal("expanded block", block.BlockText);
     }
 }

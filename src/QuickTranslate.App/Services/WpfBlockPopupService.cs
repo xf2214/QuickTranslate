@@ -144,9 +144,10 @@ public class WpfBlockPopupService : IBlockPopupService
 
         // 物理像素定位：绕开 WPF DIP 换算依赖窗口创建时刻 DPI 认知的时序问题
         // （高缩放单屏/混合 DPI/运行中改分辨率时 DIP 定位按错误比例缩放）
-        WindowPhysicalPlacement.SetPhysicalBounds(_window, physicalRect, dpiX, dpiY, padDip: 0, topmost: false);
+        var window = _window!;
+        WindowPhysicalPlacement.SetPhysicalBounds(window, physicalRect, dpiX, dpiY, padDip: 0, topmost: false);
         // DIP 高度下限特调：物理定位后窗口 DPI 已与目标屏一致，DIP 换算自洽
-        _window!.Height = Math.Max(dipRect.Height, Math.Min(140, estH));
+        window.Height = Math.Max(dipRect.Height, Math.Min(140, estH));
 
         _window.ApplyDisplayMode(detailed);
         _window.ResetContent(blockSelection.BlockText);
@@ -164,6 +165,7 @@ public class WpfBlockPopupService : IBlockPopupService
                 hwnd = new WindowInteropHelper(_window).EnsureHandle();
             }
             _window.Show();
+            WindowPhysicalPlacement.SetPhysicalBounds(_window, physicalRect, dpiX, dpiY, padDip: 0, topmost: false);
         }
         else
         {
@@ -208,8 +210,9 @@ public class WpfBlockPopupService : IBlockPopupService
         _hasPlacementContext = true;
 
         // 物理像素定位：与 ShowCore 同一策略，绕开 DIP 换算的 DPI 认知时序问题
-        WindowPhysicalPlacement.SetPhysicalBounds(_window, physicalRect, dpiX, dpiY, padDip: 0, topmost: false);
-        _window!.Height = Math.Max(dipRect.Height, Math.Min(120, errH));
+        var window = _window!;
+        WindowPhysicalPlacement.SetPhysicalBounds(window, physicalRect, dpiX, dpiY, padDip: 0, topmost: false);
+        window.Height = Math.Max(dipRect.Height, Math.Min(120, errH));
 
         _window.ApplyDisplayMode(detailed);
         _window.ResetContent(null);
@@ -224,6 +227,7 @@ public class WpfBlockPopupService : IBlockPopupService
                 hwnd = new WindowInteropHelper(_window).EnsureHandle();
             }
             _window.Show();
+            WindowPhysicalPlacement.SetPhysicalBounds(_window, physicalRect, dpiX, dpiY, padDip: 0, topmost: false);
         }
         else
         {

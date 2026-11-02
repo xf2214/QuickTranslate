@@ -291,6 +291,33 @@ public class EcdictLiteDictionaryTests : IDisposable
         }
     }
 
+    [Fact]
+    public void PeripheralPunctuation_Stripped_SuccessfullyLooksUp()
+    {
+        var appData = MakeAppData(out _);
+        var packedPath = Path.Combine(appData.GetAppDataDirectory(), "ecdict-lite.packed");
+        WriteMiniPacked(packedPath, new (string W, string? P, string T)[]
+        {
+            ("hello", null, "你好"),
+            ("world", null, "世界"),
+            ("apple", null, "苹果"),
+        });
+
+        var dict = new EcdictLiteDictionary(appData, NullLogger<EcdictLiteDictionary>.Instance);
+
+        Assert.True(dict.TryLookup("hello,", "zh-CN", out var rHello));
+        Assert.Equal("你好", rHello!.TargetText);
+
+        Assert.True(dict.TryLookup("(world)", "zh-CN", out var rWorld));
+        Assert.Equal("世界", rWorld!.TargetText);
+
+        Assert.True(dict.TryLookup("'apple'", "zh-CN", out var rApple));
+        Assert.Equal("苹果", rApple!.TargetText);
+
+        Assert.True(dict.TryLookup("“hello”", "zh-CN", out _));
+        Assert.True(dict.TryLookup("[apple]!", "zh-CN", out _));
+    }
+
     private static string? TryFindRepoRoot()
     {
         var cur = AppContext.BaseDirectory;

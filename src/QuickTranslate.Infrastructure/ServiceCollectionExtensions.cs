@@ -82,6 +82,14 @@ internal sealed class SettingsInitializationService : IHostedService
                 // 日志器可能在 Load 完成前就已按默认值创建（Serilog 级别锁死 Information，
                 // 见 LoggerConfigurator 注释）。加载完成后把落盘的 Debug 开关同步到运行时。
                 LoggingSwitch.SetDebugEnabled(loaded.DebugLogging);
+
+                // 若配置与初始默认值不一致（如开启了 UseHardwareAcceleration），重建/初始化 OCR DirectML 会话，
+                // 修复冷启动时因引擎早于配置载入而使用默认值(false)导致 DML Holder 未创建的缺陷。
+                var ocrEngine = _sp.GetService<QuickTranslate.Infrastructure.Ocr.PaddleOcrV6Engine>();
+                if (ocrEngine != null)
+                {
+                    await ocrEngine.RebuildSessionsIfNeededAsync(cancellationToken).ConfigureAwait(false);
+                }
             }
         }
         catch (Exception ex)

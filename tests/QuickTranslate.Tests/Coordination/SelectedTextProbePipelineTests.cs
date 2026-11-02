@@ -272,15 +272,15 @@ public class SelectedTextProbePipelineTests
         selector.SelectFunc = (o, p, opts) => new BlockSelectionResult("fallback block", new PhysicalRect(100, 100, 300, 80), Array.Empty<QuickTranslate.Core.Ocr.OcrLine>(), SelectionKind.Block, Guid.NewGuid(), false);
 
         var run = Task.Run(() => coord.RunBlockPipeline());
-        await Task.Delay(20);
+        await Task.Delay(100);
         Assert.Equal(1, probe.ProbeCount);
         // 空间校验生效：不采纳远距选区，进入截屏
         Assert.Equal(1, capture.CaptureAroundCount);
 
         capture.CaptureAroundTcs.SetResult(FakeScreenCapture.CreateFrame(new PhysicalRect(0, 0, 1200, 720), new MonitorId(new IntPtr(1), @"\\.\DISPLAY1")));
-        await Task.Delay(20);
+        await Task.Delay(100);
         ocr.RecognizeTcs.SetResult(FakeOcrEngine.CreateResult(new PhysicalRect(0, 0, 1200, 720)));
-        await Task.Delay(40);
+        await Task.Delay(100);
         translator.BlockTcs.SetResult(new TranslationResult("fallback block", "fallback block", "译文", "zh-CN", false, false, false));
         await Task.Delay(400);
 

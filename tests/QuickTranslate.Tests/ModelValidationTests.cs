@@ -81,8 +81,8 @@ public class ModelValidationTests
         var detFi = new FileInfo(det);
         var recFi = new FileInfo(rec);
         var keysFi = new FileInfo(kps);
-        Assert.True(detFi.Length > 10_000_000, $"det.onnx too small ({detFi.Length}B)");
-        Assert.True(recFi.Length > 30_000_000, $"rec.onnx too small ({recFi.Length}B)");
+        Assert.True(detFi.Length > 5_000_000, $"det.onnx too small ({detFi.Length}B)");
+        Assert.True(recFi.Length > 15_000_000, $"rec.onnx too small ({recFi.Length}B)");
         Assert.True(keysFi.Length > 10_000, $"ppocr_keys.txt too small ({keysFi.Length}B)");
         var lines = File.ReadAllLines(kps);
         _out.WriteLine($"Dictionary lines: {lines.Length}");

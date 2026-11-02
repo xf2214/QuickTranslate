@@ -93,6 +93,7 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
         }
 
         window.SetDebugBoxMode(_appSettings?.Value.DebugOverlayMode == true);
+        window.SetDragState(false);
         window.SetPreviewMode(preview);
         window.ApplyPhysicalLayout(physicalBox, dpiX, dpiY);
 
@@ -104,6 +105,7 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
                 hwnd = new WindowInteropHelper(window).EnsureHandle();
             }
             window.Show();
+            WindowPhysicalPlacement.SetPhysicalBounds(window, physicalBox, dpiX, dpiY, padDip: 2);
         }
     }
 
@@ -116,10 +118,19 @@ public class WpfSelectionOverlayService : ISelectionOverlayService
     {
         if (_windows.TryGetValue(monitorId, out var entry))
         {
+            entry.window.SetDragState(true);
             entry.window.ApplyPhysicalLayout(physicalBox, dpiX, dpiY);
             _windows[monitorId] = (entry.window, dpiX, dpiY);
-            // 注：拖动 tick 内不再重复 SetWindowPos(TOPMOST)——ApplyPhysicalLayout 已定位，
-            // 窗口自创建即顶置，活动拖拽期间不会被其他窗口盖住；省掉每 tick 一次原生 present。
+            if (!entry.window.IsVisible)
+            {
+                IntPtr hwnd = new WindowInteropHelper(entry.window).Handle;
+                if (hwnd == IntPtr.Zero)
+                {
+                    hwnd = new WindowInteropHelper(entry.window).EnsureHandle();
+                }
+                entry.window.Show();
+                WindowPhysicalPlacement.SetPhysicalBounds(entry.window, physicalBox, dpiX, dpiY, padDip: 2);
+            }
         }
     }
 

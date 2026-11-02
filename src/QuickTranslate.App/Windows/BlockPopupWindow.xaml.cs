@@ -19,8 +19,30 @@ using Color = System.Windows.Media.Color;
 
 namespace QuickTranslate.App.Windows;
 
-public partial class BlockPopupWindow : Window, IFadeOutHideable
+public partial class BlockPopupWindow : Window, IFadeOutHideable, IPhysicalPlacementAware
 {
+    public PhysicalRect? LastPhysicalBox { get; set; }
+    public uint LastDpiX { get; set; } = 96;
+    public uint LastDpiY { get; set; } = 96;
+    public PhysicalRect? LastMonitorBounds { get; set; }
+    public double? LastMonitorDipLeft { get; set; }
+    public double? LastMonitorDipTop { get; set; }
+
+    public void SetPhysicalPlacement(
+        PhysicalRect physicalBounds,
+        uint dpiX,
+        uint dpiY,
+        PhysicalRect? monitorPhysicalBounds = null,
+        double? monitorDipLeft = null,
+        double? monitorDipTop = null)
+    {
+        LastPhysicalBox = physicalBounds;
+        LastDpiX = dpiX;
+        LastDpiY = dpiY;
+        LastMonitorBounds = monitorPhysicalBounds;
+        LastMonitorDipLeft = monitorDipLeft;
+        LastMonitorDipTop = monitorDipTop;
+    }
     // Apple 风格配色（与 XAML 保持一致）；Freeze 后免去变更跟踪与跨线程检查开销
     private static readonly SolidColorBrush PrimaryTextBrush = Frozen(Color.FromRgb(0x1C, 0x1C, 0x1E));
     private static readonly SolidColorBrush ErrorTextBrush = Frozen(Color.FromRgb(0xFF, 0x3B, 0x30));
@@ -93,6 +115,35 @@ public partial class BlockPopupWindow : Window, IFadeOutHideable
         base.OnSourceInitialized(e);
         IntPtr hwnd = new WindowInteropHelper(this).EnsureHandle();
         WindowStyleHelper.ApplyNoActivate(hwnd);
+
+        this.DpiChanged += OnDpiChanged;
+    }
+
+    private void OnDpiChanged(object sender, System.Windows.DpiChangedEventArgs e)
+    {
+        uint newDpiX = (uint)Math.Round(e.NewDpi.PixelsPerInchX);
+        uint newDpiY = (uint)Math.Round(e.NewDpi.PixelsPerInchY);
+        ApplyDpiConvergence(newDpiX, newDpiY);
+    }
+
+    internal void ApplyDpiConvergence(uint newDpiX, uint newDpiY)
+    {
+        if (!LastPhysicalBox.HasValue) return;
+
+        LastDpiX = newDpiX;
+        LastDpiY = newDpiY;
+
+        WindowPhysicalPlacement.SetPhysicalBounds(
+            this,
+            LastPhysicalBox.Value,
+            newDpiX,
+            newDpiY,
+            padDip: 0,
+            topmost: false,
+            setDipSize: true,
+            monitorPhysicalBounds: LastMonitorBounds,
+            monitorDipLeft: LastMonitorDipLeft,
+            monitorDipTop: LastMonitorDipTop);
     }
 
     private void OnRootBorderPreviewMouseDown(object sender, MouseButtonEventArgs e)
@@ -495,3 +546,7 @@ public partial class BlockPopupWindow : Window, IFadeOutHideable
         }
     }
 }
+
+
+
+

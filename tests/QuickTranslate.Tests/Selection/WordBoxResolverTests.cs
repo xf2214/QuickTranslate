@@ -84,4 +84,35 @@ public class WordBoxResolverTests
 
         Assert.Empty(result);
     }
+    [Fact]
+    public void Resolve_WithPeripheralPunctuation_StripsPunctuationAndShrinksBox()
+    {
+        var words = new[]
+        {
+            new OcrWord(new PhysicalRect(100, 20, 70, 30), "(world)", 0.9f, 0)
+        };
+        var line = new OcrLine(new PhysicalRect(0, 0, 300, 50), words);
+
+        var result = _resolver.Resolve(line, lineIndex: 0);
+
+        Assert.Single(result);
+        Assert.Equal("world", result[0].Text);
+        // 收缩后的物理框应去除左右括号，X > 100 且 Right < 170
+        Assert.True(result[0].Box.X > 100);
+        Assert.True(result[0].Box.Right < 170);
+        Assert.True(result[0].Box.Width < 70);
+    }
+
+    [Fact]
+    public void Resolve_PurePunctuation_Skipped()
+    {
+        var words = new[]
+        {
+            new OcrWord(new PhysicalRect(100, 20, 20, 30), ";;,..", 0.9f, 0)
+        };
+        var line = new OcrLine(new PhysicalRect(0, 0, 300, 50), words);
+
+        var result = _resolver.Resolve(line, lineIndex: 0);
+        Assert.Empty(result);
+    }
 }

@@ -131,4 +131,30 @@ public class BlockDragCoordinatorTests
         var expected = UnionOf(lines.Take(4));
         Assert.Equal(expected, lastBox);
     }
+    [Fact]
+    public void Hold_DragUp_ExpandsUnionBox()
+    {
+        var lines = Create5Lines();
+        // anchor at line 2 (y=150, box 140..160), drag up to 110 covers lines 0, 1, 2
+        var expanded = BlockInteractionCoordinator.ExpandSelectedLines(lines, anchorY: 150, dragY: 110);
+        var expected = UnionOf(lines.Take(3));
+        Assert.Equal(expected, expanded);
+    }
+    [Fact]
+    public void ExpandSelectedLines_MultipleLinesAtSameY_PicksHorizontallyClosestAnchor()
+    {
+        // 场景：左侧边栏 (x=50, y=100..130) 与右侧正文 (x=600, y=100..130) 在同一 Y 坐标
+        // 光标在正文左边缘外 x=590 (不在正文框内，但与正文水平距离 10px vs 与侧栏 350px)
+        // 必须按水平最近距离锁定右侧正文行作为锚点，绝不盲目取第一个左栏行
+        var sidebarLine = MakeLine(50, 100, 200, 30, "Sidebar line");
+        var articleLine0 = MakeLine(600, 100, 400, 30, "Article line 0");
+        var articleLine1 = MakeLine(600, 145, 400, 30, "Article line 1");
+        var lines = new List<OcrLine> { sidebarLine, articleLine0, articleLine1 };
+
+        // 锚点 (590, 115)，向下拖拽到 150
+        var expanded = BlockInteractionCoordinator.ExpandSelectedLines(lines, new PhysicalPoint(590, 115), 150);
+
+        Assert.Equal(UnionOf(new[] { articleLine0, articleLine1 }), expanded);
+        Assert.True(expanded.Left >= 600, "Should stay within the article column, not jump to sidebar");
+    }
 }

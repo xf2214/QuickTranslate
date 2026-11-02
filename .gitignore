@@ -242,3 +242,7 @@ assets/dictionaries/_ecdict_work/
 int8/
 # opencode agent state
 .omo/
+# Agent state and local tooling
+.codegraph/
+.superpowers/
+.debug-journal.md

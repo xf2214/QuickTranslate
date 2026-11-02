@@ -23,6 +23,37 @@ internal static class CtcGreedyDecoder
         return Decode(tensor.ToArray(), steps, classes, dictionary);
     }
 
+    internal static (string Text, float Confidence)[] DecodeBatch(Tensor<float> tensor, string[] dictionary)
+    {
+        ArgumentNullException.ThrowIfNull(tensor);
+        ArgumentNullException.ThrowIfNull(dictionary);
+        var shape = tensor.Dimensions;
+        int batchSize, steps, classes;
+        if (shape.Length == 3) { batchSize = shape[0]; steps = shape[1]; classes = shape[2]; }
+        else if (shape.Length == 2) { batchSize = 1; steps = shape[0]; classes = shape[1]; }
+        else throw new ArgumentException("CTC output must have shape [N, T, C] or [T, C].", nameof(tensor));
+
+        var results = new (string Text, float Confidence)[batchSize];
+        int itemLen = steps * classes;
+        if (tensor is DenseTensor<float> dense && !dense.IsReversedStride)
+        {
+            var span = dense.Buffer.Span;
+            for (int b = 0; b < batchSize; b++)
+            {
+                results[b] = Decode(span.Slice(b * itemLen, itemLen), steps, classes, dictionary);
+            }
+            return results;
+        }
+
+        var array = tensor.ToArray();
+        var arraySpan = array.AsSpan();
+        for (int b = 0; b < batchSize; b++)
+        {
+            results[b] = Decode(arraySpan.Slice(b * itemLen, itemLen), steps, classes, dictionary);
+        }
+        return results;
+    }
+
     internal static (string Text, float Confidence) Decode(ReadOnlySpan<float> probs, int T, int C, string[] dict)
     {
         ArgumentNullException.ThrowIfNull(dict);

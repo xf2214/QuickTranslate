@@ -102,7 +102,7 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
     // B 方案分流点：RecognizeAsync 入口按输入面积与焦点带高度决定走 CPU 还是 DML。
     private const int SmallImageThresholdArea = 320 * 320;
     // Word 焦点带高度阈值：Word 触带约 60px，Block 带约 1200px；≤80 视为 Word 强制 CPU。
-    private const int WordFocusBandHeightThreshold = 80;
+    private const int WordFocusBandHeightThreshold = 200;
 
     public event EventHandler? SessionCreated;
 
@@ -926,6 +926,17 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
             var classifierTotal = TimeSpan.Zero;
             var recognizerTotal = TimeSpan.Zero;
 
+            // 待识别行候选（已过缓存、增强、主墨水带裁剪与可选 CLS 处理）
+            var prepLines = new List<(
+                int LineIdx,
+                PhysicalRect Box,
+                Bitmap BaseSource,
+                PhysicalRect RecBox,
+                float ClsAngle,
+                bool ClsNeedRotate,
+                Bitmap? BandBmp,
+                Bitmap? OrientedBmp)>();
+
             try
             {
                 for (int lineIdx = 0; lineIdx < detBoxes.Count; lineIdx++)
@@ -980,70 +991,86 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
 
                     Bitmap? bandBmp = null;
                     Bitmap? orientedBmp = null;
-                    try
+                    Bitmap baseSource = enhancedBmp;
+                    if (bandCropped)
                     {
-                        Bitmap baseSource = enhancedBmp;
-                        if (bandCropped)
+                        bandBmp = CropBitmap(
+                            enhancedBmp,
+                            new PhysicalRect(0, bandTop, enhancedBmp.Width, bandBottom - bandTop));
+                        if (bandBmp != null)
                         {
-                            bandBmp = CropBitmap(
-                                enhancedBmp,
-                                new PhysicalRect(0, bandTop, enhancedBmp.Width, bandBottom - bandTop));
-                            if (bandBmp != null)
-                            {
-                                baseSource = bandBmp;
-                                // 词框坐标系同步收缩：后续投影切分/比例兜底/OcrLine 都以 recBox 为基准
-                                recBox = new PhysicalRect(box.X, box.Y + bandTop, box.Width, bandBottom - bandTop);
-                            }
-                            else
-                            {
-                                bandCropped = false; // 裁剪失败退回整框
-                            }
+                            baseSource = bandBmp;
+                            // 词框坐标系同步收缩：后续投影切分/比例兜底/OcrLine 都以 recBox 为基准
+                            recBox = new PhysicalRect(box.X, box.Y + bandTop, box.Width, bandBottom - bandTop);
                         }
-
-                        // ===== CLASSIFIER (optional) =====
-                        var clsStart = sw.Elapsed;
-                        float clsAngle = 0f;
-                        bool clsNeedRotate = false;
-                        if (holder.ClsSession != null)
+                        else
                         {
-                            var clsInput = PreprocessCls(baseSource);
-                            try
-                            {
-                                (clsAngle, clsNeedRotate) = RunClassifier(holder.ClsSession, clsInput);
-                            }
-                            finally
-                            {
-                                // [池化] chw 归还：RunClassifier 内 using 已释放 outputs，数组再无引用。
-                                ArrayPool<float>.Shared.Return(clsInput);
-                            }
+                            bandCropped = false; // 裁剪失败退回整框
                         }
-                        classifierTotal += sw.Elapsed - clsStart;
+                    }
 
-                        if (clsNeedRotate) orientedBmp = Rotate180(baseSource);
-                        var recSource = orientedBmp ?? baseSource;
-
-                        // ===== RECOGNIZER =====
-                        var recStart = sw.Elapsed;
-                        var recInput = PreprocessRec(recSource);
-                        string recText;
-                        float recConfidence;
+                    // ===== CLASSIFIER (optional) =====
+                    var clsStart = sw.Elapsed;
+                    float clsAngle = 0f;
+                    bool clsNeedRotate = false;
+                    if (holder.ClsSession != null)
+                    {
+                        var clsInput = PreprocessCls(baseSource);
                         try
                         {
-                            (recText, recConfidence) = RunRecognizer(holder.RecSession, recInput, holder.CharDictionary);
+                            (clsAngle, clsNeedRotate) = RunClassifier(holder.ClsSession, clsInput);
                         }
                         finally
                         {
-                            // [池化] chw 归还：RunRecognizer 内 using 已释放 outputs，数组再无引用。
-                            ArrayPool<float>.Shared.Return(recInput.Input);
+                            // [池化] chw 归还：RunClassifier 内 using 已释放 outputs，数组再无引用。
+                            ArrayPool<float>.Shared.Return(clsInput);
                         }
-                        recognizerTotal += sw.Elapsed - recStart;
+                    }
+                    classifierTotal += sw.Elapsed - clsStart;
+
+                    if (clsNeedRotate) orientedBmp = Rotate180(baseSource);
+                    var recSource = orientedBmp ?? (bandBmp != null ? bandBmp : (Bitmap)enhancedBmp.Clone());
+
+                    prepLines.Add((lineIdx, box, recSource, recBox, clsAngle, clsNeedRotate, bandBmp, orientedBmp));
+                }
+
+                // ===== 批处理 RECOGNIZER (分批，支持动态 Batch 维度 [-1, 3, 48, -1]) =====
+                for (int bStart = 0; bStart < prepLines.Count; bStart += MaxRecBatchSize)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    int bCount = Math.Min(MaxRecBatchSize, prepLines.Count - bStart);
+                    var bSlice = prepLines.GetRange(bStart, bCount);
+
+                    var recInputs = new (float[] Input, int Width)[bCount];
+                    for (int k = 0; k < bCount; k++)
+                    {
+                        recInputs[k] = PreprocessRec(bSlice[k].BaseSource);
+                    }
+
+                    (string Text, float Confidence)[] batchDecoded;
+                    var recStart = sw.Elapsed;
+                    try
+                    {
+                        batchDecoded = RunRecognizerBatch(holder.RecSession, recInputs, holder.CharDictionary);
+                    }
+                    finally
+                    {
+                        foreach (var ri in recInputs)
+                            ArrayPool<float>.Shared.Return(ri.Input);
+                    }
+                    recognizerTotal += sw.Elapsed - recStart;
+
+                    for (int k = 0; k < bCount; k++)
+                    {
+                        var item = bSlice[k];
+                        var (recText, recConfidence) = batchDecoded[k];
 
                         string? cacheText = string.IsNullOrWhiteSpace(recText) ? null : recText;
                         if (cacheText == null)
                         {
                             // 空结果同样入缓存：避免带扩展重试时空行再跑一遍 rec
-                            SetRecLineCache(frame.Bitmap, frame.Region, box,
-                                new RecLineCacheEntry(box, null, Array.Empty<OcrWord>(), "none", clsAngle, recConfidence, recBox));
+                            SetRecLineCache(frame.Bitmap, frame.Region, item.Box,
+                                new RecLineCacheEntry(item.Box, null, Array.Empty<OcrWord>(), "none", item.ClsAngle, recConfidence, item.RecBox));
                             continue;
                         }
 
@@ -1051,14 +1078,10 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                         // 1) 垂直投影精确切分（含自适应阈值重试 + 多余段合并修复）；
                         // 2) 受约束最优切分（DP 在墨水最少处下刀，处理粘连/噪声）；
                         // 3) 加权比例法兜底（字符区间估计，置信度最低）。
-                        // 1/2 由 TrySegmentOrConstrained 串联：位图墨水投影只做一次，
-                        // 回退到受约束切分时不再重复全像素遍历。
-                        // 注意 localBox 用 recBox（主墨水带裁剪后的子框）而非原 det 框，
-                        // 否则词框 X/Y 平移会整体偏移一个 bandTop。
                         IReadOnlyList<OcrWord> words;
                         string wordStrategy;
                         if (ProjectionWordSegmenter.TrySegmentOrConstrained(
-                                recSource, recText, recBox, frame.Region, clsNeedRotate, lineIdx,
+                                item.BaseSource, recText, item.RecBox, frame.Region, item.ClsNeedRotate, item.LineIdx,
                                 _isPlausibleWord, out var segWords, out var segDetail))
                         {
                             words = segWords;
@@ -1068,23 +1091,24 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                         {
                             // 比例法兜底的词框需屏幕绝对坐标（与投影/受约束切分一致）
                             var lineScreenBox = new PhysicalRect(
-                                recBox.X + frame.Region.X, recBox.Y + frame.Region.Y, recBox.Width, recBox.Height);
-                            words = BuildWords(recText, lineScreenBox, lineIdx);
+                                item.RecBox.X + frame.Region.X, item.RecBox.Y + frame.Region.Y, item.RecBox.Width, item.RecBox.Height);
+                            words = BuildWords(recText, lineScreenBox, item.LineIdx);
                             wordStrategy = "proportional";
                         }
-                        lineResults[lineIdx] = (recText, words, wordStrategy, clsAngle, recConfidence, recBox);
-                        SetRecLineCache(frame.Bitmap, frame.Region, box,
-                            new RecLineCacheEntry(box, recText, words, wordStrategy, clsAngle, recConfidence, recBox));
-                    }
-                    finally
-                    {
-                        orientedBmp?.Dispose();
-                        bandBmp?.Dispose();
+                        lineResults[item.LineIdx] = (recText, words, wordStrategy, item.ClsAngle, recConfidence, item.RecBox);
+                        SetRecLineCache(frame.Bitmap, frame.Region, item.Box,
+                            new RecLineCacheEntry(item.Box, recText, words, wordStrategy, item.ClsAngle, recConfidence, item.RecBox));
                     }
                 }
             }
             finally
             {
+                foreach (var item in prepLines)
+                {
+                    item.BaseSource.Dispose();
+                    item.BandBmp?.Dispose();
+                    item.OrientedBmp?.Dispose();
+                }
                 foreach (var bmp in lineBmps)
                     bmp?.Dispose();
             }
@@ -1727,18 +1751,88 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         return (chw, targetW);
     }
 
+    private const int MaxRecBatchSize = 8;
+
+    private static (string Text, float Confidence)[] RunRecognizerBatch(
+        InferenceSession session,
+        (float[] Input, int Width)[] inputs,
+        string[] dict)
+    {
+        if (inputs.Length == 0) return Array.Empty<(string Text, float Confidence)>();
+
+        int batchSize = inputs.Length;
+        int maxW = 0;
+        for (int i = 0; i < batchSize; i++)
+        {
+            if (inputs[i].Width > maxW) maxW = inputs[i].Width;
+        }
+        maxW = Math.Max(RecMinW, (maxW + 31) / 32 * 32);
+
+        // 单样本且宽度已对齐时直接复用，零复制
+        if (batchSize == 1 && inputs[0].Width == maxW)
+        {
+            var (singleData, w) = inputs[0];
+            var inputName = session.InputMetadata.Keys.First();
+            var dims = new[] { 1, 3, RecH, w };
+            var tensor = new DenseTensor<float>(singleData.AsMemory(0, 3 * RecH * w), dims);
+            var inputValues = NamedOnnxValue.CreateFromTensor(inputName, tensor);
+            using var outputs = session.Run(new[] { inputValues });
+            return CtcGreedyDecoder.DecodeBatch(outputs.First().AsTensor<float>(), dict);
+        }
+
+        int itemHw = RecH * maxW;
+        int itemFloats = 3 * itemHw;
+        int totalFloats = batchSize * itemFloats;
+        var batchInput = ArrayPool<float>.Shared.Rent(totalFloats);
+
+        try
+        {
+            float padR = (0f - RecMean[0]) / RecStd[0];
+            float padG = (0f - RecMean[1]) / RecStd[1];
+            float padB = (0f - RecMean[2]) / RecStd[2];
+
+            for (int k = 0; k < batchSize; k++)
+            {
+                var (chw, targetW) = inputs[k];
+                int itemBase = k * itemFloats;
+                int hw = RecH * targetW;
+
+                for (int c = 0; c < 3; c++)
+                {
+                    int srcChBase = c * hw;
+                    int dstChBase = itemBase + c * itemHw;
+                    float padVal = c == 0 ? padR : (c == 1 ? padG : padB);
+
+                    for (int y = 0; y < RecH; y++)
+                    {
+                        int srcRow = srcChBase + y * targetW;
+                        int dstRow = dstChBase + y * maxW;
+                        chw.AsSpan(srcRow, targetW).CopyTo(batchInput.AsSpan(dstRow, targetW));
+                        if (maxW > targetW)
+                        {
+                            batchInput.AsSpan(dstRow + targetW, maxW - targetW).Fill(padVal);
+                        }
+                    }
+                }
+            }
+
+            var inputName = session.InputMetadata.Keys.First();
+            var dims = new[] { batchSize, 3, RecH, maxW };
+            var tensor = new DenseTensor<float>(batchInput.AsMemory(0, totalFloats), dims);
+            var inputValues = NamedOnnxValue.CreateFromTensor(inputName, tensor);
+            using var outputs = session.Run(new[] { inputValues });
+
+            return CtcGreedyDecoder.DecodeBatch(outputs.First().AsTensor<float>(), dict);
+        }
+        finally
+        {
+            ArrayPool<float>.Shared.Return(batchInput);
+        }
+    }
+
     private static (string Text, float Confidence) RunRecognizer(InferenceSession session, (float[] Input, int Width) input, string[] dict)
     {
-        var (data, w) = input;
-        var inputName = session.InputMetadata.Keys.First();
-        var dims = new[] { 1, 3, RecH, w };
-        // [池化] 同 RunDetector：租借数组可能超长，切片到精确张量长度后零拷贝包装。
-        var tensor = new DenseTensor<float>(data.AsMemory(0, 3 * RecH * w), dims);
-        var inputValues = NamedOnnxValue.CreateFromTensor(inputName, tensor);
-        using var outputs = session.Run(new[] { inputValues });
-
-        // Decode before outputs.Dispose(): the span is backed by ORT-owned memory.
-        return CtcGreedyDecoder.DecodeTensor(outputs.First().AsTensor<float>(), dict);
+        return RunRecognizerBatch(session, new[] { input }, dict)[0];
     }
 
     // Preserve the existing internal entry point used by accuracy regression tests.

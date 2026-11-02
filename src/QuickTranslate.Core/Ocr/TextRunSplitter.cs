@@ -110,4 +110,69 @@ public static class TextRunSplitter
         parts.Add((start, text.Length - start));
         return parts;
     }
+
+    /// <summary>
+    /// 标识符子词拆分：结合下划线（snake_case）与驼峰（CamelCase/PascalCase）。
+    /// 如 SelectionOverlayWindow → [Selection, Overlay, Window]
+    /// user_id → [user, id]
+    /// on_ButtonClick → [on, Button, Click]
+    /// 返回各子词在 text 中的起始索引与长度。
+    /// </summary>
+    public static IReadOnlyList<(int Start, int Length)> SplitSubwords(string text)
+    {
+        var parts = new List<(int, int)>();
+        if (string.IsNullOrEmpty(text)) return parts;
+
+        int segStart = 0;
+        for (int i = 0; i <= text.Length; i++)
+        {
+            if (i == text.Length || text[i] == '_')
+            {
+                int segLen = i - segStart;
+                if (segLen > 0)
+                {
+                    string segment = text.Substring(segStart, segLen);
+                    var camelParts = SplitCamelCase(segment);
+                    foreach (var (cStart, cLen) in camelParts)
+                    {
+                        if (cLen > 0)
+                        {
+                            parts.Add((segStart + cStart, cLen));
+                        }
+                    }
+                }
+                segStart = i + 1;
+            }
+        }
+
+        return parts;
+    }
+
+    /// <summary>
+    /// 判断字符是否属于外围标点符号/空白（用于去除词首词尾标点）。
+    /// </summary>
+    public static bool IsPeripheralPunctuation(char c)
+    {
+        if (char.IsLetterOrDigit(c)) return false;
+        if (c >= 0x4E00 && c <= 0x9FFF || c >= 0x3400 && c <= 0x4DBF ||
+            c >= 0x3040 && c <= 0x30FF || c >= 0xAC00 && c <= 0xD7AF)
+            return false;
+        return char.IsPunctuation(c) || char.IsSymbol(c) || char.IsWhiteSpace(c);
+    }
+
+    /// <summary>
+    /// 获取去除外围标点后的子串范围 [Start, Length]。若全为标点则返回 Length = 0。
+    /// </summary>
+    public static (int Start, int Length) TrimPeripheralPunctuation(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return (0, 0);
+        int start = 0;
+        while (start < text.Length && IsPeripheralPunctuation(text[start]))
+            start++;
+        int end = text.Length - 1;
+        while (end >= start && IsPeripheralPunctuation(text[end]))
+            end--;
+        if (start > end) return (0, 0);
+        return (start, end - start + 1);
+    }
 }

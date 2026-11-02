@@ -76,7 +76,7 @@ public class DefaultBlockSelector : IBlockSelector
         // 容差 = 中位行高 × 因子：同栏各行的左缘抖动（缩进/项目符号）远小于一行高，
         // 超过该值的左缘差异视为不同列。
         double columnTolerance = medianLineHeight * opts.BlockColumnClusterToleranceFactor;
-        var columnClusters = ClusterByLeftEdge(ocr.Lines, columnTolerance);
+        var columnClusters = ClusterByLeftEdge(ocr.Lines, columnTolerance, medianLineHeight);
         // 多栏守卫：仅当「簇数 ≥ 2 且 含 ≥2 行的簇 ≥ 2」时认定多栏成立。
         // 原因：居中排版的左缘小步长漂移若被误判为多列会零回归破坏；
         // 单栏（聚成一簇）或碎片化（大量单行簇）都不启用列限制，保持旧版行为。
@@ -106,9 +106,9 @@ public class DefaultBlockSelector : IBlockSelector
         {
             if (selected.Count >= opts.BlockMaxLinesPerBlock) break;
             OcrLine candidate = ocr.Lines[i];
-            // 列聚类约束（多栏时）：候选不在锚点列 → 停止生长（break 保持段末/缩进等既有语义不变）
+            // 列聚类约束（多栏时）：候选不在锚点列 → 跳过该异列候选行继续扫描（OCR 检测按 Y 序输出，多栏页面各栏行交错，绝不可直接 break 导致本栏其他行被截断）
             if (multiColumn && !IsInAnchorCluster(candidate, columnClusters[anchorClusterIndex]))
-                break;
+                continue;
             // 上方候选是段末短行（且块内已有全宽行）：它是上一段落的结尾 → 停在边界前，不纳入
             if (IsShortTail(candidate, medianRight, medianLineWidth, opts) && HasFullWidthLine(selected, medianRight, medianLineWidth, opts))
                 break;
@@ -131,9 +131,9 @@ public class DefaultBlockSelector : IBlockSelector
         {
             if (selected.Count >= opts.BlockMaxLinesPerBlock) break;
             OcrLine candidate = ocr.Lines[i];
-            // 列聚类约束（多栏时）：候选不在锚点列 → 停止生长
+            // 列聚类约束（多栏时）：候选不在锚点列 → 跳过该异列候选行继续向下扫描
             if (multiColumn && !IsInAnchorCluster(candidate, columnClusters[anchorClusterIndex]))
-                break;
+                continue;
             // 块当前末行是段末短行（且块内已有全宽行）：段落已结束 → 不再吸入下一段落
             if (IsShortTail(selected[^1], medianRight, medianLineWidth, opts) && HasFullWidthLine(selected, medianRight, medianLineWidth, opts))
                 break;
@@ -328,11 +328,7 @@ public class DefaultBlockSelector : IBlockSelector
         return new PhysicalRect(x, y, right - x, bottom - y);
     }
 
-    // 列聚类：按左缘 minX 升序后做链式贪心聚类（相邻排序差 > 容差才开新簇），O(n log n)。
-    // 链式比较的意义：居中排版的左缘常呈小步长单调漂移，若与簇基准（最小 minX）比较会随
-    // 累积漂移链式碎裂成大量单行簇；只看相邻差即可把缓漂移稳定聚成一列，而真正的跨栏
-    // 左缘跳变（远大于一行高）仍会被切断。
-    private static List<ColumnCluster> ClusterByLeftEdge(IReadOnlyList<OcrLine> lines, double tolerance)
+    private static List<ColumnCluster> ClusterByLeftEdge(IReadOnlyList<OcrLine> lines, double tolerance, int medianLineHeight)
     {
         if (lines.Count == 0) return new List<ColumnCluster>(0);
         var sorted = lines.OrderBy(l => l.Box.Left).ToList();
@@ -343,19 +339,101 @@ public class DefaultBlockSelector : IBlockSelector
         for (int i = 1; i < sorted.Count; i++)
         {
             var line = sorted[i];
-            // 链式比较：与前一行（当前簇最后加入者）的左缘差 ≤ 容差则同列
+            // 链式比较：与前一行（当前簇最后加入者）的左边缘差 <= 容差则同列
             if (Math.Abs(line.Box.Left - current.Lines[^1].Box.Left) <= tolerance)
             {
                 current.Lines.Add(line);
             }
+            else if (IsFirstLineIndentOfCluster(line, current, lines, tolerance, medianLineHeight))
+            {
+                // 首行缩进：属于当前列，吸入当前簇
+                current.Lines.Add(line);
+            }
             else
             {
-                current = new ColumnCluster();
-                current.Lines.Add(line);
-                clusters.Add(current);
+                // 检查是否属于已有其他簇的首行缩进
+                bool merged = false;
+                foreach (var c in clusters)
+                {
+                    if (IsFirstLineIndentOfCluster(line, c, lines, tolerance, medianLineHeight))
+                    {
+                        c.Lines.Add(line);
+                        merged = true;
+                        break;
+                    }
+                }
+
+                if (!merged)
+                {
+                    current = new ColumnCluster();
+                    current.Lines.Add(line);
+                    clusters.Add(current);
+                }
             }
         }
         return clusters;
+    }
+
+    private static bool IsFirstLineIndentOfCluster(
+        OcrLine line, ColumnCluster cluster, IReadOnlyList<OcrLine> allLines, double tolerance, int medianLineHeight)
+    {
+        if (cluster.Count == 0) return false;
+        int clusterMinLeft = cluster.Lines.Min(l => l.Box.Left);
+        int clusterMaxRight = cluster.Lines.Max(l => l.Box.Right);
+
+        // 缩进必须向右：相对于簇基准左边缘向右缩进 1.0~2.5 倍行高（典型首行缩进范围）
+        double indent = line.Box.Left - clusterMinLeft;
+        double maxIndent = Math.Max(2.5 * medianLineHeight, tolerance * 2.5);
+        if (indent <= tolerance || indent > maxIndent)
+            return false;
+
+        // 水平连通性：候选行不能落在该列水平范围之外
+        if (line.Box.Left >= clusterMaxRight)
+            return false;
+        if (line.Box.Right > clusterMaxRight + maxIndent)
+            return false;
+
+        int overlap = Math.Max(0, Math.Min(line.Box.Right, clusterMaxRight) - Math.Max(line.Box.Left, clusterMinLeft));
+        if (overlap < line.Box.Width * 0.4)
+            return false;
+
+        // 阅读顺序上下文：在原始行列表中，候选行与簇内某行在垂直/阅读顺序上相邻
+        int lineIdx = -1;
+        for (int i = 0; i < allLines.Count; i++)
+        {
+            if (ReferenceEquals(allLines[i], line) || allLines[i].Equals(line))
+            {
+                lineIdx = i;
+                break;
+            }
+        }
+
+        if (lineIdx < 0) return false;
+
+        double maxVerticalGap = medianLineHeight * 2.0;
+        if (lineIdx > 0)
+        {
+            var prevLine = allLines[lineIdx - 1];
+            if (cluster.Lines.Contains(prevLine))
+            {
+                int vGap = line.Box.Top - prevLine.Box.Bottom;
+                if (vGap >= -medianLineHeight && vGap <= maxVerticalGap)
+                    return true;
+            }
+        }
+
+        if (lineIdx + 1 < allLines.Count)
+        {
+            var nextLine = allLines[lineIdx + 1];
+            if (cluster.Lines.Contains(nextLine))
+            {
+                int vGap = nextLine.Box.Top - line.Box.Bottom;
+                if (vGap >= -medianLineHeight && vGap <= maxVerticalGap)
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     // 锚点簇定位：按成员引用归属（与 IsInAnchorCluster 一致），避免数值重判在簇内

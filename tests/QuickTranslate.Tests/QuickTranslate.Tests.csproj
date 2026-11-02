@@ -36,4 +36,9 @@
     </ItemGroup>
     <Delete Files="$(OutDir)assets\models\det.onnx;$(OutDir)assets\models\rec.onnx;$(OutDir)assets\models\cls.onnx;$(OutDir)assets\models\ppocr_keys.txt" />
   </Target>
+  <ItemGroup>
+    <Content Include="xunit.runner.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

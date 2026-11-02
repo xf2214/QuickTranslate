@@ -338,7 +338,7 @@ public class WordSelectorTests
     [Fact]
     public void Case17_LongWordWithinWidthLimit_StillSelected()
     {
-        // 长标识符（如 ProjectionWordSegmenter）单字符宽未超限 → 不受新过滤影响
+        // 激活子词拆分后，光标在 (130, 15) 落在 ProjectionWordSegmenter 的子词 Word 上，优先命中子词 Word
         var line = new OcrLine(
             new PhysicalRect(0, 0, 261, 31),
             new[] { new OcrWord(new PhysicalRect(0, 0, 261, 31), "ProjectionWordSegmenter", 0.9f, 0) });
@@ -347,9 +347,23 @@ public class WordSelectorTests
         var result = _selector.SelectWord(ocr, new PhysicalPoint(130, 15));
 
         Assert.False(result.NoTextFound);
-        Assert.Equal("ProjectionWordSegmenter", result.Text);
+        Assert.Equal("Word", result.Text);
     }
 
+    [Fact]
+    public void Case17b_LongWordWithoutSubwords_StillSelected()
+    {
+        // 单一长单词（无驼峰/下划线）单字符宽未超限 → 整体选中
+        var line = new OcrLine(
+            new PhysicalRect(0, 0, 260, 30),
+            new[] { new OcrWord(new PhysicalRect(0, 0, 260, 30), "internationalization", 0.9f, 0) });
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(130, 15));
+
+        Assert.False(result.NoTextFound);
+        Assert.Equal("internationalization", result.Text);
+    }
     [Fact]
     public void Case18_TolerantHitsOnTwoLines_PicksNearestWord_NotSmallestArea()
     {
@@ -428,5 +442,85 @@ public class WordSelectorTests
 
         Assert.False(result.NoTextFound);
         Assert.Equal("own", result.Text);
+    }
+    [Fact]
+    public void Case22_SubwordHoverPrioritization_CamelCaseAndSnakeCase()
+    {
+        // 1) 驼峰 SelectionOverlayWindow (22 字符，宽 220px):
+        // Selection: 0..9 (x: 0..90), Overlay: 9..16 (x: 90..160), Window: 16..22 (x: 160..220)
+        var lineCamel = new OcrLine(
+            new PhysicalRect(0, 0, 220, 30),
+            new[] { new OcrWord(new PhysicalRect(0, 0, 220, 30), "SelectionOverlayWindow", 0.9f, 0) });
+        var ocrCamel = CreateOcr(lineCamel);
+
+        var rSel = _selector.SelectWord(ocrCamel, new PhysicalPoint(45, 15));
+        Assert.Equal("Selection", rSel.Text);
+
+        var rOver = _selector.SelectWord(ocrCamel, new PhysicalPoint(125, 15));
+        Assert.Equal("Overlay", rOver.Text);
+
+        var rWin = _selector.SelectWord(ocrCamel, new PhysicalPoint(190, 15));
+        Assert.Equal("Window", rWin.Text);
+
+        // 2) 下划线 user_id (7 字符，宽 70px):
+        // user: 0..4 (x: 0..40), _: 4..5, id: 5..7 (x: 50..70)
+        var lineSnake = new OcrLine(
+            new PhysicalRect(0, 0, 70, 30),
+            new[] { new OcrWord(new PhysicalRect(0, 0, 70, 30), "user_id", 0.9f, 0) });
+        var ocrSnake = CreateOcr(lineSnake);
+
+        var rUser = _selector.SelectWord(ocrSnake, new PhysicalPoint(20, 15));
+        Assert.Equal("user", rUser.Text);
+
+        var rId = _selector.SelectWord(ocrSnake, new PhysicalPoint(60, 15));
+        Assert.Equal("id", rId.Text);
+    }
+
+    [Fact]
+    public void Case23_HorizontalTolerance_SelectsWordWithin2Px()
+    {
+        var line = new OcrLine(
+            new PhysicalRect(0, 0, 300, 40),
+            new[] { new OcrWord(new PhysicalRect(100, 5, 80, 30), "Target", 0.9f, 0) });
+        var ocr = CreateOcr(line);
+
+        // 左边缘外 2px (x=98) 仍能命中，不退化到 h2
+        var rLeft = _selector.SelectWord(ocr, new PhysicalPoint(98, 20));
+        Assert.False(rLeft.NoTextFound);
+        Assert.Equal("Target", rLeft.Text);
+
+        // 右边缘外 1px (x=180, word ends at 179) 仍能命中
+        var rRight = _selector.SelectWord(ocr, new PhysicalPoint(180, 20));
+        Assert.False(rRight.NoTextFound);
+        Assert.Equal("Target", rRight.Text);
+    }
+    [Fact]
+    public void Case24_HighDpiAdaptiveTolerance_OutsideInkBox_StillInsideHit()
+    {
+        // 4K / 200% 高 DPI 下，行高 40px，字符墨水高度垂直收紧为 15px (y: 10..25)
+        // 光标在行内 y=30（墨水下方 5px，但在自适应垂直容差 vPad=10px 内）
+        var line = new OcrLine(
+            new PhysicalRect(100, 0, 300, 40),
+            new[] { new OcrWord(new PhysicalRect(100, 10, 80, 15), "resolution", 0.9f, 0) });
+        var ocr = CreateOcr(line);
+
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(140, 30));
+        Assert.False(result.NoTextFound);
+        Assert.Equal("resolution", result.Text);
+    }
+
+    [Fact]
+    public void Case25_HighDpiSlantedKerningTolerance_SelectsWordWithinAdaptiveHPad()
+    {
+        // 高 DPI 斜体/字距留白：光标在左侧边缘外 4px（行高 36px，hPad=6px）
+        var line = new OcrLine(
+            new PhysicalRect(100, 0, 300, 36),
+            new[] { new OcrWord(new PhysicalRect(100, 5, 80, 26), "Italic", 0.9f, 0) });
+        var ocr = CreateOcr(line);
+
+        // x=96（左缘 100 外 4px），自适应容差稳定命中，不漂移
+        var result = _selector.SelectWord(ocr, new PhysicalPoint(96, 18));
+        Assert.False(result.NoTextFound);
+        Assert.Equal("Italic", result.Text);
     }
 }

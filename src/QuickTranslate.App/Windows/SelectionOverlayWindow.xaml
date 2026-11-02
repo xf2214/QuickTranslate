@@ -15,16 +15,22 @@
         Width="1"
         Height="1">
     <Grid>
-        <!-- 扫描式选定提示（默认）：苹果风格——轻蓝底色 + 柔光扫描线从左到右单次扫过，不画边框 -->
+        <!-- 扫描式选定提示（默认）：高对比度苹果风格——轻蓝底色 + 常驻精致描边（深色/浅色背景清晰）+ 柔光扫描线从左到右单次扫过 -->
         <Grid x:Name="ScanPanel"
               HorizontalAlignment="Stretch"
               VerticalAlignment="Stretch">
-            <Rectangle Fill="#14007AFF"
+            <Rectangle x:Name="ScanBackground"
+                       Fill="#14007AFF"
+                       Stroke="#4D007AFF"
+                       StrokeThickness="1.5"
                        RadiusX="4"
                        RadiusY="4"
                        SnapsToDevicePixels="True"/>
-            <Border CornerRadius="4" ClipToBounds="True">
-                <Rectangle x:Name="ScanLine" Width="36" HorizontalAlignment="Left">
+            <Border x:Name="ScanLineContainer" CornerRadius="4">
+                <Border.Clip>
+                    <RectangleGeometry x:Name="ScanClipGeometry" RadiusX="4" RadiusY="4"/>
+                </Border.Clip>
+                <Rectangle x:Name="ScanLine" HorizontalAlignment="Left">
                     <Rectangle.Fill>
                         <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
                             <GradientStop Color="#00007AFF" Offset="0"/>

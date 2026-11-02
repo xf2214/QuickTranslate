@@ -86,8 +86,47 @@ public class EcdictLiteDictionary : ILocalDictionary
     // 内部实现
     // ============================================================
 
-    private static string NormalizeKey(string? word) =>
-        string.IsNullOrWhiteSpace(word) ? "" : word.Trim().ToLowerInvariant();
+    private static string NormalizeKey(string? word)
+    {
+        if (string.IsNullOrWhiteSpace(word)) return "";
+        var trimmed = word.Trim();
+        int start = 0;
+        while (start < trimmed.Length && IsPeripheralPunctuation(trimmed[start]))
+        {
+            start++;
+        }
+        int end = trimmed.Length - 1;
+        while (end >= start && IsPeripheralPunctuation(trimmed[end]))
+        {
+            end--;
+        }
+        if (start > end) return "";
+
+        string slice = (start == 0 && end == trimmed.Length - 1)
+            ? trimmed
+            : trimmed.Substring(start, end - start + 1);
+
+        bool hasUpper = false;
+        for (int i = 0; i < slice.Length; i++)
+        {
+            if (char.IsUpper(slice[i]))
+            {
+                hasUpper = true;
+                break;
+            }
+        }
+
+        return hasUpper ? slice.ToLowerInvariant() : slice;
+    }
+
+    private static bool IsPeripheralPunctuation(char c)
+    {
+        if (char.IsLetterOrDigit(c)) return false;
+        if (c >= 0x4E00 && c <= 0x9FFF || c >= 0x3400 && c <= 0x4DBF ||
+            c >= 0x3040 && c <= 0x30FF || c >= 0xAC00 && c <= 0xD7AF)
+            return false;
+        return char.IsPunctuation(c) || char.IsSymbol(c) || char.IsWhiteSpace(c);
+    }
 
     private static bool IsChineseTarget(string? lang)
     {

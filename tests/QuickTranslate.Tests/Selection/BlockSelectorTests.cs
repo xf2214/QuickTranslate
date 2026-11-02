@@ -595,4 +595,54 @@ public class BlockSelectorTests
         Assert.Contains(result.SelectedLines, l => l.Text == "Para line 1");
         Assert.Contains(result.SelectedLines, l => l.Text == "Para line 2");
     }
+    [Fact]
+    public void Case38_MultiColumn_FirstLineIndent_IncludedBothWays()
+    {
+        // 多栏布局下首行缩进 60px（2.0x 行高 30px）：
+        // 左栏：L1 缩进 60px，L2/L3 左对齐 100px
+        // 右栏：R1/R2/R3 左对齐 900px
+        var l1 = MakeLine(160, 100, 340, 30, "L1 first indented");
+        var l2 = MakeLine(100, 145, 400, 30, "L2 body");
+        var l3 = MakeLine(100, 190, 400, 30, "L3 body");
+        var r1 = MakeLine(900, 100, 400, 30, "R1");
+        var r2 = MakeLine(900, 145, 400, 30, "R2");
+        var r3 = MakeLine(900, 190, 400, 30, "R3");
+        var ocr = CreateOcr(l1, l2, l3, r1, r2, r3);
+
+        // 1) 点击段落内部（L2）时，首行 L1 被正常包含
+        var resBody = _selector.SelectBlock(ocr, new PhysicalPoint(200, 160));
+        Assert.Equal(3, resBody.SelectedLines.Count);
+        Assert.Contains(resBody.SelectedLines, l => l.Text == "L1 first indented");
+        Assert.Contains(resBody.SelectedLines, l => l.Text == "L2 body");
+        Assert.Contains(resBody.SelectedLines, l => l.Text == "L3 body");
+        Assert.DoesNotContain(resBody.SelectedLines, l => l.Text.StartsWith("R"));
+
+        // 2) 点击首行（L1）时，后续正文（L2/L3）被正常包含
+        var resFirst = _selector.SelectBlock(ocr, new PhysicalPoint(200, 115));
+        Assert.Equal(3, resFirst.SelectedLines.Count);
+        Assert.Contains(resFirst.SelectedLines, l => l.Text == "L1 first indented");
+        Assert.Contains(resFirst.SelectedLines, l => l.Text == "L2 body");
+        Assert.Contains(resFirst.SelectedLines, l => l.Text == "L3 body");
+        Assert.DoesNotContain(resFirst.SelectedLines, l => l.Text.StartsWith("R"));
+    }
+    [Fact]
+    public void Case39_InterleavedMultiColumnLines_SelectsEntireColumn()
+    {
+        // 真实 OCR 场景：双栏左右并排时，OCR 按 Y 坐标输出交错行列表 [L1, R1, L2, R2, L3, R3]
+        // 旧实现因 break 遇到交错异列行直接夭折，新实现 continue 跳过异列行并完整收集整栏
+        var l1 = MakeLine(100, 100, 400, 30, "ColLeft 1");
+        var r1 = MakeLine(900, 102, 400, 30, "ColRight 1");
+        var l2 = MakeLine(100, 145, 400, 30, "ColLeft 2");
+        var r2 = MakeLine(900, 147, 400, 30, "ColRight 2");
+        var l3 = MakeLine(100, 190, 400, 30, "ColLeft 3");
+        var r3 = MakeLine(900, 192, 400, 30, "ColRight 3");
+        var ocr = CreateOcr(l1, r1, l2, r2, l3, r3);
+
+        // 锚点在 L2 (左栏中间行)
+        var result = _selector.SelectBlock(ocr, new PhysicalPoint(200, 160));
+
+        Assert.Equal(3, result.SelectedLines.Count);
+        Assert.All(result.SelectedLines, l => Assert.StartsWith("ColLeft", l.Text));
+        Assert.DoesNotContain(result.SelectedLines, l => l.Text.StartsWith("ColRight"));
+    }
 }

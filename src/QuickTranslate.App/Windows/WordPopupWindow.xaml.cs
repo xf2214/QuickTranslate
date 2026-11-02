@@ -1,3 +1,4 @@
+using QuickTranslate.App.Coordination;
 using System.Windows;
 using System.Windows.Documents;
 using System.Windows.Input;
@@ -14,8 +15,30 @@ using QuickTranslate.TextToSpeech;
 
 namespace QuickTranslate.App.Windows;
 
-public partial class WordPopupWindow : Window, IFadeOutHideable
+public partial class WordPopupWindow : Window, IFadeOutHideable, IPhysicalPlacementAware
 {
+    public PhysicalRect? LastPhysicalBox { get; set; }
+    public uint LastDpiX { get; set; } = 96;
+    public uint LastDpiY { get; set; } = 96;
+    public PhysicalRect? LastMonitorBounds { get; set; }
+    public double? LastMonitorDipLeft { get; set; }
+    public double? LastMonitorDipTop { get; set; }
+
+    public void SetPhysicalPlacement(
+        PhysicalRect physicalBounds,
+        uint dpiX,
+        uint dpiY,
+        PhysicalRect? monitorPhysicalBounds = null,
+        double? monitorDipLeft = null,
+        double? monitorDipTop = null)
+    {
+        LastPhysicalBox = physicalBounds;
+        LastDpiX = dpiX;
+        LastDpiY = dpiY;
+        LastMonitorBounds = monitorPhysicalBounds;
+        LastMonitorDipLeft = monitorDipLeft;
+        LastMonitorDipTop = monitorDipTop;
+    }
     private static readonly ILogger _logger = LoggingInteractionCoordinatorFactory.CreateLogger<WordPopupWindow>();
 
     // Apple 风格配色（与 XAML 保持一致）；Freeze 后免去变更跟踪与跨线程检查开销
@@ -80,6 +103,39 @@ public partial class WordPopupWindow : Window, IFadeOutHideable
         base.OnSourceInitialized(e);
         IntPtr hwnd = new WindowInteropHelper(this).EnsureHandle();
         WindowStyleHelper.SetNoActivateToolTopMost(hwnd);
+
+        this.DpiChanged += OnDpiChanged;
+    }
+
+    private void OnDpiChanged(object sender, System.Windows.DpiChangedEventArgs e)
+    {
+        uint newDpiX = (uint)Math.Round(e.NewDpi.PixelsPerInchX);
+        uint newDpiY = (uint)Math.Round(e.NewDpi.PixelsPerInchY);
+        ApplyDpiConvergence(newDpiX, newDpiY);
+    }
+
+    internal void ApplyDpiConvergence(uint newDpiX, uint newDpiY)
+    {
+        if (!LastPhysicalBox.HasValue) return;
+
+        LastDpiX = newDpiX;
+        LastDpiY = newDpiY;
+
+        var (l, t, w, h) = PerMonitorDpiHelpers.ToDip(
+            LastPhysicalBox.Value, newDpiX, newDpiY, LastMonitorBounds, LastMonitorDipLeft, LastMonitorDipTop);
+        SetLastLayoutDipRect(new DipRect(l, t, w, h));
+
+        WindowPhysicalPlacement.SetPhysicalBounds(
+            this,
+            LastPhysicalBox.Value,
+            newDpiX,
+            newDpiY,
+            padDip: 0,
+            topmost: false,
+            setDipSize: true,
+            monitorPhysicalBounds: LastMonitorBounds,
+            monitorDipLeft: LastMonitorDipLeft,
+            monitorDipTop: LastMonitorDipTop);
     }
 
     public void ApplyContent(SelectionResult sel, TranslationResult trans)
@@ -432,3 +488,8 @@ internal static class LoggingInteractionCoordinatorFactory
 
     public static ILogger<T> CreateLogger<T>() => _factory.CreateLogger<T>();
 }
+
+
+
+
+

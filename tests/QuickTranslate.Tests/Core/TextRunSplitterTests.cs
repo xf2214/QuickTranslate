@@ -87,4 +87,37 @@ public class TextRunSplitterTests
         Assert.Equal(new[] { "lowercase" }, CamelParts("lowercase"));
         Assert.Equal(new[] { "UPPER" }, CamelParts("UPPER"));
     }
+    private static string[] SubwordParts(string text)
+    {
+        return TextRunSplitter.SplitSubwords(text).Select(p => text.Substring(p.Start, p.Length)).ToArray();
+    }
+
+    [Fact]
+    public void SplitSubwords_CamelAndSnakeCase()
+    {
+        Assert.Equal(new[] { "Selection", "Overlay", "Window" }, SubwordParts("SelectionOverlayWindow"));
+        Assert.Equal(new[] { "user", "id" }, SubwordParts("user_id"));
+        Assert.Equal(new[] { "on", "Button", "Click" }, SubwordParts("on_ButtonClick"));
+        Assert.Equal(new[] { "MAX", "BUFFER", "SIZE" }, SubwordParts("MAX_BUFFER_SIZE"));
+        Assert.Equal(new[] { "hello" }, SubwordParts("hello"));
+    }
+
+    [Fact]
+    public void TrimPeripheralPunctuation_StripsOuterOnly()
+    {
+        var (s1, l1) = TextRunSplitter.TrimPeripheralPunctuation("hello,");
+        Assert.Equal("hello", "hello,".Substring(s1, l1));
+
+        var (s2, l2) = TextRunSplitter.TrimPeripheralPunctuation("(world)");
+        Assert.Equal("world", "(world)".Substring(s2, l2));
+
+        var (s3, l3) = TextRunSplitter.TrimPeripheralPunctuation("'apple'");
+        Assert.Equal("apple", "'apple'".Substring(s3, l3));
+
+        var (s4, l4) = TextRunSplitter.TrimPeripheralPunctuation("don't");
+        Assert.Equal("don't", "don't".Substring(s4, l4));
+
+        var (s5, l5) = TextRunSplitter.TrimPeripheralPunctuation(",.,");
+        Assert.Equal(0, l5);
+    }
 }

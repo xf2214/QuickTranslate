@@ -226,4 +226,120 @@ public class WindowPhysicalPlacementTests
             }
         });
     }
+    [Fact]
+    public void Case6_SecondaryMonitor_WindowLeft_ConsistentWithSetWindowPos()
+    {
+        RunOnSta(() =>
+        {
+            var window = new WordPopupWindow();
+            try
+            {
+                var monitorBounds = new PhysicalRect(1920, 0, 1920, 1080);
+                var bounds = new PhysicalRect(2000, 100, 300, 150);
+                uint dpi = 144;
+
+                // PerMonitorDpiHelpers 按目标屏物理原点计算相对偏移与 DIP
+                var (expectedDipL, expectedDipT, expectedDipW, expectedDipH) = PerMonitorDpiHelpers.ToDip(
+                    bounds, dpi, dpi, monitorBounds, monitorDipLeft: 1920, monitorDipTop: 0);
+
+                double expectedDipLeft = 1920 + (2000 - 1920) * (96.0 / 144.0);
+                Assert.Equal(expectedDipLeft, expectedDipL, 2);
+
+                bool ok = WindowPhysicalPlacement.SetPhysicalBounds(
+                    window, bounds, dpi, dpi, padDip: 0, topmost: false, setDipSize: true,
+                    monitorPhysicalBounds: monitorBounds, monitorDipLeft: 1920, monitorDipTop: 0);
+
+                Assert.True(ok);
+
+                // 物理上下文正确记录，基准与 SetWindowPos 严格一致
+                Assert.Equal(bounds, window.LastPhysicalBox);
+                Assert.Equal(monitorBounds, window.LastMonitorBounds);
+                Assert.Equal(1920.0, window.LastMonitorDipLeft);
+
+                // HWND 物理基准与 SetWindowPos 严格一致
+                IntPtr hwnd = new WindowInteropHelper(window).Handle;
+                RECT rect = GetRect(hwnd);
+                Assert.Equal(bounds.X, rect.Left);
+                Assert.Equal(bounds.Y, rect.Top);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    [Fact]
+    public void Case7_WordPopupWindow_TracksLastPhysicalBox_And_DpiConvergence()
+    {
+        RunOnSta(() =>
+        {
+            var window = new WordPopupWindow();
+            try
+            {
+                var bounds = new PhysicalRect(300, 200, 350, 150);
+                bool ok = WindowPhysicalPlacement.SetPhysicalBounds(window, bounds, 96, 96, padDip: 0, topmost: false);
+                Assert.True(ok);
+
+                Assert.True(window.LastPhysicalBox.HasValue);
+                Assert.Equal(bounds, window.LastPhysicalBox.Value);
+                Assert.Equal(96u, window.LastDpiX);
+
+                // 触发 DPI 变化收敛
+                window.ApplyDpiConvergence(192, 192);
+
+                Assert.Equal(192u, window.LastDpiX);
+                Assert.Equal(192u, window.LastDpiY);
+
+                // 物理定位权威收敛到 LastPhysicalBox，防止拉伸失控
+                IntPtr hwnd = new WindowInteropHelper(window).Handle;
+                RECT rect = GetRect(hwnd);
+                Assert.Equal(bounds.X, rect.Left);
+                Assert.Equal(bounds.Y, rect.Top);
+                Assert.Equal(bounds.X + bounds.Width, rect.Right);
+                Assert.Equal(bounds.Y + bounds.Height, rect.Bottom);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    [Fact]
+    public void Case8_BlockPopupWindow_TracksLastPhysicalBox_And_DpiConvergence()
+    {
+        RunOnSta(() =>
+        {
+            var window = new BlockPopupWindow();
+            try
+            {
+                var bounds = new PhysicalRect(250, 150, 440, 320);
+                bool ok = WindowPhysicalPlacement.SetPhysicalBounds(window, bounds, 120, 120, padDip: 0, topmost: false);
+                Assert.True(ok);
+
+                Assert.True(window.LastPhysicalBox.HasValue);
+                Assert.Equal(bounds, window.LastPhysicalBox.Value);
+                Assert.Equal(120u, window.LastDpiX);
+
+                // 触发 DPI 变化收敛
+                window.ApplyDpiConvergence(144, 144);
+
+                Assert.Equal(144u, window.LastDpiX);
+                Assert.Equal(144u, window.LastDpiY);
+
+                IntPtr hwnd = new WindowInteropHelper(window).Handle;
+                RECT rect = GetRect(hwnd);
+                Assert.Equal(bounds.X, rect.Left);
+                Assert.Equal(bounds.Y, rect.Top);
+                Assert.Equal(bounds.X + bounds.Width, rect.Right);
+                Assert.Equal(bounds.Y + bounds.Height, rect.Bottom);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
 }
+

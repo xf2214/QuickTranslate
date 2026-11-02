@@ -118,9 +118,9 @@ public class BlockRetryCoordinator
     // 96-DPI 基准首捕尺寸（物理像素），运行时经 DpiScale 按监视器 DPI 缩放
     private const int InitialCaptureWidth = 1200;
     private const int InitialCaptureHeight = 720;
-    // 96-DPI 基准焦点带初始半高 280px（带宽 560 ≈ 720p 截图的 78%）：句子/常见段落一次完成，
+    // 96-DPI 基准焦点带初始半高 120px（带宽 240px，覆盖 4~6 行常见段落高度）：句子/常见段落一次完成，
     // 更长的段落通过触带扩展（同帧再识别，×1.6）补齐。
-    private const int FocusBandHalfHeight = 280;
+    private const int FocusBandHalfHeight = 120;
     private const int MaxBandExpansions = 2;
     private const double BandExpansionFactor = 1.6;
 

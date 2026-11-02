@@ -548,7 +548,7 @@ public class WordInteractionCoordinator : IInteractionCoordinator
     /// </summary>
     private static PhysicalRect WordFocusBand(PhysicalPoint cursor, int lineHeight, PhysicalRect frameRegion)
     {
-        int half = Math.Max(1, lineHeight * 3 / 2);
+        int half = Math.Max(1, (int)Math.Round(lineHeight * 1.5));
         return new PhysicalRect(frameRegion.X, cursor.Y - half, frameRegion.Width, half * 2);
     }
 

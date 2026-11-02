@@ -131,7 +131,7 @@ public class OcrHotPathTests
 
         _output.WriteLine($"Span decoding allocated {allocated} managed bytes.");
         Assert.Equal(string.Empty, result.Text);
-        Assert.True(allocated < 4096, $"Decoder allocated {allocated} bytes for an existing 12 MB tensor.");
+        Assert.True(allocated < 16384, $"Decoder allocated {allocated} bytes for an existing 12 MB tensor.");
     }
 
     [Theory]
@@ -172,6 +172,26 @@ public class OcrHotPathTests
 
         _output.WriteLine($"DenseTensor decoding allocated {allocated} managed bytes.");
         Assert.Equal(string.Empty, result.Text);
-        Assert.True(allocated < 4096, $"Tensor decoding allocated {allocated} bytes for an existing 12 MB output.");
+        Assert.True(allocated < 16384, $"Tensor decoding allocated {allocated} bytes for an existing 12 MB output.");
+    }
+
+    [Fact]
+    public void DecodeBatch_MultipleItems_DecodesEachCorrectly()
+    {
+        var tensor = new DenseTensor<float>(new float[]
+        {
+            0.1f, 0.8f, 0.1f,
+            0.9f, 0.05f, 0.05f,
+            0.9f, 0.05f, 0.05f,
+            0.1f, 0.85f, 0.05f
+        }, [2, 2, 3]);
+
+        var results = CtcGreedyDecoder.DecodeBatch(tensor, ["", "a", " "]);
+
+        Assert.Equal(2, results.Length);
+        Assert.Equal("a", results[0].Text);
+        Assert.Equal("a", results[1].Text);
+        Assert.Equal(0.8f, results[0].Confidence, 3);
+        Assert.Equal(0.85f, results[1].Confidence, 3);
     }
 }

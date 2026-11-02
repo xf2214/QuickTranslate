@@ -141,20 +141,38 @@ public class BlockInteractionCoordinator : IDisposable
         if (lines.Count == 0) return Array.Empty<OcrLine>();
         var anchorLine = FindAnchorLine(lines, anchor);
         if (anchorLine == null) return Array.Empty<OcrLine>();
-        if (dragY <= anchor.Y) return new[] { anchorLine };
+        if (dragY == anchor.Y) return new[] { anchorLine };
 
         var sorted = lines.OrderBy(line => line.Box.Top).ToList();
         int medianH = ComputeMedianHeightForExpand(sorted, anchorLine);
-        double dragLimit = dragY + anchorLine.Box.Height / 2.0;
         var selected = new List<OcrLine> { anchorLine };
         var column = anchorLine.Box;
-        foreach (var line in sorted)
+
+        if (dragY > anchor.Y)
         {
-            if (ReferenceEquals(line, anchorLine)) continue;
-            if (line.Box.Top < anchorLine.Box.Top || line.Box.Top > dragLimit) continue;
-            if (!IsCandidateForDragExpand(line, column, medianH)) continue;
-            selected.Add(line);
+            // 向下拖选
+            double dragLimit = dragY + anchorLine.Box.Height / 2.0;
+            foreach (var line in sorted)
+            {
+                if (ReferenceEquals(line, anchorLine)) continue;
+                if (line.Box.Top < anchorLine.Box.Top || line.Box.Top > dragLimit) continue;
+                if (!IsCandidateForDragExpand(line, column, medianH)) continue;
+                selected.Add(line);
+            }
         }
+        else
+        {
+            // 向上拖选（dragY < anchor.Y）：向上吸纳 anchorLine 之上的行至 dragLimit
+            double dragLimit = dragY - anchorLine.Box.Height / 2.0;
+            foreach (var line in sorted)
+            {
+                if (ReferenceEquals(line, anchorLine)) continue;
+                if (line.Box.Top > anchorLine.Box.Top || line.Box.Bottom < dragLimit) continue;
+                if (!IsCandidateForDragExpand(line, column, medianH)) continue;
+                selected.Add(line);
+            }
+        }
+
         return selected.OrderBy(line => line.Box.Top).ToList();
     }
 
@@ -245,12 +263,17 @@ public class BlockInteractionCoordinator : IDisposable
     private static bool IsCandidateForDragExpand(OcrLine cand, PhysicalRect anchorColumn, int medianH)
     {
         double ratio = cand.Box.Height / (double)Math.Max(1, medianH);
-        if (ratio < 0.65 || ratio > 1.5) return false;
-        // Enforce continuity with the anchor's column, not the growing union.
-        // Otherwise an unrelated sidebar/title can bridge to a parallel column.
+        if (ratio < 0.55 || ratio > 1.8) return false;
+        // 允许同栏连续文本（含首行缩进与段尾短行）
         int overlap = Math.Min(cand.Box.Right, anchorColumn.Right)
                     - Math.Max(cand.Box.Left, anchorColumn.Left);
-        return overlap > 0 && overlap >= Math.Min(cand.Box.Width, anchorColumn.Width) * 0.2;
+        if (overlap > 0 && overlap >= Math.Min(cand.Box.Width, anchorColumn.Width) * 0.15)
+            return true;
+
+        if (cand.Box.Left <= anchorColumn.Right + medianH * 1.5 && cand.Box.Right >= anchorColumn.Left - medianH * 1.5)
+            return true;
+
+        return false;
     }
 
     private static OcrLine? FindAnchorLine(IReadOnlyList<OcrLine> lines, int anchorY)
@@ -260,18 +283,20 @@ public class BlockInteractionCoordinator : IDisposable
 
     private static OcrLine? FindAnchorLine(IReadOnlyList<OcrLine> lines, PhysicalPoint anchor)
     {
+        // 1. 完全落在框内
         foreach (var line in lines)
         {
             if (anchor.Y >= line.Box.Top && anchor.Y < line.Box.Bottom
                 && anchor.X >= line.Box.Left && anchor.X < line.Box.Right)
                 return line;
         }
-        foreach (var line in lines)
+        // 2. 落在同一 Y 范围内的行：按水平距离最近优先（绝不盲目取第一个，防止落入邻列/侧栏）
+        var sameY = lines.Where(l => anchor.Y >= l.Box.Top && anchor.Y < l.Box.Bottom).ToList();
+        if (sameY.Count > 0)
         {
-            if (anchor.Y >= line.Box.Top && anchor.Y < line.Box.Bottom)
-                return line;
+            return sameY.OrderBy(l => HorizontalDistanceToRect(anchor, l.Box)).First();
         }
-        // nearest by distance to rect
+        // 3. 全局欧氏距离最近
         double best = double.MaxValue;
         OcrLine? bestLine = null;
         foreach (var line in lines)
@@ -284,6 +309,13 @@ public class BlockInteractionCoordinator : IDisposable
             }
         }
         return bestLine;
+    }
+
+    private static double HorizontalDistanceToRect(PhysicalPoint p, PhysicalRect box)
+    {
+        if (p.X < box.Left) return box.Left - p.X;
+        if (p.X >= box.Right) return p.X - (box.Right - 1);
+        return 0;
     }
 
     private static PhysicalRect UnionRect(IEnumerable<OcrLine> lines)
@@ -352,64 +384,35 @@ public class BlockInteractionCoordinator : IDisposable
             _dragDpiY = 96;
         }
 
-        bool canReuseOcr = false;
         lock (_dragLock)
         {
             _anchorPoint = anchor;
             _hasExpandedCapture = false;
-            // 复用判定：仅当锚点仍在上次 OCR 截图区域内才复用，避免“指针在 A 处、框显示在 B 处”的偏移
-            canReuseOcr = _dragOcr != null && _dragOcr.Lines.Count > 0
-                               && !_dragCaptureRegion.IsEmpty && _dragCaptureRegion.Contains(anchor);
-            if (canReuseOcr)
-            {
-                // 长按初框固定为锚点处小预览（40×20），避免直接显示整行宽导致“框偏移”观感；
-                // 拖动后 ExpandSelectedLines 再按行扩展，松开时才显示最终块
-                _lastExpandedUnion = new PhysicalRect(anchor.X - 20, anchor.Y - 10, 40, 20);
-                if (_logger.IsEnabled(LogLevel.Debug))
-                    _logger.LogDebug("HoldStart: reuse _dragOcr lines={LC} capture={CR} initialUnion small {Box}", _dragOcr!.Lines.Count, _dragCaptureRegion, _lastExpandedUnion);
-            }
-            else
-            {
-                if (_dragOcr != null && _logger.IsEnabled(LogLevel.Debug))
-                    _logger.LogDebug("HoldStart: discard stale _dragOcr lines={LC} capture={CR} anchor={Anchor}", _dragOcr.Lines.Count, _dragCaptureRegion, anchor);
-                // 长按初框统一为锚点小预览，保持与复用路径一致的跟手体验
-                _lastExpandedUnion = new PhysicalRect(anchor.X - 20, anchor.Y - 10, 40, 20);
-                if (_logger.IsEnabled(LogLevel.Debug))
-                    _logger.LogDebug("HoldStart: fallback small box {Box} (anchor preview)", _lastExpandedUnion);
-                // 失效旧 OCR，避免拖动期间 ExpandSelectedLines 命中远处旧行
-                _dragOcr = null;
-                _dragBlock = null;
-                InvalidateDragSortedCache();
-            }
+            // 每次重新开始长按拖拽必须重置，绝不复用过往遗留的旧选区和旧OCR，彻底消除“选区在其他地方跳出来”的缺陷！
+            _lastExpandedUnion = new PhysicalRect(anchor.X - 20, anchor.Y - 10, 40, 20);
+            _dragOcr = null;
+            _dragBlock = null;
+            InvalidateDragSortedCache();
             _isDragging = true;
         }
 
-        // Show initial preview (dragging state, no scan)
+        // Show initial preview: active drag selection mode (clean translucent blue, no scanline)
         var initialUnion = _lastExpandedUnion;
-        _overlayService.Show(initialUnion, _dragMonitorId, _dragDpiX, _dragDpiY, preview: true);
+        _overlayService.Show(initialUnion, _dragMonitorId, _dragDpiX, _dragDpiY, preview: false);
+        _overlayService.Update(initialUnion, _dragMonitorId, _dragDpiX, _dragDpiY);
         _dragOverlayShownAt = Environment.TickCount64;
 
-        // 复用路径 OCR 已就绪：直接展到锚点行整宽，不必等拖动
-        if (canReuseOcr && _dragOcr != null)
+        _ = Task.Run(async () =>
         {
-            TryAutoExpandToAnchorLine(_dragOcr, anchor);
-        }
-
-        // If pipeline hasn't produced OCR yet, trigger it async in background
-        if (_dragOcr == null)
-        {
-            _ = Task.Run(async () =>
+            try
             {
-                try
-                {
-                    await RunBlockPipelineForDragAsync(anchor, _dragMonitorId, _dragDpiX, _dragDpiY).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Drag OCR pipeline failed (non-fatal, preview stays small)");
-                }
-            });
-        }
+                await RunBlockPipelineForDragAsync(anchor, _dragMonitorId, _dragDpiX, _dragDpiY).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Drag OCR pipeline failed (non-fatal, preview stays small)");
+            }
+        });
 
         StartDragTimer();
         if (_logger.IsEnabled(LogLevel.Debug))
@@ -430,20 +433,38 @@ public class BlockInteractionCoordinator : IDisposable
         }
         try
         {
-            var (ocr, block, _) = await _retryCoordinator.SelectBlockWithRetryAsync(anchor, mid, dpiX, dpiY, slot.Cts.Token).ConfigureAwait(false);
+            // 拖拽模式优化：长按拖选只需单轮单帧 OCR 获取行列表，绝不跑多轮重试管线（避免 2~3 秒等待与假死）
+            PhysicalSize size = new(DpiScale.Px(1200, dpiX), DpiScale.Px(720, dpiY));
+            using var frame = await _retryCoordinator.Capture.CaptureAroundAsync(anchor, size, slot.Cts.Token).ConfigureAwait(false);
             if (IsStaleOrCanceled(slot) || !_isDragging) return;
+
+            var band = MakeBand(anchor, DpiScale.Px(300, dpiY));
+            var ocr = await _retryCoordinator.Ocr.RecognizeAsync(frame, band, slot.Cts.Token).ConfigureAwait(false);
+            if (IsStaleOrCanceled(slot) || !_isDragging) return;
+
             lock (_dragLock)
             {
                 _dragOcr = ocr;
-                _dragBlock = block;
-                _dragInitialUnion = block.UnionBox;
-                _dragCaptureRegion = ocr.CaptureRegion;
+                _dragCaptureRegion = ocr.CaptureRegion.IsEmpty ? frame.Region : ocr.CaptureRegion;
+                _hasExpandedCapture = false;
             }
-            // OCR 就绪即展到锚点行整宽（仍是虚线预览，不切整块）：不拖也看得到行框
-            TryAutoExpandToAnchorLine(ocr, anchor);
+
+            // OCR 就绪立即吸附到当前鼠标位置（即使用户在 OCR 期间已拖动，也立即按当前位置扩展）
+            var curPos = _cursorService.GetPhysicalCursorPos(out _);
+            var initialDrag = SelectDraggedLines(ocr.Lines, anchor, curPos.Y);
+            if (initialDrag.Count > 0)
+            {
+                var union = UnionRect(initialDrag);
+                lock (_dragLock) { _lastExpandedUnion = union; }
+                _overlayService.Update(union, mid, dpiX, dpiY);
+            }
+            else
+            {
+                TryAutoExpandToAnchorLine(ocr, anchor);
+            }
             if (_logger.IsEnabled(LogLevel.Debug))
-                _logger.LogDebug("Drag pipeline OCR done: lines={LC} blockLines={BL} union={Box} capture={CR} keep small preview {Small}",
-                    ocr.Lines.Count, block.SelectedLines.Count, block.UnionBox, ocr.CaptureRegion, _lastExpandedUnion);
+                _logger.LogDebug("Drag pipeline OCR done: lines={LC} dragLines={BL} union={Box} capture={CR} currentUnion={Small}",
+                    ocr.Lines.Count, initialDrag.Count, UnionRect(initialDrag), ocr.CaptureRegion, _lastExpandedUnion);
             if (_logger.IsEnabled(LogLevel.Debug))
             {
                 foreach (var line in ocr.Lines)
@@ -531,6 +552,7 @@ public class BlockInteractionCoordinator : IDisposable
 
         // Switch to solid scan + translation
         _overlayService.Show(finalUnion, _dragMonitorId, _dragDpiX, _dragDpiY, preview: false);
+        _statusIndicator?.Show(_dragMonitorId, finalUnion, _dragDpiX, _dragDpiY, "正在翻译…");
         var currentSlot = _current;
         if (currentSlot == null)
         {
@@ -610,8 +632,7 @@ public class BlockInteractionCoordinator : IDisposable
     {
         if (!_isDragging)
             return;
-        if (_dragOcr == null)
-            return;
+
         var cur = _cursorService.GetPhysicalCursorPos(out var mid);
         var mi = _monitorService.TryGetMonitorFromPoint(cur);
         if (mi != null)
@@ -625,43 +646,64 @@ public class BlockInteractionCoordinator : IDisposable
             _dragMonitorId = mid;
         }
 
-        // 节流：仅当 Y 变化 ≥ max(5, snap/2) 才重算 Expand，避免静止时无谓计算
+        if (_dragOcr == null)
+        {
+            // OCR 尚未就绪（前 ~200ms）：选区框直接跟随鼠标拉伸自由矩形，消除假死感
+            int minX = Math.Min(_anchorPoint.X, cur.X);
+            int minY = Math.Min(_anchorPoint.Y, cur.Y);
+            int w = Math.Max(40, Math.Abs(cur.X - _anchorPoint.X));
+            int h = Math.Max(20, Math.Abs(cur.Y - _anchorPoint.Y));
+            var freeRect = new PhysicalRect(minX, minY, w, h);
+            lock (_dragLock) { _lastExpandedUnion = freeRect; }
+            if (!_pendingUpdate)
+            {
+                _pendingUpdate = true;
+                _overlayService.Update(freeRect, _dragMonitorId, _dragDpiX, _dragDpiY);
+                var disp = System.Windows.Application.Current?.Dispatcher;
+                if (disp != null)
+                {
+                    _ = disp.InvokeAsync(() => { _pendingUpdate = false; }, DispatcherPriority.Background);
+                }
+                else
+                {
+                    _pendingUpdate = false;
+                }
+            }
+            return;
+        }
+
+        // 节流：仅当 Y 变化 ≥ max(4, snap/2) 才重算 Expand，避免静止时无谓计算
         int snapForThrottle = _dragOcr.Lines.Count > 0 ? _dragOcr.Lines[0].Box.Height / 2 : 10;
-        int throttleThreshold = Math.Max(5, snapForThrottle / 2);
-        bool shouldExpand = _lastDragY == int.MinValue || Math.Abs(cur.Y - _lastDragY) >= throttleThreshold || cur.Y <= _anchorPoint.Y;
+        int throttleThreshold = Math.Max(4, snapForThrottle / 2);
+        bool shouldExpand = _lastDragY == int.MinValue || Math.Abs(cur.Y - _lastDragY) >= throttleThreshold;
         if (shouldExpand)
         {
             _lastDragY = cur.Y;
-            if (cur.Y <= _anchorPoint.Y)
+            var expanded = ExpandSelectedLinesCached(_dragOcr.Lines, _anchorPoint, cur.Y, _dragOcr);
+            if (!expanded.IsEmpty)
             {
-                // 回到锚点上方不扩展，但仍需检查捕获扩展（下方逻辑）
-            }
-            else
-            {
-                var expanded = ExpandSelectedLinesCached(_dragOcr.Lines, _anchorPoint, cur.Y, _dragOcr);
-                if (!expanded.IsEmpty)
+                PhysicalRect last;
+                lock (_dragLock) { last = _lastExpandedUnion; }
+                bool changed = !expanded.Equals(last);
+                if (changed)
                 {
-                    PhysicalRect last;
-                    lock (_dragLock) { last = _lastExpandedUnion; }
-                    bool changed = !expanded.Equals(last);
-                    if (changed)
+                    lock (_dragLock) { _lastExpandedUnion = expanded; }
+                    if (!_pendingUpdate)
                     {
-                        lock (_dragLock) { _lastExpandedUnion = expanded; }
-                        if (!_pendingUpdate)
+                        _pendingUpdate = true;
+                        _overlayService.Update(expanded, _dragMonitorId, _dragDpiX, _dragDpiY);
+                        var disp = System.Windows.Application.Current?.Dispatcher;
+                        if (disp != null)
                         {
-                            _pendingUpdate = true;
-                            try
-                            {
-                                _overlayService.Update(expanded, _dragMonitorId, _dragDpiX, _dragDpiY);
-                            }
-                            finally
-                            {
-                                _pendingUpdate = false;
-                            }
+                            _ = disp.InvokeAsync(() => { _pendingUpdate = false; }, DispatcherPriority.Background);
                         }
-                        if (_logger.IsEnabled(LogLevel.Debug))
-                            _logger.LogDebug("Drag tick expanded to {Box} curY={CY}", expanded, cur.Y);
+                        else
+                        {
+                            _pendingUpdate = false;
+                        }
                     }
+                    if (_logger.IsEnabled(LogLevel.Debug))
+                        _logger.LogDebug("Drag tick expanded to {Box} curY={CY}", expanded, cur.Y);
                 }
             }
         }
@@ -848,7 +890,7 @@ public class BlockInteractionCoordinator : IDisposable
     {
         if (IsStaleOrCanceled(slot)) return;
         SetState(slot, AppState.Translating);
-        _statusIndicator?.Update("正在翻译…");
+        _statusIndicator?.Show(mid, block.UnionBox, dpiX, dpiY, "正在翻译…");
         var translation = await _translationRouter.TranslateBlockAsync(block.BlockText!, _settings.Value.TargetLanguage, slot.Cts.Token).ConfigureAwait(false);
         if (IsStaleOrCanceled(slot)) return;
         if (!skipHold && !translation.FromCache && !translation.FromDictionary)
@@ -1065,6 +1107,7 @@ public class BlockInteractionCoordinator : IDisposable
                 }
             }
             _overlayService.Show(block.UnionBox, mid, dpiX, dpiY);
+            _statusIndicator?.Show(mid, block.UnionBox, dpiX, dpiY, "正在翻译…");
             long overlayShownAt = Environment.TickCount64;
 
             if (IsStaleOrCanceled(newSlot)) return;

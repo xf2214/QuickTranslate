@@ -153,6 +153,7 @@ public class WpfWordPopupService : IWordPopupService
                 hwnd = new WindowInteropHelper(window).EnsureHandle();
             }
             window.Show();
+            WindowPhysicalPlacement.SetPhysicalBounds(window, physicalRect, dpiX, dpiY, padDip: 0, topmost: false);
         }
         else
         {
@@ -249,6 +250,7 @@ public class WpfWordPopupService : IWordPopupService
                 hwnd = new WindowInteropHelper(window).EnsureHandle();
             }
             window.Show();
+            WindowPhysicalPlacement.SetPhysicalBounds(window, physicalRect, dpiX, dpiY, padDip: 0, topmost: false);
         }
         else
         {
