@@ -975,7 +975,9 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                     {
                         int padTop = Math.Max(0, dominantBand.Value.Top - RecBandPaddingPx);
                         int padBottom = Math.Min(enhancedBmp.Height, dominantBand.Value.Bottom + RecBandPaddingPx);
-                        if (padBottom - padTop < enhancedBmp.Height * 9 / 10)
+                        // 只要主墨水带上下存在与邻行重叠的渗漏行 (padTop > 0 或 padBottom < Height)
+                        // 且有效高度合格 (>= 6px)，就进行垂直裁剪，绝不让上一行下伸笔画进入 rec/cls
+                        if ((padTop > 0 || padBottom < enhancedBmp.Height) && padBottom - padTop >= 6)
                         {
                             if (_logger.IsEnabled(LogLevel.Debug))
                                 _logger.LogDebug(

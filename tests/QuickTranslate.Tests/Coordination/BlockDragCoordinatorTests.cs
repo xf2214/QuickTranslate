@@ -198,4 +198,57 @@ public class BlockDragCoordinatorTests
         Assert.NotNull(indicator);
         Assert.Contains(indicator!.ShowMessages, m => m.Contains("正在翻译"));
     }
+
+    [Fact]
+    public void HandleHoldStart_ShowsRecognizingStatusIndicator_AtInitialUnion()
+    {
+        var coord = CreateCoordinator(out var cursor, out _, out _, out _, out _, out var overlay, out _, out _, out _, out var broker);
+        cursor.CursorPos = new PhysicalPoint(50, 110);
+        broker.RaiseBlockHoldStateChanged(HotkeyHoldPhase.Start);
+
+        var field = typeof(BlockInteractionCoordinator).GetField("_statusIndicator", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var indicator = field?.GetValue(coord) as FakeStatusIndicatorService;
+        Assert.NotNull(indicator);
+        Assert.Contains(indicator!.ShowMessages, m => m.Contains("正在识别"));
+    }
+
+    [Fact]
+    public void ExpandSelectedLines_DistantAnchor_ReturnsEmpty_PreventsFarJumping()
+    {
+        var lines = Create5Lines(); // y: 100..200
+        // 光标在远处 y=800 (远离所有行 600px)
+        var expanded = BlockInteractionCoordinator.ExpandSelectedLines(lines, new PhysicalPoint(50, 800), 820);
+        // 绝不跨屏吸附到顶部的行，应返回空矩形由上层保持平滑自由拉伸
+        Assert.True(expanded.IsEmpty, $"Distant anchor should return empty, got {expanded}");
+    }
+
+    [Fact]
+    public async Task TranslateAndDisplayBlockAsync_OnException_HidesStatusAndOverlay_ShowsError()
+    {
+        var coord = CreateCoordinator(out var cursor, out _, out _, out _, out _, out var overlay, out var popup, out var translator, out _, out _);
+        translator.TranslateBlockTcs.SetException(new QuickTranslate.Core.Translation.TranslationException(
+            QuickTranslate.Core.Translation.TranslationErrorCode.Timeout, "API timeout"));
+
+        var lines = Create5Lines();
+        var block = new BlockSelectionResult("sample text", lines[0].Box, lines, SelectionKind.Block, Guid.NewGuid(), false);
+        var slot = new BlockInteractionCoordinator.OperationSlot(Guid.NewGuid(), new CancellationTokenSource(), AppState.Translating);
+
+        var currentField = typeof(BlockInteractionCoordinator).GetField("_current", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        currentField?.SetValue(coord, slot);
+
+        var method = typeof(BlockInteractionCoordinator).GetMethod(
+            "TranslateAndDisplayBlockAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        Assert.NotNull(method);
+
+        var task = (Task)method!.Invoke(coord, new object[] { slot, block, new MonitorId(new IntPtr(1), @"\\.\DISPLAY1"), (uint)96, (uint)96, (long)0, false })!;
+        await task;
+
+        var field = typeof(BlockInteractionCoordinator).GetField("_statusIndicator", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var indicator = field?.GetValue(coord) as FakeStatusIndicatorService;
+        Assert.NotNull(indicator);
+        Assert.True(indicator!.HideCount > 0, "StatusIndicator must be hidden on error");
+        Assert.True(overlay.HideAllCount > 0, "Overlay must be hidden on error");
+        Assert.NotEmpty(popup.ShowErrorCalls);
+    }
 }

@@ -177,11 +177,15 @@ public static class ProjectionWordSegmenter
         detail = string.Empty;
 
         int n = tokens.Length;
-        int noiseFloor = ComputeNoiseFloor(profile.Height);
+        int effH = profile.EffectiveHeight > 0 ? profile.EffectiveHeight : profile.Height;
+        int noiseFloor = ComputeNoiseFloor(effH);
 
         for (int level = 0; level < GapHeightFactors.Length; level++)
         {
-            int gapThreshold = Math.Max(GapMinPx, (int)Math.Round(profile.Height * GapHeightFactors[level]));
+            int minGap = effH <= 16
+                ? Math.Max(3, (int)Math.Round(effH * 0.20f))
+                : GapMinPx;
+            int gapThreshold = Math.Max(minGap, (int)Math.Round(profile.Height * GapHeightFactors[level]));
             var segments = BuildSegmentsFromInk(profile.ColInk, noiseFloor, gapThreshold);
             if (segments.Count == 0)
                 continue;
@@ -270,7 +274,8 @@ public static class ProjectionWordSegmenter
         int w = profile.Width;
 
         int firstInk = -1, lastInk = -1;
-        int noiseFloor = ComputeNoiseFloor(profile.Height);
+        int effH = profile.EffectiveHeight > 0 ? profile.EffectiveHeight : profile.Height;
+        int noiseFloor = ComputeNoiseFloor(effH);
         for (int x = 0; x < w; x++)
         {
             if (colInk[x] >= noiseFloor)
@@ -365,7 +370,7 @@ public static class ProjectionWordSegmenter
     private static bool TryPrepare(Bitmap lineBitmap, string recognizedText, out string[] tokens, out InkProfile profile)
     {
         tokens = Array.Empty<string>();
-        profile = new InkProfile(Array.Empty<int>(), Array.Empty<int>(), 0, 0);
+        profile = new InkProfile(Array.Empty<int>(), Array.Empty<int>(), 0, 0, 0, 0);
 
         if (lineBitmap is null || lineBitmap.Width <= 0 || lineBitmap.Height <= 0)
             return false;
@@ -557,7 +562,8 @@ public static class ProjectionWordSegmenter
             return false;
 
         var colInk = profile.ColInk;
-        int minGap = Math.Max(FusedGapMinPx, (int)Math.Round(profile.Height * FusedGapHeightFactor));
+        int effH = profile.EffectiveHeight > 0 ? profile.EffectiveHeight : profile.Height;
+        int minGap = Math.Max(FusedGapMinPx, (int)Math.Round(effH * FusedGapHeightFactor));
 
         // 收集段内（不含首尾）连续空列缝隙
         var gaps = new List<(int Start, int End)>();
@@ -919,13 +925,18 @@ public static class ProjectionWordSegmenter
         public int[] RowInk { get; }
         public int Width { get; }
         public int Height { get; }
+        public int DominantTop { get; }
+        public int DominantBottom { get; }
+        public int EffectiveHeight => Math.Max(1, DominantBottom - DominantTop);
 
-        public InkProfile(int[] colInk, int[] rowInk, int width, int height)
+        public InkProfile(int[] colInk, int[] rowInk, int width, int height, int dominantTop, int dominantBottom)
         {
             ColInk = colInk;
             RowInk = rowInk;
             Width = width;
             Height = height;
+            DominantTop = dominantTop;
+            DominantBottom = dominantBottom;
         }
     }
 
@@ -1010,7 +1021,8 @@ public static class ProjectionWordSegmenter
         }
 
         // 首选阈值 = 均值×0.6（文字是少数高对比像素，背景主导均值）
-        long totalInk = CountInk((int)Math.Round(meanGray * 0.6));
+        int chosenThreshold = (int)Math.Round(meanGray * 0.6);
+        long totalInk = CountInk(chosenThreshold);
         if (totalInk == 0)
         {
             // 低对比度文字（灰字/浅主题，如 #999 on white）：文字灰度可能高于 均值×0.6
@@ -1028,14 +1040,46 @@ public static class ProjectionWordSegmenter
             int contrast = darkBackground ? (int)(extreme - meanGray) : (int)(meanGray - extreme);
             if (contrast >= MinRetryInkContrast)
             {
-                int midThreshold = darkBackground
+                chosenThreshold = darkBackground
                     ? 256 - (int)Math.Round((extreme + meanGray) / 2.0)
                     : (int)Math.Round((extreme + meanGray) / 2.0);
-                totalInk = CountInk(midThreshold);
+                totalInk = CountInk(chosenThreshold);
             }
         }
 
-        return new InkProfile(colInk, rowInk, w, h);
+        int dominantTop = 0;
+        int dominantBottom = h;
+        if (totalInk > 0)
+        {
+            int noiseFloor = ComputeNoiseFloor(h);
+            var band = InkBandSelector.SelectDominant(rowInk, noiseFloor);
+            if (band.HasValue)
+            {
+                dominantTop = Math.Max(0, band.Value.Top - VerticalPadding);
+                dominantBottom = Math.Min(h, band.Value.Bottom + VerticalPadding);
+
+                // 主墨水带掩码（Band Masked Projection）：
+                // 仅对主墨水带内的像素做列投影，剔除上一行下伸笔画（descenders，如 Y=0~2）
+                // 或下一行上伸笔画对词间空隙（X 轴）的垂直污染。
+                if (dominantTop > 0 || dominantBottom < h)
+                {
+                    Array.Clear(colInk);
+                    int threshold = Math.Clamp(chosenThreshold, 8, 247);
+                    for (int y = dominantTop; y < dominantBottom; y++)
+                    {
+                        int rowBase = y * w;
+                        for (int x = 0; x < w; x++)
+                        {
+                            int gray = grays[rowBase + x];
+                            bool isInk = darkBackground ? gray >= 256 - threshold : gray <= threshold;
+                            if (isInk) colInk[x]++;
+                        }
+                    }
+                }
+            }
+        }
+
+        return new InkProfile(colInk, rowInk, w, h, dominantTop, dominantBottom);
         }
         finally
         {
@@ -1053,14 +1097,7 @@ public static class ProjectionWordSegmenter
     /// </summary>
     private static (int Top, int Bottom) ComputeVerticalTighten(InkProfile profile)
     {
-        int noiseFloor = ComputeNoiseFloor(profile.Height);
-        var band = InkBandSelector.SelectDominant(profile.RowInk, noiseFloor);
-        if (!band.HasValue)
-            return (0, profile.Height);
-
-        int top = Math.Max(0, band.Value.Top - VerticalPadding);
-        int bottom = Math.Min(profile.Height, band.Value.Bottom + VerticalPadding);
-        return (top, bottom);
+        return (profile.DominantTop, profile.DominantBottom);
     }
 
     private static List<(int StartX, int EndX)> BuildSegmentsFromInk(int[] colInk, int noiseFloor, int gapThreshold)

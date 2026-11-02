@@ -777,4 +777,26 @@ public class ProjectionWordSegmenterTests : IDisposable
         Assert.True(Math.Abs(words[0].Box.Width - words[3].Box.Width) <= 8,
             $"首末字宽差异过大: {words[0].Box.Width} vs {words[3].Box.Width}");
     }
+
+    [Fact]
+    public void Case29_UserImage_DescenderAndSmallFont()
+    {
+        string path = @"C:\Users\Administrator\AppData\Local\Temp\codex-clipboard-3b0efd5f-c160-409a-84a3-910325523c70.png";
+        if (!File.Exists(path)) return;
+        using var bmp = new Bitmap(path);
+        var localBox = new PhysicalRect(0, 0, bmp.Width, bmp.Height);
+        var frameRegion = new PhysicalRect(0, 0, bmp.Width, bmp.Height);
+        bool ok = ProjectionWordSegmenter.TrySegmentOrConstrained(
+            bmp, "access to Claude models.", localBox, frameRegion, false, 0, out var words, out var detail);
+        Assert.True(ok, $"Segment failed: detail={detail}");
+        Assert.Equal(5, words.Count);
+        Assert.Equal("access", words[0].Text);
+        Assert.Equal("to", words[1].Text);
+        Assert.Equal("Claude", words[2].Text);
+        Assert.Equal("models", words[3].Text);
+        Assert.Equal(".", words[4].Text);
+        Assert.True(words[2].Box.Right <= words[3].Box.Left, "Claude and models should not overlap");
+        Assert.True(words[2].Box.Right <= 120, $"Claude right boundary {words[2].Box.Right} should be tightly bound");
+        Assert.True(words[3].Box.Left >= 120, $"models left boundary {words[3].Box.Left} should start >=120");
+    }
 }

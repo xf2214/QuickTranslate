@@ -294,9 +294,12 @@ public class BlockInteractionCoordinator : IDisposable
         var sameY = lines.Where(l => anchor.Y >= l.Box.Top && anchor.Y < l.Box.Bottom).ToList();
         if (sameY.Count > 0)
         {
-            return sameY.OrderBy(l => HorizontalDistanceToRect(anchor, l.Box)).First();
+            var closest = sameY.OrderBy(l => HorizontalDistanceToRect(anchor, l.Box)).First();
+            double maxH = Math.Max(48, closest.Box.Height * 3.0);
+            if (HorizontalDistanceToRect(anchor, closest.Box) <= maxH)
+                return closest;
         }
-        // 3. 全局欧氏距离最近
+        // 3. 全局欧氏距离最近（距离超出上限则拒绝，绝不跨屏乱跳）
         double best = double.MaxValue;
         OcrLine? bestLine = null;
         foreach (var line in lines)
@@ -308,7 +311,13 @@ public class BlockInteractionCoordinator : IDisposable
                 bestLine = line;
             }
         }
-        return bestLine;
+        if (bestLine != null)
+        {
+            double maxDist = Math.Max(48, bestLine.Box.Height * 3.0);
+            if (best <= maxDist)
+                return bestLine;
+        }
+        return null;
     }
 
     private static double HorizontalDistanceToRect(PhysicalPoint p, PhysicalRect box)
@@ -402,6 +411,9 @@ public class BlockInteractionCoordinator : IDisposable
         _overlayService.Update(initialUnion, _dragMonitorId, _dragDpiX, _dragDpiY);
         _dragOverlayShownAt = Environment.TickCount64;
 
+        // 立即展示状态指示器，明确告知用户正在后台识别，防止按下后出框无反应被当成卡死
+        _statusIndicator?.Show(_dragMonitorId, initialUnion, _dragDpiX, _dragDpiY, "正在识别…");
+
         _ = Task.Run(async () =>
         {
             try
@@ -472,6 +484,10 @@ public class BlockInteractionCoordinator : IDisposable
             }
             // 已自动展到锚点行（仍虚线预览）；整块仍不直接切，拖动后按行扩展
             _dragOverlayShownAt = Environment.TickCount64;
+            if (_isDragging)
+            {
+                _statusIndicator?.Hide();
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -541,7 +557,7 @@ public class BlockInteractionCoordinator : IDisposable
             }
         }
 
-        if (blockToTranslate == null)
+        if (blockToTranslate == null || string.IsNullOrWhiteSpace(blockToTranslate.BlockText))
         {
             // Fallback to current slot's block if available, or just hide
             _overlayService.HideAll();
@@ -888,35 +904,75 @@ public class BlockInteractionCoordinator : IDisposable
 
     private async Task TranslateAndDisplayBlockAsync(OperationSlot slot, BlockSelectionResult block, MonitorId mid, uint dpiX, uint dpiY, long overlayShownAt, bool skipHold)
     {
-        if (IsStaleOrCanceled(slot)) return;
-        SetState(slot, AppState.Translating);
-        _statusIndicator?.Show(mid, block.UnionBox, dpiX, dpiY, "正在翻译…");
-        var translation = await _translationRouter.TranslateBlockAsync(block.BlockText!, _settings.Value.TargetLanguage, slot.Cts.Token).ConfigureAwait(false);
-        if (IsStaleOrCanceled(slot)) return;
-        if (!skipHold && !translation.FromCache && !translation.FromDictionary)
+        try
         {
-            long elapsed = Environment.TickCount64 - overlayShownAt;
-            int remaining = SelectionHoldMs - (int)elapsed;
-            // 分级 hold：缓存/词典命中跳过等待，在线翻译封顶 120ms（原 250ms，仅 debug 可选）
-            remaining = Math.Min(remaining, 120);
-            if (remaining > 0)
+            if (IsStaleOrCanceled(slot)) return;
+            if (string.IsNullOrWhiteSpace(block.BlockText))
             {
-                try
-                {
-                    await Task.Delay(remaining, slot.Cts.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    return;
-                }
-                if (IsStaleOrCanceled(slot)) return;
+                _overlayService.HideAll();
+                _statusIndicator?.Hide();
+                SetState(null, AppState.Idle);
+                return;
             }
+            SetState(slot, AppState.Translating);
+            _statusIndicator?.Show(mid, block.UnionBox, dpiX, dpiY, "正在翻译…");
+            var translation = await _translationRouter.TranslateBlockAsync(block.BlockText, _settings.Value.TargetLanguage, slot.Cts.Token).ConfigureAwait(false);
+            if (IsStaleOrCanceled(slot)) return;
+            if (!skipHold && !translation.FromCache && !translation.FromDictionary)
+            {
+                long elapsed = Environment.TickCount64 - overlayShownAt;
+                int remaining = SelectionHoldMs - (int)elapsed;
+                // 分级 hold：缓存/词典命中跳过等待，在线翻译封顶 120ms（原 250ms，仅 debug 可选）
+                remaining = Math.Min(remaining, 120);
+                if (remaining > 0)
+                {
+                    try
+                    {
+                        await Task.Delay(remaining, slot.Cts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+                    if (IsStaleOrCanceled(slot)) return;
+                }
+            }
+            SetState(slot, AppState.Displaying);
+            _statusIndicator?.Hide();
+            _popupService.Show(block, translation, mid, block.UnionBox, dpiX, dpiY);
+            _popupService.MarkStreamCompleted();
+            ScheduleSelectionAutoHide(slot);
         }
-        SetState(slot, AppState.Displaying);
-        _statusIndicator?.Hide();
-        _popupService.Show(block, translation, mid, block.UnionBox, dpiX, dpiY);
-        _popupService.MarkStreamCompleted();
-        ScheduleSelectionAutoHide(slot);
+        catch (TranslationException te)
+        {
+            _logger.LogWarning("Block translation error: Code={Code}, Message={Message}", te.ErrorCode, te.Message);
+            _overlayService.HideAll();
+            _statusIndicator?.Hide();
+            if (!IsStaleOrCanceled(slot))
+            {
+                _popupService.ShowError(mid, block.UnionBox, dpiX, dpiY, TranslationErrorMessage.ForCode(te.ErrorCode), slot.Id);
+            }
+            SetState(null, AppState.Idle);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug("Block translation cancelled (slot {Id})", slot.Id);
+            _overlayService.HideAll();
+            _statusIndicator?.Hide();
+            _popupService.HideAll();
+            SetState(null, AppState.Idle);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Block translation unexpected error");
+            _overlayService.HideAll();
+            _statusIndicator?.Hide();
+            if (!IsStaleOrCanceled(slot))
+            {
+                _popupService.ShowError(mid, block.UnionBox, dpiX, dpiY, "翻译失败，请稍后重试", slot.Id);
+            }
+            SetState(null, AppState.Idle);
+        }
     }
 
     private void SetState(OperationSlot? slot, AppState s)

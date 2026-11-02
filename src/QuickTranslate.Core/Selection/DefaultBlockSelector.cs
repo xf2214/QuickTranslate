@@ -175,6 +175,15 @@ public class DefaultBlockSelector : IBlockSelector
         }
 
         contained = false;
+        // 落在同一 Y 范围内的多栏行：按水平距离最近优先，防止光标落入邻列/侧栏
+        var sameY = lines.Where(l => anchor.Y >= l.Box.Top && anchor.Y < l.Box.Bottom).ToList();
+        if (sameY.Count > 0)
+        {
+            var closest = sameY.OrderBy(l => HorizontalDistanceToRect(anchor, l.Box)).First();
+            bestDistance = HorizontalDistanceToRect(anchor, closest.Box);
+            return closest;
+        }
+
         OcrLine best = lines[0];
         bestDistance = double.MaxValue;
         foreach (var line in lines)
@@ -187,6 +196,13 @@ public class DefaultBlockSelector : IBlockSelector
             }
         }
         return best;
+    }
+
+    private static double HorizontalDistanceToRect(PhysicalPoint p, PhysicalRect r)
+    {
+        if (p.X < r.Left) return r.Left - p.X;
+        if (p.X > r.Right) return p.X - r.Right;
+        return 0;
     }
 
     private static double DistanceToRect(PhysicalPoint p, PhysicalRect box)
