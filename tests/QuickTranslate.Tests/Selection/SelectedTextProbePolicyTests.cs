@@ -58,6 +58,11 @@ public class SelectedTextProbePolicyTests
         Assert.False(SelectedTextProbePolicy.IsSpatiallyRelevant(
             Array.Empty<PhysicalRect>(), new PhysicalRect(0, 0, 0, 0),
             new PhysicalPoint(100, 100), wordMode: true));
+
+        // 块模式下空矩形同样坚决拒绝，绝不因虚构的 unionBox 误采纳陈旧选区
+        Assert.False(SelectedTextProbePolicy.IsSpatiallyRelevant(
+            Array.Empty<PhysicalRect>(), new PhysicalRect(50, 50, 100, 40),
+            new PhysicalPoint(60, 60), wordMode: false));
     }
 
     // ===== IsAdoptable =====

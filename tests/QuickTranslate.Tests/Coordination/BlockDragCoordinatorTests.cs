@@ -67,6 +67,7 @@ public class BlockDragCoordinatorTests
         var retry = new QuickTranslate.Infrastructure.Coordination.BlockRetryCoordinator(
             capture, ocr, selector, monitors, settings);
 
+        var statusIndicator = new FakeStatusIndicatorService();
         return new BlockInteractionCoordinator(
             cursorService: cursor,
             monitorService: monitors,
@@ -77,6 +78,7 @@ public class BlockDragCoordinatorTests
             settings: settings,
             logger: logger,
             escHook: escHook,
+            statusIndicator: statusIndicator,
             hotkeyBroker: broker);
     }
 
@@ -156,5 +158,44 @@ public class BlockDragCoordinatorTests
 
         Assert.Equal(UnionOf(new[] { articleLine0, articleLine1 }), expanded);
         Assert.True(expanded.Left >= 600, "Should stay within the article column, not jump to sidebar");
+    }
+    [Fact]
+    public void HandleHoldStart_RealHotkeyHold_AlwaysResetsOcr_CenteredOnCursor()
+    {
+        var coord = CreateCoordinator(out var cursor, out _, out _, out _, out _, out var overlay, out _, out _, out _, out var broker);
+        var oldLines = new List<OcrLine> { MakeLine(100, 100, 300, 30, "Old distant line") };
+        var oldOcr = new OcrLayoutResult(new PhysicalRect(0, 0, 1920, 1080), oldLines, new OcrTimings(TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero), DateTimeOffset.Now);
+
+        // 模拟先前操作留下的旧 OCR 缓存（区域 1920x1080，包含 100,100）
+        coord.SetDragStateForTest(oldOcr, new PhysicalPoint(100, 100), oldLines[0].Box, new MonitorId(new IntPtr(1), @"\\.\DISPLAY1"), 96, 96);
+
+        // 用户在远处 (900, 600) 发起新的长按
+        cursor.CursorPos = new PhysicalPoint(900, 600);
+        broker.RaiseBlockHoldStateChanged(HotkeyHoldPhase.Start);
+
+        // 绝不复用旧 OCR：初框必须紧贴当前新鼠标锚点 (900, 600)，而不是跳到旧位置 (100, 100)
+        var lastCall = overlay.ShowCalls.Last();
+        Assert.True(lastCall.Box.X >= 870 && lastCall.Box.Right <= 930, $"Overlay must be centered on anchor, got {lastCall.Box}");
+        Assert.True(lastCall.Box.Y >= 580 && lastCall.Box.Bottom <= 620, $"Overlay must be centered on anchor, got {lastCall.Box}");
+    }
+
+    [Fact]
+    public void HandleHoldEnd_ShowsTranslatingStatusIndicator_AtFinalUnion()
+    {
+        var coord = CreateCoordinator(out var cursor, out _, out _, out _, out _, out var overlay, out var popup, out var translator, out _, out var broker);
+        var lines = Create5Lines();
+        var ocrResult = new OcrLayoutResult(new PhysicalRect(0, 0, 1200, 720), lines, new OcrTimings(TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero), DateTimeOffset.Now);
+
+        coord.SetDragStateForTest(ocrResult, new PhysicalPoint(50, 110), lines[0].Box, new MonitorId(new IntPtr(1), @"\\.\DISPLAY1"), 96, 96);
+        coord.HandleHoldStartForTest(new PhysicalPoint(50, 110));
+
+        // 模拟松开
+        coord.HandleHoldEndForTest();
+
+        // 验证松开后立即向用户呈现“正在翻译…”状态反馈，防止框卡住不知在干什么
+        var field = typeof(BlockInteractionCoordinator).GetField("_statusIndicator", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var indicator = field?.GetValue(coord) as FakeStatusIndicatorService;
+        Assert.NotNull(indicator);
+        Assert.Contains(indicator!.ShowMessages, m => m.Contains("正在翻译"));
     }
 }

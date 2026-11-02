@@ -42,6 +42,10 @@ public class FakeHotkeyBroker : IHotkeyBroker
 
     public void RaiseHotkeyFired(HotkeyEventType type)
         => HotkeyFired?.Invoke(this, new HotkeyEvent(type, DateTimeOffset.Now));
+
+    public void RaiseBlockHoldStateChanged(HotkeyHoldPhase phase, TimeSpan? duration = null)
+        => BlockHoldStateChanged?.Invoke(this, new HotkeyHoldEventArgs(
+            HotkeyEventType.Block, phase, duration ?? TimeSpan.FromMilliseconds(400), DateTimeOffset.Now, 0xB002));
 }
 
 public class FakeAppLifecycle : IAppLifecycle
