@@ -410,7 +410,8 @@ public static class ProjectionWordSegmenter
         unfused = 0;
         int lineY = frameRegion.Y + localBox.Y;
         int bmpW = profile.Width;
-        int noiseFloor = ComputeNoiseFloor(profile.Height);
+        int effH = profile.EffectiveHeight > 0 ? profile.EffectiveHeight : profile.Height;
+        int noiseFloor = ComputeNoiseFloor(effH);
         var (tightTop, tightBottom) = ComputeVerticalTighten(profile);
 
         var result = new List<OcrWord>(segments.Count);
