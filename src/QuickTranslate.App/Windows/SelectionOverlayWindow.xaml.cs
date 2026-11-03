@@ -10,15 +10,34 @@ using QuickTranslate.App.Coordination;
 
 namespace QuickTranslate.App.Windows;
 
-public partial class SelectionOverlayWindow : Window
+public partial class SelectionOverlayWindow : Window, IPhysicalPlacementAware
 {
     public DipRect LastLayoutRect { get; private set; }
     public DipRect TargetLayoutRect => LastLayoutRect;
-    public PhysicalRect? LastPhysicalBox { get; private set; }
-    public uint LastDpiX { get; private set; } = 96;
-    public uint LastDpiY { get; private set; } = 96;
+    public PhysicalRect? LastPhysicalBox { get; set; }
+    public uint LastDpiX { get; set; } = 96;
+    public uint LastDpiY { get; set; } = 96;
+    public PhysicalRect? LastMonitorBounds { get; set; }
+    public double? LastMonitorDipLeft { get; set; }
+    public double? LastMonitorDipTop { get; set; }
     public bool IsPreviewMode { get; private set; }
     public bool IsDragging { get; private set; }
+
+    public void SetPhysicalPlacement(
+        PhysicalRect physicalBounds,
+        uint dpiX,
+        uint dpiY,
+        PhysicalRect? monitorPhysicalBounds = null,
+        double? monitorDipLeft = null,
+        double? monitorDipTop = null)
+    {
+        LastPhysicalBox = physicalBounds;
+        LastDpiX = dpiX;
+        LastDpiY = dpiY;
+        LastMonitorBounds = monitorPhysicalBounds;
+        LastMonitorDipLeft = monitorDipLeft;
+        LastMonitorDipTop = monitorDipTop;
+    }
 
     /// <summary>切换拖拽选区状态：拖拽中高亮展示纯净选框，松开确认时才播放扫描光效。</summary>
     public void SetDragState(bool isDragging)
@@ -264,18 +283,32 @@ public partial class SelectionOverlayWindow : Window
         }
     }
 
-    public void ApplyPhysicalLayout(PhysicalRect physicalBox, uint dpiX, uint dpiY)
+    public void ApplyPhysicalLayout(
+        PhysicalRect physicalBox,
+        uint dpiX,
+        uint dpiY,
+        PhysicalRect? monitorPhysicalBounds = null,
+        double? monitorDipLeft = null,
+        double? monitorDipTop = null)
     {
         LastPhysicalBox = physicalBox;
         LastDpiX = dpiX;
         LastDpiY = dpiY;
+        LastMonitorBounds = monitorPhysicalBounds;
+        LastMonitorDipLeft = monitorDipLeft;
+        LastMonitorDipTop = monitorDipTop;
 
-        var (l, t, w, h) = PerMonitorDpiHelpers.ToDip(physicalBox, dpiX, dpiY);
+        var (l, t, w, h) = PerMonitorDpiHelpers.ToDip(
+            physicalBox, dpiX, dpiY, monitorPhysicalBounds, monitorDipLeft, monitorDipTop);
         // DIP 路径先行（保持 LastLayoutRect/内部元素布局语义），随后 HWND 物理定位覆盖：
         // 窗口创建时刻的 DPI 认知 ≠ 目标屏 DPI 时（高缩放/混合 DPI/启动后改分辨率），
         // DIP 换算会按错误比例缩放且不触发 WM_DPICHANGED，物理写入是唯一确定性定位。
         ApplyLayout(new DipRect(l, t, w, h));
-        WindowPhysicalPlacement.SetPhysicalBounds(this, physicalBox, dpiX, dpiY, padDip: 2);
+        WindowPhysicalPlacement.SetPhysicalBounds(
+            this, physicalBox, dpiX, dpiY, padDip: 2, topmost: true, setDipSize: true,
+            monitorPhysicalBounds: monitorPhysicalBounds,
+            monitorDipLeft: monitorDipLeft,
+            monitorDipTop: monitorDipTop);
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -298,10 +331,14 @@ public partial class SelectionOverlayWindow : Window
         LastDpiY = newDpiY;
 
         // DIP 重算（窗口 DPI 已更新，换算自洽）+ 物理重定位：
-        // WPF 对 WM_DPICHANGED 的默认自动缩放会把窗口物理几何按建议矩形调整，
-        // 这里以 LastPhysicalBox 为准做物理覆盖，防止残留错误几何。
-        var (l, t, w, h) = PerMonitorDpiHelpers.ToDip(LastPhysicalBox.Value, newDpiX, newDpiY);
+        // 关键：保留 LastMonitorBounds 与 LastMonitorDipLeft，确保跨屏/高缩放屏定位基准不漂移
+        var (l, t, w, h) = PerMonitorDpiHelpers.ToDip(
+            LastPhysicalBox.Value, newDpiX, newDpiY, LastMonitorBounds, LastMonitorDipLeft, LastMonitorDipTop);
         ApplyLayout(new DipRect(l, t, w, h));
-        WindowPhysicalPlacement.SetPhysicalBounds(this, LastPhysicalBox.Value, newDpiX, newDpiY, padDip: 2);
+        WindowPhysicalPlacement.SetPhysicalBounds(
+            this, LastPhysicalBox.Value, newDpiX, newDpiY, padDip: 2, topmost: true, setDipSize: true,
+            monitorPhysicalBounds: LastMonitorBounds,
+            monitorDipLeft: LastMonitorDipLeft,
+            monitorDipTop: LastMonitorDipTop);
     }
 }

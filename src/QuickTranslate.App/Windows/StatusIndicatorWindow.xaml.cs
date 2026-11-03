@@ -1,12 +1,36 @@
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media.Animation;
+using QuickTranslate.Core.Geometry;
 using QuickTranslate.Platform.Win32;
 
 namespace QuickTranslate.App.Windows;
 
-public partial class StatusIndicatorWindow : Window
+public partial class StatusIndicatorWindow : Window, IPhysicalPlacementAware
 {
+    public PhysicalRect? LastPhysicalBox { get; set; }
+    public uint LastDpiX { get; set; } = 96;
+    public uint LastDpiY { get; set; } = 96;
+    public PhysicalRect? LastMonitorBounds { get; set; }
+    public double? LastMonitorDipLeft { get; set; }
+    public double? LastMonitorDipTop { get; set; }
+
+    public void SetPhysicalPlacement(
+        PhysicalRect physicalBounds,
+        uint dpiX,
+        uint dpiY,
+        PhysicalRect? monitorPhysicalBounds = null,
+        double? monitorDipLeft = null,
+        double? monitorDipTop = null)
+    {
+        LastPhysicalBox = physicalBounds;
+        LastDpiX = dpiX;
+        LastDpiY = dpiY;
+        LastMonitorBounds = monitorPhysicalBounds;
+        LastMonitorDipLeft = monitorDipLeft;
+        LastMonitorDipTop = monitorDipTop;
+    }
+
     public StatusIndicatorWindow()
     {
         InitializeComponent();
@@ -18,6 +42,30 @@ public partial class StatusIndicatorWindow : Window
         IntPtr hwnd = new WindowInteropHelper(this).EnsureHandle();
         // 置顶 + 不抢焦点 + 点击穿透：纯展示浮层，绝不干扰用户输入
         WindowStyleHelper.SetTopMostNoActivateClickThrough(hwnd);
+        this.DpiChanged += OnDpiChanged;
+    }
+
+    private void OnDpiChanged(object sender, System.Windows.DpiChangedEventArgs e)
+    {
+        if (!LastPhysicalBox.HasValue) return;
+
+        uint newDpiX = (uint)Math.Round(e.NewDpi.PixelsPerInchX);
+        uint newDpiY = (uint)Math.Round(e.NewDpi.PixelsPerInchY);
+
+        LastDpiX = newDpiX;
+        LastDpiY = newDpiY;
+
+        WindowPhysicalPlacement.SetPhysicalBounds(
+            this,
+            LastPhysicalBox.Value,
+            newDpiX,
+            newDpiY,
+            padDip: 0,
+            topmost: true,
+            setDipSize: false,
+            monitorPhysicalBounds: LastMonitorBounds,
+            monitorDipLeft: LastMonitorDipLeft,
+            monitorDipTop: LastMonitorDipTop);
     }
 
     public void SetMessage(string message)

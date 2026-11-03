@@ -533,4 +533,49 @@ public class SelectionOverlayTests
         if (error != null) throw new Xunit.Sdk.XunitException($"STA thread exception: {error.Message}", error);
         Assert.True(passed);
     }
+
+    [Fact]
+    public void Case12_SelectionOverlayWindow_Implements_IPhysicalPlacementAware()
+    {
+        bool passed = false;
+        Exception? error = null;
+
+        Thread thread = new(() =>
+        {
+            try
+            {
+                lock (_syncLock)
+                {
+                    var window = new SelectionOverlayWindow();
+                    new WindowInteropHelper(window).EnsureHandle();
+
+                    Assert.IsAssignableFrom<IPhysicalPlacementAware>(window);
+                    var aware = (IPhysicalPlacementAware)window;
+
+                    var box = new PhysicalRect(2000, 100, 300, 80);
+                    var monBounds = new PhysicalRect(1920, 0, 1920, 1080);
+                    window.ApplyPhysicalLayout(box, 144, 144, monBounds, 1920.0, 0.0);
+
+                    Assert.Equal(box, aware.LastPhysicalBox);
+                    Assert.Equal(144u, aware.LastDpiX);
+                    Assert.Equal(144u, aware.LastDpiY);
+                    Assert.Equal(monBounds, aware.LastMonitorBounds);
+                    Assert.Equal(1920.0, aware.LastMonitorDipLeft);
+
+                    window.Close();
+                }
+                passed = true;
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (error != null) throw new Xunit.Sdk.XunitException($"STA thread exception: {error.Message}", error);
+        Assert.True(passed);
+    }
 }

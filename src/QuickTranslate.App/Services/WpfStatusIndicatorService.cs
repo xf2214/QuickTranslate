@@ -79,7 +79,8 @@ public class WpfStatusIndicatorService : IStatusIndicatorService
             WindowPhysicalPlacement.SetPhysicalBounds(
                 window,
                 new PhysicalRect(phyX, phyY, estW, estH),
-                dpiX, dpiY, padDip: 0, topmost: true, setDipSize: false);
+                dpiX, dpiY, padDip: 0, topmost: true, setDipSize: false,
+                monitorPhysicalBounds: monitor.Bounds);
 
             if (!window.IsVisible)
             {

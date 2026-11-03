@@ -422,6 +422,7 @@ public class BlockInteractionCoordinator : IDisposable
             }
             catch (Exception ex)
             {
+                _statusIndicator?.Hide();
                 _logger.LogDebug(ex, "Drag OCR pipeline failed (non-fatal, preview stays small)");
             }
         });
@@ -489,9 +490,13 @@ public class BlockInteractionCoordinator : IDisposable
                 _statusIndicator?.Hide();
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            _statusIndicator?.Hide();
+        }
         catch (Exception ex)
         {
+            _statusIndicator?.Hide();
             _logger.LogDebug(ex, "Drag pipeline failed");
         }
     }
