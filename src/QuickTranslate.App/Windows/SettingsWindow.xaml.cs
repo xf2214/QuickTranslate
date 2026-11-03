@@ -258,7 +258,7 @@ public partial class SettingsWindow : Window
 
         // 版本号
         var ver = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
-        AppVersionText.Text = ver != null ? $"v{ver.Major}.{ver.Minor}.{ver.Build}" : "v0.10.0";
+        AppVersionText.Text = ver != null ? $"v{ver.Major}.{ver.Minor}.{ver.Build}" : "v1.0.0";
     }
 
     private void OnClearApiKeyClicked(object sender, RoutedEventArgs e)

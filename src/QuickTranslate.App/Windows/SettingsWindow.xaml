@@ -870,7 +870,7 @@
                                 <Border Width="1" Background="#E8E8ED" Margin="14,2" Height="16" VerticalAlignment="Center"/>
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                     <TextBlock Text="程序版本" FontSize="12" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
-                                    <TextBlock x:Name="AppVersionText" Text="v0.10.0" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="AppVersionText" Text="v1.0.0" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="6,0,0,0" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
