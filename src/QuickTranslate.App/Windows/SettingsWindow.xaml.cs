@@ -1,4 +1,6 @@
 using System.Windows;
+using System.Diagnostics;
+using System.IO;
 using System.Windows.Input;
 using System.Windows.Media.Animation;
 using SWC = System.Windows.Controls;
@@ -7,7 +9,9 @@ using Microsoft.Extensions.Options;
 using QuickTranslate.App.Validation;
 using QuickTranslate.App.Windows.Controls;
 using QuickTranslate.Core.Abstractions;
+using QuickTranslate.Core.Cache;
 using QuickTranslate.Core.Options;
+using QuickTranslate.Infrastructure.AppData;
 using QuickTranslate.Infrastructure.Logging;
 using QuickTranslate.Infrastructure.Translation;
 using WpfMessageBox = System.Windows.MessageBox;
@@ -21,6 +25,8 @@ public partial class SettingsWindow : Window
     private readonly IStartupRegistrar _startupRegistrar;
     private readonly IOcrEngine? _ocrEngine;
     private readonly CustomOpenAiTranslationProvider? _modelTester;
+    private readonly ICacheCleanupService? _cleanupService;
+    private readonly IAppDataProvider? _appDataProvider;
     private readonly AppSettings _appSettings;
     private bool _apiKeyCleared;
 
@@ -30,7 +36,9 @@ public partial class SettingsWindow : Window
         IStartupRegistrar startupRegistrar,
         IOptions<AppSettings> appSettingsOptions,
         IOcrEngine? ocrEngine = null,
-        CustomOpenAiTranslationProvider? modelTester = null)
+        CustomOpenAiTranslationProvider? modelTester = null,
+        ICacheCleanupService? cleanupService = null,
+        IAppDataProvider? appDataProvider = null)
     {
         InitializeComponent();
 
@@ -39,6 +47,8 @@ public partial class SettingsWindow : Window
         _startupRegistrar = startupRegistrar;
         _ocrEngine = ocrEngine;
         _modelTester = modelTester;
+        _cleanupService = cleanupService;
+        _appDataProvider = appDataProvider;
         _appSettings = appSettingsOptions.Value;
 
         Loaded += OnLoaded;
@@ -49,6 +59,9 @@ public partial class SettingsWindow : Window
         ClearApiKeyButton.Click += OnClearApiKeyClicked;
         RestoreDefaultsButton.Click += OnRestoreDefaultsClicked;
         TestModelButton.Click += OnTestModelClicked;
+        CleanCacheButton.Click += OnCleanCacheClicked;
+        OpenAppDataButton.Click += OnOpenAppDataClicked;
+        OpenLogDirButton.Click += OnOpenLogDirClicked;
         DebugLoggingBox.Checked += (s, e) => LoggingSwitch.SetDebugEnabled(true);
         DebugLoggingBox.Unchecked += (s, e) => LoggingSwitch.SetDebugEnabled(false);
     }
@@ -61,11 +74,15 @@ public partial class SettingsWindow : Window
         var appSettings = sp.GetRequiredService<IOptions<AppSettings>>();
         var ocrEngine = sp.GetService<IOcrEngine>();
         var modelTester = sp.GetService<CustomOpenAiTranslationProvider>();
-        return new SettingsWindow(settingsManager, hotkeyBroker, startupRegistrar, appSettings, ocrEngine, modelTester);
+        var cleanupService = sp.GetService<ICacheCleanupService>();
+        var appDataProvider = sp.GetService<IAppDataProvider>();
+        return new SettingsWindow(settingsManager, hotkeyBroker, startupRegistrar, appSettings, ocrEngine, modelTester, cleanupService, appDataProvider);
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        _ = RefreshCacheUsageAsync();
+
         // 翻译引擎 + 自定义大模型
         SelectComboBoxItemByTag(TranslationProviderBox, _appSettings.TranslationProvider.ToString());
         CustomLlmBaseUrlBox.Text = _appSettings.CustomLlmBaseUrl ?? string.Empty;
@@ -123,6 +140,7 @@ public partial class SettingsWindow : Window
         EnableReadAloudBox.IsChecked = _appSettings.EnableTextToSpeech;
         HardwareAccelerationCheckBox.IsChecked = _appSettings.UseHardwareAcceleration;
         DisableSystemProxyCheckBox.IsChecked = _appSettings.DisableSystemProxy;
+        EnableDragSelectionBox.IsChecked = _appSettings.EnableDragSelection;
         var displayStyle = string.IsNullOrWhiteSpace(_appSettings.PopupDisplayStyle) ? "detailed" : _appSettings.PopupDisplayStyle;
         SelectComboBoxItemByTag(PopupDisplayStyleBox, displayStyle);
 
@@ -258,7 +276,7 @@ public partial class SettingsWindow : Window
 
         // 版本号
         var ver = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
-        AppVersionText.Text = ver != null ? $"v{ver.Major}.{ver.Minor}.{ver.Build}" : "v1.0.0";
+        AppVersionText.Text = ver != null ? $"v{ver.Major}.{ver.Minor}.{ver.Build}" : "v1.2.0";
     }
 
     private void OnClearApiKeyClicked(object sender, RoutedEventArgs e)
@@ -330,6 +348,7 @@ public partial class SettingsWindow : Window
         EnableReadAloudBox.IsChecked = defaults.EnableTextToSpeech;
         HardwareAccelerationCheckBox.IsChecked = defaults.UseHardwareAcceleration;
         DisableSystemProxyCheckBox.IsChecked = defaults.DisableSystemProxy;
+        EnableDragSelectionBox.IsChecked = defaults.EnableDragSelection;
         SelectComboBoxItemByTag(PopupDisplayStyleBox, defaults.PopupDisplayStyle);
 
         UpdateHotkeyStatusPreview();
@@ -461,6 +480,7 @@ public partial class SettingsWindow : Window
                 DebugOverlayMode = _appSettings.DebugOverlayMode,
                 EnableTextToSpeech = EnableReadAloudBox.IsChecked == true,
                 EnableSelectedTextProbe = _appSettings.EnableSelectedTextProbe,
+                EnableDragSelection = EnableDragSelectionBox.IsChecked == true,
                 UseHardwareAcceleration = newHardware,
                 DisableSystemProxy = newProxy,
                 TranslationProvider = providerKind,
@@ -633,5 +653,97 @@ public partial class SettingsWindow : Window
         {
             TestModelButton.IsEnabled = true;
         }
+    }
+
+    private async Task RefreshCacheUsageAsync()
+    {
+        if (_cleanupService == null)
+        {
+            CacheUsageText.Text = "清理服务未就绪";
+            return;
+        }
+
+        try
+        {
+            CacheUsageText.Text = "正在计算缓存占用...";
+            var summary = await _cleanupService.GetStorageSummaryAsync();
+            double mb = summary.TotalDiskBytes / (1024.0 * 1024.0);
+            string sizeStr = mb >= 0.1 ? $"{mb:F1} MB" : $"{summary.TotalDiskBytes / 1024.0:F0} KB";
+            CacheUsageText.Text = $"当前已占用空间：约 {sizeStr}";
+            CacheUsageDetailText.Text = $"翻译缓存 {summary.L2RowCount} 条 · 历史日志 {summary.LogFileCount} 个 · 临时文件 {(summary.TempFileSizeBytes / 1024.0):F0} KB";
+        }
+        catch
+        {
+            CacheUsageText.Text = "缓存占用计算失败";
+        }
+    }
+
+    private async void OnCleanCacheClicked(object sender, RoutedEventArgs e)
+    {
+        if (_cleanupService == null) return;
+
+        CleanCacheButton.IsEnabled = false;
+        CleanCacheButton.Content = "清理中...";
+        CleanResultFeedbackText.Visibility = Visibility.Collapsed;
+
+        try
+        {
+            var result = await _cleanupService.CleanupAsync();
+            double freedMb = result.FreedBytes / (1024.0 * 1024.0);
+            string freedStr = freedMb >= 0.1 ? $"{freedMb:F1} MB" : $"{result.FreedBytes / 1024.0:F0} KB";
+
+            CleanResultFeedbackText.Text = $"✓ 清理完成，已释放 {freedStr} 空间";
+            CleanResultFeedbackText.Foreground = (System.Windows.Media.Brush)FindResource("Success");
+            CleanResultFeedbackText.Visibility = Visibility.Visible;
+
+            await RefreshCacheUsageAsync();
+        }
+        catch (Exception ex)
+        {
+            CleanResultFeedbackText.Text = "清理失败：" + ex.Message;
+            CleanResultFeedbackText.Foreground = (System.Windows.Media.Brush)FindResource("Danger");
+            CleanResultFeedbackText.Visibility = Visibility.Visible;
+        }
+        finally
+        {
+            CleanCacheButton.IsEnabled = true;
+            CleanCacheButton.Content = "立即清理";
+        }
+    }
+
+    private void OnOpenAppDataClicked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var path = _appDataProvider?.GetAppDataDirectory()
+                       ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "QuickTranslate");
+            if (Directory.Exists(path))
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = path,
+                    UseShellExecute = true
+                });
+            }
+        }
+        catch { }
+    }
+
+    private void OnOpenLogDirClicked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var path = _appDataProvider?.GetLogDirectory()
+                       ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "QuickTranslate", "Logs");
+            if (Directory.Exists(path))
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = path,
+                    UseShellExecute = true
+                });
+            }
+        }
+        catch { }
     }
 }

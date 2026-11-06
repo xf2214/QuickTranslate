@@ -206,6 +206,47 @@ public class SqliteTranslationCache : ITranslationL2Cache, IDisposable
         finally { _gate.Release(); }
     }
 
+    public async Task ClearAllAsync(CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            using (var cmd = _conn.CreateCommand())
+            {
+                cmd.CommandText = "DELETE FROM translation_cache;";
+                await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+            try
+            {
+                using var vacCmd = _conn.CreateCommand();
+                vacCmd.CommandText = "VACUUM;";
+                await vacCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsRecoverable(ex))
+            {
+                LogFailure("CACHE_L2_VACUUM", ex);
+            }
+            _rowCount = 0;
+        }
+        catch (Exception ex) when (IsRecoverable(ex))
+        {
+            ct.ThrowIfCancellationRequested();
+            LogFailure("CACHE_L2_CLEAR", ex);
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<long> GetCountAsync(CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return _rowCount;
+        }
+        finally { _gate.Release(); }
+    }
+
     private long CountRows()
     {
         using var command = _conn.CreateCommand();

@@ -20,6 +20,8 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
     private HotkeyCombo? _wordCombo;
     private HotkeyCombo? _blockCombo;
     private HotkeyCombo? _escCombo;
+    private AppSettings? _registeredSettings;
+    public bool EnableDragSelection { get; set; }
 
     private const int HoldThresholdMs = 400;
     private CancellationTokenSource? _holdCts;
@@ -51,6 +53,8 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
 
     public void RegisterDefaultsFromSettings(AppSettings settings)
     {
+        _registeredSettings = settings;
+        EnableDragSelection = settings.EnableDragSelection;
         UnregisterAll();
 
         if (!Register(WordId, settings.WordHotkey))
@@ -226,6 +230,11 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
                     _logger.LogDebug("hotkey suppressed by paused");
                     return;
                 }
+                if (EnableDragSelection || _registeredSettings?.EnableDragSelection == true)
+                {
+                    _logger.LogDebug("Block WM_HOTKEY suppressed because drag selection is enabled");
+                    return;
+                }
                 lock (_holdLock)
                 {
                     if (_blockDownTimestamp != null || _holdCts != null || _holdStarted)
@@ -290,6 +299,27 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
         if (_appLifecycle.IsPaused)
         {
             _logger.LogDebug("Block hold down suppressed by paused");
+            return;
+        }
+
+        bool dragMode = EnableDragSelection || _registeredSettings?.EnableDragSelection == true;
+
+        if (dragMode)
+        {
+            lock (_holdLock)
+            {
+                if (_blockDownTimestamp != null && _holdStarted)
+                    return;
+                _blockDownTimestamp = e.Timestamp;
+                _holdStarted = true;
+                _holdCts?.Cancel();
+                _holdCts?.Dispose();
+                _holdCts = null;
+            }
+
+            var holdArgs = new HotkeyHoldEventArgs(HotkeyEventType.Block, HotkeyHoldPhase.Start, TimeSpan.Zero, DateTimeOffset.Now, BlockId);
+            BlockHoldStateChanged?.Invoke(this, holdArgs);
+            _logger.LogDebug("Block drag selection hold started immediately (0ms)");
             return;
         }
 
@@ -367,6 +397,10 @@ public class DefaultHotkeyBroker : IHotkeyBroker, IDisposable
 
         if (wasHoldStarted)
         {
+            lock (_holdLock)
+            {
+                _lastBlockTick = Environment.TickCount64;
+            }
             var holdEnd = new HotkeyHoldEventArgs(HotkeyEventType.Block, HotkeyHoldPhase.End, duration, DateTimeOffset.Now, BlockId);
             BlockHoldStateChanged?.Invoke(this, holdEnd);
             _logger.LogDebug("Block hold ended duration {Duration}ms", duration.TotalMilliseconds);

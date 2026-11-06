@@ -112,6 +112,11 @@ public class AppSettings
     /// <summary>热键触发时优先尝试 UIA 选中文本探测（可选中文本场景零 OCR 误差），失败静默回退 OCR。</summary>
     public bool EnableSelectedTextProbe { get; set; } = true;
 
+    /// <summary>
+    /// 滑动选区模式：开启后按住 Alt+2 拖动鼠标自由框选矩形，松手后识别并翻译框内文本，替代默认的自动识别。
+    /// </summary>
+    public bool EnableDragSelection { get; set; } = false;
+
     // ===== 自定义大模型接入（OpenAI 兼容）=====
     public TranslationProviderKind TranslationProvider
     {
@@ -194,6 +199,7 @@ public class AppSettings
         DebugOverlayMode = source.DebugOverlayMode;
         EnableTextToSpeech = source.EnableTextToSpeech;
         EnableSelectedTextProbe = source.EnableSelectedTextProbe;
+        EnableDragSelection = source.EnableDragSelection;
         CustomLlmMaxContextLines = source.CustomLlmMaxContextLines;
         PopupDisplayStyle = source.PopupDisplayStyle;
         DisableSystemProxy = source.DisableSystemProxy;

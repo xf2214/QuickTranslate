@@ -174,6 +174,72 @@ public class WpfBlockPopupService : IBlockPopupService
         }
     }
 
+    public void ShowStreamingStart(BlockSelectionResult blockSelection, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY)
+    {
+        RunOnUi(() => ShowStreamingStartCore(blockSelection, monitorId, anchorBox, dpiX, dpiY));
+    }
+
+    private void ShowStreamingStartCore(BlockSelectionResult blockSelection, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY)
+    {
+        EnsureWindow(monitorId, dpiX, dpiY);
+
+        var monitors = _monitorService.EnumerateMonitors();
+        var monitorInfo = monitors.FirstOrDefault(m => m.Id == monitorId)
+                         ?? _monitorService.TryGetPrimary()
+                         ?? new MonitorInfo(monitorId, string.Empty,
+                             PhysicalRect.Fallback1080p,
+                             PhysicalRect.Fallback1080p,
+                             dpiX, dpiY, true);
+
+        var (workWdip, workHdip) = GetWorkAreaDipSize(monitorInfo.WorkArea, dpiX, dpiY);
+        bool detailed = _appSettings.Value?.PopupDisplayStyle != "compact";
+        var (estW, estH) = PopupSizeEstimator.EstimateBlockPopupSize(
+            blockSelection.BlockText, "",
+            workWdip, workHdip, detailed);
+
+        var preferredSize = new PhysicalSize(
+            (int)Math.Round(estW * dpiX / 96.0),
+            (int)Math.Round(estH * dpiY / 96.0));
+
+        var physicalRect = PopupPlacement.Place(anchorBox, monitorInfo.WorkArea, preferredSize);
+        var dipRect = _dpiMapper.ToDip(physicalRect, dpiX, dpiY);
+
+        _lastAnchorBox = anchorBox;
+        _lastWorkArea = monitorInfo.WorkArea;
+        _lastPlacedRect = physicalRect;
+        _hasPlacementContext = true;
+
+        var window = _window!;
+        WindowPhysicalPlacement.SetPhysicalBounds(window, physicalRect, dpiX, dpiY, padDip: 0, topmost: false);
+        window.Height = Math.Max(dipRect.Height, Math.Min(140, estH));
+
+        _window.ApplyDisplayMode(detailed);
+        _window.ResetContent(blockSelection.BlockText);
+        _window.UpdateHeader(blockSelection.SelectedLines?.Count ?? 0);
+        _window.ApplyTextToSpeech(_textToSpeech, _appSettings.Value.EnableTextToSpeech, _appSettings.Value.TargetLanguage);
+
+        if (!_window.IsVisible)
+        {
+            IntPtr hwnd = new WindowInteropHelper(_window).Handle;
+            if (hwnd == IntPtr.Zero)
+            {
+                hwnd = new WindowInteropHelper(_window).EnsureHandle();
+            }
+            _window.Show();
+            WindowPhysicalPlacement.SetPhysicalBounds(_window, physicalRect, dpiX, dpiY, padDip: 0, topmost: false);
+        }
+        else
+        {
+            _window.ReplayEntry();
+            _window.Activate();
+        }
+    }
+
+    public void AppendChunk(string delta)
+    {
+        RunOnUi(() => _window?.AppendChunk(delta));
+    }
+
     public void ShowError(MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY, string shortMessage, Guid operationId)
     {
         RunOnUi(() => ShowErrorCore(monitorId, anchorBox, dpiX, dpiY, shortMessage, operationId));

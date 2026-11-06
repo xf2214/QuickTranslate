@@ -339,6 +339,8 @@ public class FakeBlockPopupService : IBlockPopupService
     public int HideAllCount { get; private set; }
     public int ShowErrorCount { get; private set; }
     public int MarkCompletedCount { get; private set; }
+    public int StreamingStartCount { get; private set; }
+    public List<string> AppendedChunks { get; } = new();
     public List<(BlockSelectionResult Block, TranslationResult Trans, MonitorId Monitor, PhysicalRect Box, uint DpiX, uint DpiY)> ShowCalls { get; } = new();
     public List<(MonitorId Monitor, PhysicalRect Box, uint DpiX, uint DpiY, string Msg, Guid OpId)> ShowErrorCalls { get; } = new();
 
@@ -346,6 +348,16 @@ public class FakeBlockPopupService : IBlockPopupService
     {
         ShowCount++;
         ShowCalls.Add((blockSelection, translation, monitorId, anchorBox, dpiX, dpiY));
+    }
+
+    public void ShowStreamingStart(BlockSelectionResult blockSelection, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY)
+    {
+        StreamingStartCount++;
+    }
+
+    public void AppendChunk(string delta)
+    {
+        AppendedChunks.Add(delta);
     }
 
     public void ShowError(MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY, string shortMessage, Guid operationId)

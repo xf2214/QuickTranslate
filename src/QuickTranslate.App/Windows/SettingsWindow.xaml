@@ -870,7 +870,7 @@
                                 <Border Width="1" Background="#E8E8ED" Margin="14,2" Height="16" VerticalAlignment="Center"/>
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                     <TextBlock Text="程序版本" FontSize="12" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
-                                    <TextBlock x:Name="AppVersionText" Text="v1.0.0" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="AppVersionText" Text="v1.2.0" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="6,0,0,0" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
@@ -1207,7 +1207,7 @@
                         </Border>
 
                         <!-- S4: 全局热键 -->
-                        <Border Style="{StaticResource SectionCard}" Margin="0 0 0 0">
+                        <Border Style="{StaticResource SectionCard}" Margin="0 0 0 14">
                             <StackPanel>
                                 <Grid Style="{StaticResource SectionTitleRow}">
                                     <Grid.ColumnDefinitions>
@@ -1259,6 +1259,12 @@
                                                              VerticalAlignment="Center"/>
                                 </Grid>
 
+                                <CheckBox x:Name="EnableDragSelectionBox"
+                                          Content="滑动选区（按住 Alt+2 拖动鼠标框选翻译，替代自动识别）"
+                                          Style="{StaticResource CompactCheckBox}"
+                                          Margin="96 6 0 4"
+                                          ToolTip="开启后，按住 Alt+2 并拖动鼠标自由框选矩形区域，松手后对选区内容识别并翻译，替代原有的段落自动识别。"/>
+
                                 <TextBlock Text="按「录制」后直接按下新热键组合，松开即保存"
                                            ToolTip="提示：按「录制」后直接在键盘按下新的热键组合，松开即保存到输入框。"
                                            Style="{StaticResource SettingHint}"
@@ -1266,6 +1272,75 @@
                                            TextWrapping="NoWrap"
                                            TextTrimming="CharacterEllipsis"
                                            MaxHeight="16"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- S5: 存储与缓存 -->
+                        <Border Style="{StaticResource SectionCard}" Margin="0 0 0 0">
+                            <StackPanel>
+                                <Grid Style="{StaticResource SectionTitleRow}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Border Grid.Column="0" Style="{StaticResource SectionIcon}" Background="#EBF3FF">
+                                        <TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons" FontSize="13" Foreground="#007AFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <TextBlock Grid.Column="1"
+                                               Text="存储与缓存"
+                                               FontSize="14"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextPrimary}"
+                                               VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Grid Margin="0 0 0 10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock x:Name="CacheUsageText"
+                                                   Text="正在计算缓存占用..."
+                                                   FontSize="12.5"
+                                                   Foreground="{StaticResource TextPrimary}"/>
+                                        <TextBlock x:Name="CacheUsageDetailText"
+                                                   Text="包含翻译持久缓存、历史运行日志与临时文件"
+                                                   Style="{StaticResource SettingHint}"
+                                                   Margin="0 2 0 0"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1"
+                                            x:Name="CleanCacheButton"
+                                            Content="立即清理"
+                                            Style="{StaticResource SecondaryButton}"
+                                            Padding="14 5"
+                                            VerticalAlignment="Center"
+                                            Cursor="Hand"/>
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal" Margin="0 2 0 0">
+                                    <TextBlock x:Name="CleanResultFeedbackText"
+                                               Text=""
+                                               FontSize="12"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource Success}"
+                                               Visibility="Collapsed"
+                                               VerticalAlignment="Center"
+                                               Margin="0 0 12 0"/>
+                                    <Button x:Name="OpenAppDataButton"
+                                            Content="打开数据目录"
+                                            Style="{StaticResource GhostButton}"
+                                            Padding="6 2"
+                                            FontSize="11.5"
+                                            Foreground="{StaticResource Brand600}"/>
+                                    <Button x:Name="OpenLogDirButton"
+                                            Content="打开日志目录"
+                                            Style="{StaticResource GhostButton}"
+                                            Padding="6 2"
+                                            FontSize="11.5"
+                                            Foreground="{StaticResource Brand600}"
+                                            Margin="8 0 0 0"/>
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 

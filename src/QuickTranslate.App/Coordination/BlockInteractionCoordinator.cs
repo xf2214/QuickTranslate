@@ -398,11 +398,21 @@ public class BlockInteractionCoordinator : IDisposable
             _anchorPoint = anchor;
             _hasExpandedCapture = false;
             // 每次重新开始长按拖拽必须重置，绝不复用过往遗留的旧选区和旧OCR，彻底消除“选区在其他地方跳出来”的缺陷！
-            _lastExpandedUnion = new PhysicalRect(anchor.X - 20, anchor.Y - 10, 40, 20);
+            _lastExpandedUnion = _settings.Value.EnableDragSelection
+                ? new PhysicalRect(anchor.X, anchor.Y, 0, 0)
+                : new PhysicalRect(anchor.X - 20, anchor.Y - 10, 40, 20);
             _dragOcr = null;
             _dragBlock = null;
             InvalidateDragSortedCache();
             _isDragging = true;
+        }
+
+        if (_settings.Value.EnableDragSelection)
+        {
+            StartDragTimer();
+            if (_logger.IsEnabled(LogLevel.Debug))
+                _logger.LogDebug("Block drag selection started at {Anchor}", anchor);
+            return;
         }
 
         // Show initial preview: active drag selection mode (clean translucent blue, no scanline)
@@ -531,6 +541,13 @@ public class BlockInteractionCoordinator : IDisposable
     {
         if (!_isDragging) return;
         StopDragTimer();
+
+        if (_settings.Value.EnableDragSelection)
+        {
+            HandleDragSelectionEnd();
+            return;
+        }
+
         PhysicalRect finalUnion;
         BlockSelectionResult? blockToTranslate;
         var releasePoint = _cursorService.GetPhysicalCursorPos(out _);
@@ -585,6 +602,113 @@ public class BlockInteractionCoordinator : IDisposable
         SetState(currentSlot, AppState.OverlayVisible);
         _ = TranslateAndDisplayBlockAsync(currentSlot, blockToTranslate, _dragMonitorId, _dragDpiX, _dragDpiY, _dragOverlayShownAt, skipHold: false);
         _logger.LogDebug("Block hold ended, final union {Box}, translating", finalUnion);
+    }
+
+    private void HandleDragSelectionEnd()
+    {
+        PhysicalRect finalRect;
+        var releasePoint = _cursorService.GetPhysicalCursorPos(out var mid);
+        var anchorMon = _monitorService.TryGetMonitorFromPoint(_anchorPoint)
+                       ?? _monitorService.TryGetMonitorFromPoint(releasePoint);
+        if (anchorMon != null)
+        {
+            // 将释放坐标严格限制在起始显示器工作边界内，杜绝跨屏幕导致坐标越界或空洞矩形
+            releasePoint = new PhysicalPoint(
+                Math.Clamp(releasePoint.X, anchorMon.Bounds.Left, anchorMon.Bounds.Right - 1),
+                Math.Clamp(releasePoint.Y, anchorMon.Bounds.Top, anchorMon.Bounds.Bottom - 1));
+            _dragMonitorId = anchorMon.Id;
+            _dragDpiX = anchorMon.DpiX;
+            _dragDpiY = anchorMon.DpiY;
+        }
+
+        lock (_dragLock)
+        {
+            _isDragging = false;
+            int minX = Math.Min(_anchorPoint.X, releasePoint.X);
+            int minY = Math.Min(_anchorPoint.Y, releasePoint.Y);
+            int w = Math.Abs(releasePoint.X - _anchorPoint.X);
+            int h = Math.Abs(releasePoint.Y - _anchorPoint.Y);
+            finalRect = new PhysicalRect(minX, minY, w, h);
+            _lastExpandedUnion = finalRect;
+        }
+
+        // 阈值判定：短按未拖拽或位移 < 15px 时忽略且不识别
+        if (finalRect.Width < 15 || finalRect.Height < 15)
+        {
+            _overlayService.HideAll();
+            _statusIndicator?.Hide();
+            SetState(null, AppState.Idle);
+            _logger.LogDebug("Drag selection ignored because size is smaller than 15px ({Box})", finalRect);
+            return;
+        }
+
+        // 选区有效：切到实线扫描 + 状态指示器
+        _overlayService.Show(finalRect, _dragMonitorId, _dragDpiX, _dragDpiY, preview: false);
+        _statusIndicator?.Show(_dragMonitorId, finalRect, _dragDpiX, _dragDpiY, "正在识别…");
+
+        var currentSlot = new OperationSlot(Guid.NewGuid(), new CancellationTokenSource(), AppState.Capturing);
+        var old = Interlocked.Exchange(ref _current, currentSlot);
+        old?.Cts.Cancel();
+        old?.Cts.Dispose();
+        SetState(currentSlot, AppState.Capturing);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var frame = await _retryCoordinator.Capture.CaptureRectAsync(finalRect, _dragMonitorId, currentSlot.Cts.Token).ConfigureAwait(false);
+                if (IsStaleOrCanceled(currentSlot)) return;
+
+                SetState(currentSlot, AppState.Ocr);
+                var ocrResult = await _retryCoordinator.Ocr.RecognizeAsync(frame, currentSlot.Cts.Token).ConfigureAwait(false);
+                if (IsStaleOrCanceled(currentSlot)) return;
+
+                if (ocrResult.Lines.Count == 0 || string.IsNullOrWhiteSpace(string.Join("", ocrResult.Lines.Select(l => l.Text))))
+                {
+                    _overlayService.HideAll();
+                    _statusIndicator?.Show(_dragMonitorId, finalRect, _dragDpiX, _dragDpiY, "未检测到文本");
+                    await Task.Delay(1500, CancellationToken.None).ConfigureAwait(false);
+                    if (!IsStaleOrCanceled(currentSlot))
+                    {
+                        _statusIndicator?.Hide();
+                        SetState(null, AppState.Idle);
+                    }
+                    return;
+                }
+
+                var sortedLines = ocrResult.Lines.OrderBy(l => l.Box.Top).ToList();
+                var text = string.Join("\n", sortedLines.Select(l => l.Text.Trim()).Where(t => !string.IsNullOrEmpty(t)));
+                var block = new BlockSelectionResult(
+                    text,
+                    finalRect,
+                    sortedLines,
+                    SelectionKind.Block,
+                    currentSlot.Id,
+                    NoBlockFound: false);
+
+                long shownAt = Environment.TickCount64;
+                await TranslateAndDisplayBlockAsync(currentSlot, block, _dragMonitorId, _dragDpiX, _dragDpiY, shownAt, skipHold: false).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                _overlayService.HideAll();
+                _statusIndicator?.Hide();
+                if (!IsStaleOrCanceled(currentSlot))
+                {
+                    SetState(null, AppState.Idle);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Drag selection OCR/translation pipeline failed");
+                _overlayService.HideAll();
+                _statusIndicator?.Hide();
+                if (!IsStaleOrCanceled(currentSlot))
+                {
+                    SetState(null, AppState.Idle);
+                }
+            }
+        });
     }
 
     private void StartDragTimer()
@@ -665,6 +789,57 @@ public class BlockInteractionCoordinator : IDisposable
         else
         {
             _dragMonitorId = mid;
+        }
+
+        if (_settings.Value.EnableDragSelection)
+        {
+            var anchorMon = _monitorService.TryGetMonitorFromPoint(_anchorPoint)
+                           ?? _monitorService.TryGetMonitorFromPoint(cur);
+            if (anchorMon != null)
+            {
+                cur = new PhysicalPoint(
+                    Math.Clamp(cur.X, anchorMon.Bounds.Left, anchorMon.Bounds.Right - 1),
+                    Math.Clamp(cur.Y, anchorMon.Bounds.Top, anchorMon.Bounds.Bottom - 1));
+                _dragMonitorId = anchorMon.Id;
+                _dragDpiX = anchorMon.DpiX;
+                _dragDpiY = anchorMon.DpiY;
+            }
+
+            int minX = Math.Min(_anchorPoint.X, cur.X);
+            int minY = Math.Min(_anchorPoint.Y, cur.Y);
+            int w = Math.Abs(cur.X - _anchorPoint.X);
+            int h = Math.Abs(cur.Y - _anchorPoint.Y);
+
+            if (w < 5 && h < 5)
+                return;
+
+            var freeRect = new PhysicalRect(minX, minY, Math.Max(1, w), Math.Max(1, h));
+            bool isFirstShow = false;
+            lock (_dragLock)
+            {
+                if (_lastExpandedUnion.Width == 0 && _lastExpandedUnion.Height == 0)
+                    isFirstShow = true;
+                _lastExpandedUnion = freeRect;
+            }
+            if (isFirstShow)
+            {
+                _overlayService.Show(freeRect, _dragMonitorId, _dragDpiX, _dragDpiY, preview: false);
+            }
+            if (!_pendingUpdate)
+            {
+                _pendingUpdate = true;
+                _overlayService.Update(freeRect, _dragMonitorId, _dragDpiX, _dragDpiY);
+                var disp = System.Windows.Application.Current?.Dispatcher;
+                if (disp != null)
+                {
+                    _ = disp.InvokeAsync(() => { _pendingUpdate = false; }, DispatcherPriority.Background);
+                }
+                else
+                {
+                    _pendingUpdate = false;
+                }
+            }
+            return;
         }
 
         if (_dragOcr == null)
@@ -809,7 +984,11 @@ public class BlockInteractionCoordinator : IDisposable
         {
             _isDragging = true;
             _hasExpandedCapture = false;
-            if (_dragOcr != null)
+            if (_settings.Value.EnableDragSelection)
+            {
+                _lastExpandedUnion = new PhysicalRect(anchor.X, anchor.Y, 0, 0);
+            }
+            else if (_dragOcr != null)
             {
                 _lastExpandedUnion = ExpandSelectedLines(_dragOcr.Lines, anchor, anchor.Y);
                 if (_lastExpandedUnion.IsEmpty) _lastExpandedUnion = _dragInitialUnion;
@@ -819,7 +998,10 @@ public class BlockInteractionCoordinator : IDisposable
                 _lastExpandedUnion = _dragInitialUnion;
             }
         }
-        _overlayService.Show(_lastExpandedUnion, _dragMonitorId, _dragDpiX, _dragDpiY, preview: true);
+        if (!_settings.Value.EnableDragSelection)
+        {
+            _overlayService.Show(_lastExpandedUnion, _dragMonitorId, _dragDpiX, _dragDpiY, preview: true);
+        }
         _dragOverlayShownAt = Environment.TickCount64;
         StartDragTimer();
     }
@@ -921,31 +1103,54 @@ public class BlockInteractionCoordinator : IDisposable
             }
             SetState(slot, AppState.Translating);
             _statusIndicator?.Show(mid, block.UnionBox, dpiX, dpiY, "正在翻译…");
-            var translation = await _translationRouter.TranslateBlockAsync(block.BlockText, _settings.Value.TargetLanguage, slot.Cts.Token).ConfigureAwait(false);
-            if (IsStaleOrCanceled(slot)) return;
-            if (!skipHold && !translation.FromCache && !translation.FromDictionary)
-            {
-                long elapsed = Environment.TickCount64 - overlayShownAt;
-                int remaining = SelectionHoldMs - (int)elapsed;
-                // 分级 hold：缓存/词典命中跳过等待，在线翻译封顶 120ms（原 250ms，仅 debug 可选）
-                remaining = Math.Min(remaining, 120);
-                if (remaining > 0)
+            bool isFirstChunk = true;
+            var translation = await _translationRouter.TranslateBlockStreamAsync(
+                block.BlockText,
+                _settings.Value.TargetLanguage,
+                onChunk: delta =>
                 {
-                    try
-                    {
-                        await Task.Delay(remaining, slot.Cts.Token).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        return;
-                    }
                     if (IsStaleOrCanceled(slot)) return;
+                    if (isFirstChunk)
+                    {
+                        isFirstChunk = false;
+                        _statusIndicator?.Hide();
+                        SetState(slot, AppState.Displaying);
+                        _popupService.ShowStreamingStart(block, mid, block.UnionBox, dpiX, dpiY);
+                    }
+                    _popupService.AppendChunk(delta);
+                },
+                slot.Cts.Token).ConfigureAwait(false);
+            if (IsStaleOrCanceled(slot)) return;
+            if (isFirstChunk)
+            {
+                if (!skipHold && !translation.FromCache && !translation.FromDictionary)
+                {
+                    long elapsed = Environment.TickCount64 - overlayShownAt;
+                    int remaining = SelectionHoldMs - (int)elapsed;
+                    // 分级 hold：缓存/词典命中跳过等待，在线翻译封顶 120ms（原 250ms，仅 debug 可选）
+                    remaining = Math.Min(remaining, 120);
+                    if (remaining > 0)
+                    {
+                        try
+                        {
+                            await Task.Delay(remaining, slot.Cts.Token).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            return;
+                        }
+                        if (IsStaleOrCanceled(slot)) return;
+                    }
                 }
+                SetState(slot, AppState.Displaying);
+                _statusIndicator?.Hide();
+                _popupService.Show(block, translation, mid, block.UnionBox, dpiX, dpiY);
+                _popupService.MarkStreamCompleted();
             }
-            SetState(slot, AppState.Displaying);
-            _statusIndicator?.Hide();
-            _popupService.Show(block, translation, mid, block.UnionBox, dpiX, dpiY);
-            _popupService.MarkStreamCompleted();
+            else
+            {
+                _popupService.MarkStreamCompleted();
+            }
             ScheduleSelectionAutoHide(slot);
         }
         catch (TranslationException te)
@@ -1053,6 +1258,12 @@ public class BlockInteractionCoordinator : IDisposable
 
     public void RunBlockPipeline()
     {
+        if (_settings.Value.EnableDragSelection)
+        {
+            if (_logger.IsEnabled(LogLevel.Debug))
+                _logger.LogDebug("Block auto-recognition skipped because DragSelection is enabled");
+            return;
+        }
         if (_logger.IsEnabled(LogLevel.Debug))
             _logger.LogDebug("Block hotkey received, starting block pipeline");
         _ = RunBlockPipelineAsync();
@@ -1067,7 +1278,7 @@ public class BlockInteractionCoordinator : IDisposable
 
     private async Task RunBlockPipelineAsync()
     {
-        if (_disposed) return;
+        if (_disposed || _settings.Value.EnableDragSelection) return;
 
         var anchor = _cursorService.GetPhysicalCursorPos(out var monitorId);
         var monitorInfo = _monitorService.TryGetMonitorFromPoint(anchor)

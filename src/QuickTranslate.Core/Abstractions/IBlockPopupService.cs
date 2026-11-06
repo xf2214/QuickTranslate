@@ -10,4 +10,6 @@ public interface IBlockPopupService
     void Show(BlockSelectionResult blockSelection, TranslationResult translation, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY);
     void ShowError(MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY, string shortMessage, Guid operationId);
     void MarkStreamCompleted();
+    void ShowStreamingStart(BlockSelectionResult blockSelection, MonitorId monitorId, PhysicalRect anchorBox, uint dpiX, uint dpiY) { }
+    void AppendChunk(string delta) { }
 }

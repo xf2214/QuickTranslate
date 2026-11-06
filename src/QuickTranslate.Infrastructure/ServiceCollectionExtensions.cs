@@ -181,8 +181,21 @@ public static class ServiceCollectionExtensions
         AddSqliteL2Cache(services, configuration);
         AddTranslationProvider(services, configuration);
         AddCoordinationServices(services);
+        AddCacheCleanup(services);
 
         return services;
+    }
+
+    private static void AddCacheCleanup(IServiceCollection services)
+    {
+        services.AddSingleton<ICacheCleanupService>(sp =>
+        {
+            var appDataProvider = sp.GetRequiredService<IAppDataProvider>();
+            var logger = sp.GetRequiredService<ILogger<CacheCleanupService>>();
+            var l2Cache = sp.GetService<ITranslationL2Cache>();
+            var l1Cache = sp.GetService<ITranslationCache>();
+            return new CacheCleanupService(appDataProvider, logger, l2Cache, l1Cache);
+        });
     }
 
     /// <summary>

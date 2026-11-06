@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -24,6 +25,18 @@ public class TranslationRouterTests
     {
         await Task.Yield();
         yield return new TranslationChunk(TextDelta: "", IsFinal: true, FullTranslation: targetText);
+    }
+
+    private static async IAsyncEnumerable<TranslationChunk> MultiChunkStreamImpl(params string[] deltas)
+    {
+        await Task.Yield();
+        var sb = new StringBuilder();
+        foreach (var delta in deltas)
+        {
+            sb.Append(delta);
+            yield return new TranslationChunk(TextDelta: delta, IsFinal: false, FullTranslation: null);
+        }
+        yield return new TranslationChunk(TextDelta: "", IsFinal: true, FullTranslation: sb.ToString());
     }
 
     private static DefaultTranslationRouter BuildRouter(
@@ -201,5 +214,26 @@ public class TranslationRouterTests
 
         // 空结果不得写入缓存，否则同一词后续永远命中空译文
         cache.DidNotReceiveWithAnyArgs().Add(default!, default!);
+    }
+
+    [Fact]
+    public async Task Case7_TranslateBlockStreamAsync_StreamsChunks_AndCachesResult()
+    {
+        var cache = Substitute.For<ITranslationCache>();
+        var dict = Substitute.For<ILocalDictionary>();
+        var provider = Substitute.For<ITranslationProvider>();
+
+        provider.TranslateAsync(Arg.Any<TranslationRequest>(), Arg.Any<CancellationToken>())
+            .Returns(MultiChunkStreamImpl("Hello", " ", "World"));
+
+        var router = BuildRouter(cache, dict, provider);
+        var chunks = new List<string>();
+
+        var result = await router.TranslateBlockStreamAsync(
+            "Hello World", "zh-CN", onChunk: c => chunks.Add(c));
+
+        Assert.Equal("Hello World", result.TargetText);
+        Assert.Equal(new[] { "Hello", " ", "World" }, chunks);
+        cache.Received(1).Add(Arg.Any<string>(), Arg.Is<TranslationResult>(r => r.TargetText == "Hello World"));
     }
 }

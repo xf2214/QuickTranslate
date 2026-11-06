@@ -91,4 +91,63 @@ public class HotkeyBrokerHoldTests
         // Should have 0 fires because hold path owns Block
         Assert.Equal(0, fires);
     }
+
+    [Fact]
+    public async Task Block_DragSelectionEnabled_KeyDownImmediatelyFiresHoldStart()
+    {
+        var svc = new FakeGlobalHotkeyService();
+        var lifecycle = new FakeAppLifecycle();
+        var logger = NullLogger<DefaultHotkeyBroker>.Instance;
+        var broker = new DefaultHotkeyBroker(svc, lifecycle, logger) { EnableDragSelection = true };
+        int holdStarts = 0;
+        broker.BlockHoldStateChanged += (s, e) => { if (e.Phase == HotkeyHoldPhase.Start) holdStarts++; };
+
+        svc.RaiseKeyDown(DefaultHotkeyBroker.BlockId);
+        await Task.Delay(50); // Instant hold delivery, does not need 400ms
+
+        Assert.Equal(1, holdStarts);
+    }
+
+    [Fact]
+    public async Task Block_DragSelectionEnabled_ShortTap_FiresHoldStartAndEnd_NoHotkeyFired()
+    {
+        var svc = new FakeGlobalHotkeyService();
+        var lifecycle = new FakeAppLifecycle();
+        var logger = NullLogger<DefaultHotkeyBroker>.Instance;
+        var broker = new DefaultHotkeyBroker(svc, lifecycle, logger) { EnableDragSelection = true };
+        int holdStarts = 0, holdEnds = 0, fires = 0;
+        broker.BlockHoldStateChanged += (s, e) => { if (e.Phase == HotkeyHoldPhase.Start) holdStarts++; if (e.Phase == HotkeyHoldPhase.End) holdEnds++; };
+        broker.HotkeyFired += (s, e) => fires++;
+
+        svc.RaiseKeyDown(DefaultHotkeyBroker.BlockId);
+        await Task.Delay(30);
+        svc.RaiseKeyUp(DefaultHotkeyBroker.BlockId);
+        await Task.Delay(50);
+
+        Assert.Equal(1, holdStarts);
+        Assert.Equal(1, holdEnds);
+        Assert.Equal(0, fires);
+    }
+
+    [Fact]
+    public async Task Block_DragSelectionEnabled_DelayedWmHotkey_IsSuppressed()
+    {
+        var svc = new FakeGlobalHotkeyService();
+        var lifecycle = new FakeAppLifecycle();
+        var logger = NullLogger<DefaultHotkeyBroker>.Instance;
+        var broker = new DefaultHotkeyBroker(svc, lifecycle, logger) { EnableDragSelection = true };
+        int fires = 0;
+        broker.HotkeyFired += (s, e) => fires++;
+
+        // Press down then up
+        svc.RaiseKeyDown(DefaultHotkeyBroker.BlockId);
+        await Task.Delay(20);
+        svc.RaiseKeyUp(DefaultHotkeyBroker.BlockId);
+
+        // Delayed WM_HOTKEY arrives after release
+        svc.RaiseHotkeyPressed(DefaultHotkeyBroker.BlockId);
+        await Task.Delay(50);
+
+        Assert.Equal(0, fires);
+    }
 }

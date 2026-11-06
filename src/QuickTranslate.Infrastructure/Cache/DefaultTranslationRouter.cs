@@ -99,7 +99,14 @@ public class DefaultTranslationRouter : ITranslationRouter
         return result;
     }
 
-    public async Task<TranslationResult> TranslateBlockAsync(string blockText, string targetLang, CancellationToken ct = default)
+    public Task<TranslationResult> TranslateBlockAsync(string blockText, string targetLang, CancellationToken ct = default)
+        => TranslateBlockStreamAsync(blockText, targetLang, onChunk: null, ct);
+
+    public async Task<TranslationResult> TranslateBlockStreamAsync(
+        string blockText,
+        string targetLang,
+        Action<string>? onChunk = null,
+        CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         var identity = CaptureCacheIdentity(blockText, targetLang, TranslationMode.Block);
@@ -108,7 +115,10 @@ public class DefaultTranslationRouter : ITranslationRouter
         if (_cache.TryGet(normalizedKey, out var cached))
         {
             _logger.LogDebug("L1 block cache hit");
-            return cached with { FromCache = true };
+            var cachedResult = cached with { FromCache = true };
+            if (!string.IsNullOrEmpty(cachedResult.TargetText))
+                onChunk?.Invoke(cachedResult.TargetText);
+            return cachedResult;
         }
 
         var l2Result = await TryReadL2Async(normalizedKey, ct);
@@ -116,7 +126,10 @@ public class DefaultTranslationRouter : ITranslationRouter
         {
             _logger.LogDebug("L2 block cache hit");
             _cache.Add(normalizedKey, l2Result);
-            return l2Result with { FromCache = true };
+            var l2CachedResult = l2Result with { FromCache = true };
+            if (!string.IsNullOrEmpty(l2CachedResult.TargetText))
+                onChunk?.Invoke(l2CachedResult.TargetText);
+            return l2CachedResult;
         }
 
         _logger.LogDebug("Calling online provider for block");
@@ -133,7 +146,7 @@ public class DefaultTranslationRouter : ITranslationRouter
             OperationId: Guid.NewGuid(),
             Quality: identity.Quality);
 
-        var fullTranslation = await ConsumeFullTranslationAsync(request, ct);
+        var fullTranslation = await ConsumeTranslationStreamAsync(request, onChunk, ct);
         var result = new TranslationResult(
             NormalizedKey: normalizedKey,
             SourceText: blockText,
@@ -208,6 +221,12 @@ public class DefaultTranslationRouter : ITranslationRouter
            && identity.Settings.TranslationSettingsRevision == identity.Revision;
 
     private async Task<string> ConsumeFullTranslationAsync(TranslationRequest request, CancellationToken ct)
+        => await ConsumeTranslationStreamAsync(request, onChunk: null, ct);
+
+    private async Task<string> ConsumeTranslationStreamAsync(
+        TranslationRequest request,
+        Action<string>? onChunk,
+        CancellationToken ct)
     {
         var sb = new StringBuilder();
         string? finalText = null;
@@ -216,6 +235,7 @@ public class DefaultTranslationRouter : ITranslationRouter
             if (!string.IsNullOrEmpty(chunk.TextDelta))
             {
                 sb.Append(chunk.TextDelta);
+                onChunk?.Invoke(chunk.TextDelta);
             }
 
             if (chunk.IsFinal && !string.IsNullOrWhiteSpace(chunk.FullTranslation))

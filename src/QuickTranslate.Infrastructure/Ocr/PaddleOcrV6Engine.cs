@@ -384,52 +384,28 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                 if (useDml)
                 {
                     // 仅 DML 分支：失败不回退到 CPU（CPU Holder 独立常驻，上层调度会回退）
-                    SessionOptions? dmlSo = null;
                     try
                     {
-                        dmlSo = new SessionOptions
+                        var detTask = Task.Run(() =>
                         {
-                            GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
-                            ExecutionMode = ExecutionMode.ORT_SEQUENTIAL
-                        };
-                        dmlSo.EnableMemoryPattern = false;
-                        bool dmlAttached = false;
-                        Exception? attachEx = null;
-                        try
+                            using var so = CreateDmlSessionOptions();
+                            return new InferenceSession(detPath, so);
+                        });
+                        var recTask = Task.Run(() =>
                         {
-                            dmlSo.AppendExecutionProvider("DML", new Dictionary<string, string> { { "device_id", "0" } });
-                            dmlAttached = true;
-                        }
-                        catch (Exception ex)
-                        {
-                            attachEx = ex;
-                            try
-                            {
-                                var m = typeof(SessionOptions).GetMethod("AppendExecutionProvider_DML");
-                                if (m != null)
-                                {
-                                    var p = m.GetParameters();
-                                    if (p.Length == 1 && p[0].ParameterType == typeof(int))
-                                        m.Invoke(dmlSo, new object[] { 0 });
-                                    else if (p.Length == 1)
-                                        m.Invoke(dmlSo, new object[] { 0 });
-                                    else
-                                        throw;
-                                    dmlAttached = true;
-                                }
-                            }
-                            catch { }
-                            if (!dmlAttached) throw attachEx!;
-                        }
-
-                        var detTask = Task.Run(() => new InferenceSession(detPath, dmlSo));
-                        var recTask = Task.Run(() => new InferenceSession(recPath, dmlSo));
+                            using var so = CreateDmlSessionOptions();
+                            return new InferenceSession(recPath, so);
+                        });
                         Task<InferenceSession?> clsTask;
                         if (File.Exists(clsPath))
                         {
                             clsTask = Task.Run<InferenceSession?>(() =>
                             {
-                                try { return new InferenceSession(clsPath, dmlSo); }
+                                try
+                                {
+                                    using var so = CreateDmlSessionOptions();
+                                    return new InferenceSession(clsPath, so);
+                                }
                                 catch (Exception clsEx)
                                 {
                                     _logger.LogInformation(clsEx, "cls.onnx optional session skipped: {Msg}", clsEx.Message);
@@ -468,10 +444,6 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
                         holder.ClsSession = null;
                         holder.RecSession = null;
                         // 不抛，保持 holder 空让上层回退到 CPU
-                    }
-                    finally
-                    {
-                        dmlSo?.Dispose();
                     }
                 }
                 else
@@ -2189,5 +2161,44 @@ public class PaddleOcrV6Engine : IOcrEngine, IDisposable
         public InferenceSession? ClsSession;
         public InferenceSession? RecSession;
         public string[] CharDictionary = Array.Empty<string>();
+    }
+
+    private static SessionOptions CreateDmlSessionOptions()
+    {
+        var so = new SessionOptions
+        {
+            GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
+            ExecutionMode = ExecutionMode.ORT_SEQUENTIAL
+        };
+        so.EnableMemoryPattern = false;
+        bool dmlAttached = false;
+        Exception? attachEx = null;
+        try
+        {
+            so.AppendExecutionProvider("DML", new Dictionary<string, string> { { "device_id", "0" } });
+            dmlAttached = true;
+        }
+        catch (Exception ex)
+        {
+            attachEx = ex;
+            try
+            {
+                var m = typeof(SessionOptions).GetMethod("AppendExecutionProvider_DML");
+                if (m != null)
+                {
+                    var p = m.GetParameters();
+                    if (p.Length == 1 && p[0].ParameterType == typeof(int))
+                        m.Invoke(so, new object[] { 0 });
+                    else if (p.Length == 1)
+                        m.Invoke(so, new object[] { 0 });
+                    else
+                        throw;
+                    dmlAttached = true;
+                }
+            }
+            catch { }
+            if (!dmlAttached) throw attachEx!;
+        }
+        return so;
     }
 }
